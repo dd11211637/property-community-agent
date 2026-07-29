@@ -75,11 +75,9 @@ $env:DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost/property_a
 .\.venv\Scripts\alembic.exe upgrade head
 ```
 
-运行后端：
-
-```powershell
-.\.venv\Scripts\python.exe -m uvicorn property_agent.main:app --reload
-```
+报修模块以 `create_app(service)` 工厂提供 FastAPI 适配器。完整应用必须先由公共平台模块装配
+数据库、身份、权限、确认、幂等、审计和消息 Port；当前分支不提供使用 fake backend 的生产
+启动入口。
 
 运行质量检查：
 
