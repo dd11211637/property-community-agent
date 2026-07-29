@@ -1,0 +1,41 @@
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editor settings and temporary files
+.idea/
+.vscode/
+*.swp
+*.swo
+*.tmp
+*.bak
+~$*
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+dist/
+build/
+*.egg-info/
+
+# Local database and generated artifacts
+*.db
+*.sqlite3
+alembic/versions/__pycache__/
+
+# Local product source documents
+大致需求.txt
+物业社区管理智能体_MVP_PRD.md
+物业社区管理智能体_PRD.md
