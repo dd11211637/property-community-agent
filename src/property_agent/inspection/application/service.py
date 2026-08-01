@@ -38,19 +38,25 @@ from property_agent.inspection.domain.errors import (
     validation_error,
     version_conflict,
 )
-
-# 角色分组
-TASK_READ_ROLES = (Role.MANAGER, Role.SECURITY_STAFF)
-TASK_CREATE_ROLES = (Role.MANAGER, Role.SECURITY_STAFF)
-TASK_ASSIGN_ROLES = (Role.MANAGER,)
-TASK_COMPLETE_ROLES = (Role.MANAGER,)
-TASK_ASSIGNEE_ROLES = (Role.SECURITY_STAFF,)
-
-EVENT_READ_ROLES = (Role.MANAGER, Role.SECURITY_STAFF, Role.CUSTOMER_SERVICE, Role.RESIDENT)
-EVENT_CREATE_ROLES = (Role.RESIDENT, Role.CUSTOMER_SERVICE, Role.SECURITY_STAFF, Role.MANAGER)
-EVENT_ASSIGN_ROLES = (Role.MANAGER,)
-EVENT_HANDLER_ROLES = (Role.SECURITY_STAFF,)
-EVENT_REVIEW_ROLES = (Role.MANAGER,)
+from property_agent.inspection.domain.policies import (
+    EVENT_ASSIGN_ROLES,
+    EVENT_CREATE_ROLES,
+    EVENT_HANDLER_ROLES,
+    EVENT_READ_ROLES,
+    EVENT_REVIEW_ROLES,
+    TASK_ASSIGN_ROLES,
+    TASK_ASSIGNEE_ROLES,
+    TASK_COMPLETE_ROLES,
+    TASK_CREATE_ROLES,
+    TASK_READ_ROLES,
+)
+from property_agent.platform.validation import (
+    new_business_no,
+    require_idempotency_key,
+    require_role,
+    required_text,
+    validate_pagination,
+)
 
 
 def canonical_hash(obj: Any) -> str:
@@ -59,6 +65,12 @@ def canonical_hash(obj: Any) -> str:
 
 
 class InspectionTaskService:
+    _require_role = staticmethod(require_role)
+    _require_idempotency_key = staticmethod(require_idempotency_key)
+    _validate_pagination = staticmethod(validate_pagination)
+    _required_text = staticmethod(required_text)
+    _new_business_no = staticmethod(new_business_no)
+
     def __init__(self, unit_of_work_factory: Any) -> None:
         self._unit_of_work_factory = unit_of_work_factory
 
@@ -357,33 +369,9 @@ class InspectionTaskService:
         ):
             raise validation_error("due_at must not be earlier than planned_at.")
 
-    def _require_role(self, context, *roles) -> None:
-        if not context.has_any_role(*roles):
-            raise forbidden()
-
     def _require_task_assignee(self, task, context) -> None:
         if not context.has_any_role(*TASK_ASSIGNEE_ROLES) or task.assignee_id != context.actor_id:
             raise forbidden()
-
-    def _require_idempotency_key(self, key: str) -> None:
-        if not key or not key.strip() or len(key) > 128:
-            raise validation_error(
-                "Idempotency-Key is required and must not exceed 128 characters."
-            )
-
-    def _validate_pagination(self, limit: int, offset: int) -> None:
-        if limit < 1 or limit > 100 or offset < 0:
-            raise validation_error("Pagination must use offset >= 0 and limit between 1 and 100.")
-
-    @staticmethod
-    def _required_text(value, message) -> str:
-        if value is None or not value.strip():
-            raise validation_error(message)
-        return value.strip()
-
-    @staticmethod
-    def _new_business_no(now: datetime, prefix: str) -> str:
-        return f"{prefix}-{now:%Y%m%d}-{uuid4().hex[:8].upper()}"
 
     @staticmethod
     def _task_snapshot(task: InspectionTask) -> dict[str, Any]:
@@ -476,6 +464,12 @@ class InspectionTaskService:
 
 
 class SecurityEventService:
+    _require_role = staticmethod(require_role)
+    _require_idempotency_key = staticmethod(require_idempotency_key)
+    _validate_pagination = staticmethod(validate_pagination)
+    _required_text = staticmethod(required_text)
+    _new_business_no = staticmethod(new_business_no)
+
     def __init__(self, unit_of_work_factory: Any) -> None:
         self._unit_of_work_factory = unit_of_work_factory
 
@@ -757,33 +751,9 @@ class SecurityEventService:
         if not command.description.strip():
             raise validation_error("description is required.")
 
-    def _require_role(self, context, *roles) -> None:
-        if not context.has_any_role(*roles):
-            raise forbidden()
-
     def _require_event_handler(self, event, context) -> None:
         if not context.has_any_role(*EVENT_HANDLER_ROLES) or event.assignee_id != context.actor_id:
             raise forbidden()
-
-    def _require_idempotency_key(self, key: str) -> None:
-        if not key or not key.strip() or len(key) > 128:
-            raise validation_error(
-                "Idempotency-Key is required and must not exceed 128 characters."
-            )
-
-    def _validate_pagination(self, limit: int, offset: int) -> None:
-        if limit < 1 or limit > 100 or offset < 0:
-            raise validation_error("Pagination must use offset >= 0 and limit between 1 and 100.")
-
-    @staticmethod
-    def _required_text(value, message) -> str:
-        if value is None or not value.strip():
-            raise validation_error(message)
-        return value.strip()
-
-    @staticmethod
-    def _new_business_no(now: datetime, prefix: str) -> str:
-        return f"{prefix}-{now:%Y%m%d}-{uuid4().hex[:8].upper()}"
 
     @staticmethod
     def _event_snapshot(event: SecurityEvent) -> dict[str, Any]:

@@ -1,9 +1,9 @@
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from property_agent.platform.schemas import Envelope as Envelope
 from property_agent.repair.domain.enums import (
     ProcessRecordType,
     RepairCategory,
@@ -56,16 +56,3 @@ class ReworkRequest(VersionedActionRequest):
 class ReviewRequest(StrictModel):
     rating: int = Field(ge=1, le=5)
     comment: str | None = None
-
-
-class ErrorBody(BaseModel):
-    code: str
-    message: str
-    details: dict[str, Any] | None = None
-
-
-class Envelope(BaseModel):
-    success: bool
-    data: Any = None
-    error: ErrorBody | None = None
-    request_id: str

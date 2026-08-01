@@ -1,11 +1,6 @@
 from enum import StrEnum
 
-
-class Role(StrEnum):
-    RESIDENT = "RESIDENT"
-    CUSTOMER_SERVICE = "CUSTOMER_SERVICE"
-    REPAIR_WORKER = "REPAIR_WORKER"
-    MANAGER = "MANAGER"
+from property_agent.platform.roles import Role as Role
 
 
 class RepairCategory(StrEnum):

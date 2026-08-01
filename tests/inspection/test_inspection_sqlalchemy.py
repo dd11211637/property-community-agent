@@ -24,7 +24,7 @@ from property_agent.inspection.domain.enums import (
 from property_agent.inspection.infrastructure.database import create_session_factory
 from property_agent.inspection.infrastructure.models import Base
 from property_agent.inspection.infrastructure.uow import SqlAlchemyInspectionUnitOfWork
-from tests.inspection_support import (
+from tests.inspection.support import (
     FakeAttachmentPort,
     FakeAuditPort,
     FakeConfirmationPort,

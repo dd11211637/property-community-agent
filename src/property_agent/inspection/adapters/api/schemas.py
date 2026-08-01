@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -9,6 +8,7 @@ from property_agent.inspection.domain.enums import (
     EventType,
     TaskRecordType,
 )
+from property_agent.platform.schemas import Envelope as Envelope
 
 
 class StrictModel(BaseModel):
@@ -72,17 +72,3 @@ class SubmitDisposalRequest(VersionedActionRequest):
 
 class ReturnEventRequest(VersionedActionRequest):
     note: str = Field(min_length=1)
-
-
-# ----------------------------- 统一信封 -----------------------------
-class ErrorBody(BaseModel):
-    code: str
-    message: str
-    details: dict[str, Any] | None = None
-
-
-class Envelope(BaseModel):
-    success: bool
-    data: Any = None
-    error: ErrorBody | None = None
-    request_id: str

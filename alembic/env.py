@@ -4,7 +4,12 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
-from property_agent.repair.infrastructure.models import Base
+
+# Import model modules so every business table is registered on shared metadata.
+from property_agent.billing.infrastructure import models as billing_models  # noqa: F401
+from property_agent.inspection.infrastructure import models as inspection_models  # noqa: F401
+from property_agent.platform.database import Base
+from property_agent.repair.infrastructure import models as repair_models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:

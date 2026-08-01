@@ -7,6 +7,11 @@ from enum import Enum
 from typing import Any
 from uuid import UUID, uuid4
 
+from property_agent.platform.validation import (
+    require_idempotency_key,
+    require_role,
+    required_text,
+)
 from property_agent.repair.application.commands import (
     CreateReviewCommand,
     CreateWorkOrderCommand,
@@ -68,6 +73,10 @@ def canonical_hash(value: Any) -> str:
 
 
 class WorkOrderService:
+    _require_role = staticmethod(require_role)
+    _require_idempotency_key = staticmethod(require_idempotency_key)
+    _required_text = staticmethod(required_text)
+
     def __init__(self, unit_of_work_factory: UnitOfWorkFactory) -> None:
         self._unit_of_work_factory = unit_of_work_factory
 
@@ -544,11 +553,6 @@ class WorkOrderService:
             )
 
     @staticmethod
-    def _require_role(context: RequestContext, *roles: Role) -> None:
-        if not context.has_any_role(*roles):
-            raise forbidden()
-
-    @staticmethod
     def _require_assignee(work_order: WorkOrder, context: RequestContext) -> None:
         if (
             not context.has_any_role(Role.REPAIR_WORKER)
@@ -565,13 +569,6 @@ class WorkOrderService:
         raise forbidden()
 
     @staticmethod
-    def _require_idempotency_key(key: str) -> None:
-        if not key or not key.strip() or len(key) > 128:
-            raise validation_error(
-                "Idempotency-Key is required and must not exceed 128 characters."
-            )
-
-    @staticmethod
     def _require_state_action(work_order: WorkOrder, action: ActionCode) -> None:
         if action not in work_order.state_actions():
             raise invalid_transition(
@@ -579,12 +576,6 @@ class WorkOrderService:
                 action.value,
                 [item.value for item in work_order.state_actions()],
             )
-
-    @staticmethod
-    def _required_text(value: str | None, message: str) -> str:
-        if value is None or not value.strip():
-            raise validation_error(message)
-        return value.strip()
 
     @staticmethod
     def _optional_text(value: str | None) -> str | None:
