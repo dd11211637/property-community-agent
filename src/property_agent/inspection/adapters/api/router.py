@@ -39,6 +39,7 @@ from property_agent.inspection.application.service import (
     SecurityEventService,
 )
 from property_agent.inspection.domain.enums import EventAction, TaskAction
+from property_agent.platform.responses import success_envelope as _success
 
 task_router = APIRouter(prefix="/api/inspection-tasks", tags=["inspection-task"])
 event_router = APIRouter(prefix="/api/security-events", tags=["security-event"])
@@ -47,10 +48,6 @@ TaskServiceDep = Annotated[InspectionTaskService, Depends(get_task_service)]
 EventServiceDep = Annotated[SecurityEventService, Depends(get_event_service)]
 ContextDep = Annotated[RequestContext, Depends(get_request_context)]
 IdempotencyHeader = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)]
-
-
-def _success(data, context: RequestContext) -> Envelope:
-    return Envelope(success=True, data=data, error=None, request_id=context.request_id)
 
 
 # ============================== 巡检任务 ==============================

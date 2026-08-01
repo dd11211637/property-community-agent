@@ -6,12 +6,6 @@ from sqlalchemy.orm import Session, selectinload
 
 from property_agent.inspection.application.commands import TimelineEntry
 from property_agent.inspection.application.ports import RequestContext
-from property_agent.inspection.application.service import (
-    EVENT_HANDLER_ROLES,
-    EVENT_REVIEW_ROLES,
-    TASK_ASSIGN_ROLES,
-    TASK_ASSIGNEE_ROLES,
-)
 from property_agent.inspection.domain.entities import InspectionTask, SecurityEvent
 from property_agent.inspection.domain.enums import (
     EventRiskLevel,
@@ -20,6 +14,12 @@ from property_agent.inspection.domain.enums import (
     TaskStatus,
 )
 from property_agent.inspection.domain.errors import version_conflict
+from property_agent.inspection.domain.policies import (
+    EVENT_HANDLER_ROLES,
+    EVENT_REVIEW_ROLES,
+    TASK_ASSIGN_ROLES,
+    TASK_ASSIGNEE_ROLES,
+)
 from property_agent.inspection.infrastructure.models import (
     InspectionTaskModel,
     InspectionTaskRecordModel,
