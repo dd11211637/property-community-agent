@@ -1,16 +1,6 @@
-from dataclasses import dataclass
 from typing import Any
 
-
-@dataclass(slots=True)
-class BusinessError(Exception):
-    code: str
-    message: str
-    status_code: int
-    details: dict[str, Any] | None = None
-
-    def __str__(self) -> str:
-        return self.message
+from property_agent.platform.errors import BusinessError
 
 
 def validation_error(message: str, **details: Any) -> BusinessError:

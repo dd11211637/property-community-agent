@@ -6,7 +6,7 @@ import pytest
 from property_agent.repair.application.ports import RequestContext
 from property_agent.repair.application.service import WorkOrderService
 from property_agent.repair.domain.enums import Role
-from tests.support import Harness
+from tests.repair.support import Harness
 
 
 @dataclass(frozen=True)
