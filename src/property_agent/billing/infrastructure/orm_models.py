@@ -13,12 +13,9 @@ from sqlalchemy import (
     Column, String, Integer, Numeric, Date, DateTime, Boolean, Text,
     ForeignKey, UniqueConstraint, CheckConstraint, Index, func,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-
-class Base(DeclarativeBase):
-    """SQLAlchemy 声明式基类"""
-    pass
+from property_agent.platform.infrastructure.orm_models import Base
 
 
 # ── 1. 楼栋信息表 ────────────────────────────────────

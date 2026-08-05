@@ -1,0 +1,1 @@
+"""Platform module — shared infrastructure, auth, and production assembly."""
