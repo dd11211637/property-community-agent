@@ -3,3 +3,6 @@
 本目录维护前端、后端和 Agent 共同依赖的 API 契约。
 
 接口变更应记录请求、响应、错误码、权限、幂等要求和版本兼容影响，并与实现和测试一起评审。
+
+公告 P0 的状态机、权限、受众快照、确认发布和完整 HTTP 契约见
+[`../announcement_module.md`](../announcement_module.md)。
