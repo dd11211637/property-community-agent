@@ -21,6 +21,7 @@ from property_agent.announcement.domain.entities import (
     Announcement,
     AnnouncementReview,
     AnnouncementVersion,
+    AnnouncementWithdrawal,
     AudienceSnapshot,
 )
 from property_agent.announcement.domain.enums import (
@@ -30,6 +31,7 @@ from property_agent.announcement.domain.enums import (
     AnnouncementStatus,
 )
 from property_agent.announcement.domain.errors import (
+    confirmation_required,
     empty_audience,
     idempotency_conflict,
     not_found,
@@ -202,6 +204,131 @@ class AnnouncementService:
         return self._review_action(
             announcement_id, command, context, idempotency_key=idempotency_key
         )
+
+    def publish(
+        self,
+        announcement_id: UUID,
+        command: ReviewActionCommand,
+        context: RequestContext,
+        *,
+        idempotency_key: str,
+    ) -> Announcement:
+        require_role(context, Role.MANAGER)
+        require_idempotency_key(idempotency_key)
+        if command.action != AnnouncementAction.PUBLISH:
+            from property_agent.announcement.domain.errors import validation_error
+
+            raise validation_error("publish requires the PUBLISH action.")
+        if not command.confirmation_token or not command.confirmation_token.strip():
+            raise confirmation_required()
+        operation = "ANNOUNCEMENT_PUBLISH"
+        confirmation_hash = canonical_hash(
+            {
+                "announcement_id": announcement_id,
+                "expected_version": command.expected_version,
+                "action": command.action,
+            }
+        )
+        request_hash = canonical_hash({"confirmation": confirmation_hash, "key": idempotency_key})
+        with self._unit_of_work_factory() as uow:
+            replay = self._replay(uow, context, operation, idempotency_key, request_hash)
+            if replay is not None:
+                return replay
+            announcement = self._get(uow, announcement_id, context)
+            if announcement.version != command.expected_version:
+                raise version_conflict(announcement.version)
+            snapshot = uow.audiences.resolve(
+                community_id=context.community_id,
+                condition=announcement.audience_condition,
+                request_id=context.request_id,
+            )
+            if snapshot.count <= 0 or not snapshot.member_ids:
+                raise empty_audience()
+            uow.confirmations.consume(
+                token=command.confirmation_token.strip(),
+                actor_id=context.actor_id,
+                action=operation,
+                parameter_hash=confirmation_hash,
+                request_id=context.request_id,
+            )
+            now = datetime.now(UTC)
+            announcement.transition(AnnouncementAction.PUBLISH, now=now)
+            uow.announcements.add_audience_snapshot(announcement.id, context.community_id, snapshot)
+            uow.announcements.add_review(
+                announcement.id,
+                context.community_id,
+                AnnouncementReview(AnnouncementAction.PUBLISH, context.actor_id, None, now),
+            )
+            uow.announcements.save(announcement)
+            for receiver_id in snapshot.member_ids:
+                uow.messages.enqueue(
+                    community_id=context.community_id,
+                    receiver_id=receiver_id,
+                    event_type="ANNOUNCEMENT_PUBLISHED",
+                    resource_id=announcement.id,
+                    request_id=context.request_id,
+                    created_at=now,
+                )
+            self._record_idempotency(
+                uow, announcement, context, operation, idempotency_key, request_hash
+            )
+            self._audit(
+                uow,
+                announcement,
+                context,
+                AnnouncementAction.PUBLISH,
+                {"audience_count": snapshot.count, "version": announcement.version},
+                now,
+            )
+            uow.commit()
+            return announcement
+
+    def withdraw(
+        self,
+        announcement_id: UUID,
+        command: ReviewActionCommand,
+        context: RequestContext,
+        *,
+        idempotency_key: str,
+    ) -> Announcement:
+        require_role(context, Role.MANAGER)
+        require_idempotency_key(idempotency_key)
+        if command.action != AnnouncementAction.WITHDRAW:
+            from property_agent.announcement.domain.errors import validation_error
+
+            raise validation_error("withdraw requires the WITHDRAW action.")
+        operation = "ANNOUNCEMENT_WITHDRAW"
+        request_hash = canonical_hash({"announcement_id": announcement_id, **asdict(command)})
+        with self._unit_of_work_factory() as uow:
+            replay = self._replay(uow, context, operation, idempotency_key, request_hash)
+            if replay is not None:
+                return replay
+            announcement = self._get(uow, announcement_id, context)
+            if announcement.version != command.expected_version:
+                raise version_conflict(announcement.version)
+            reason = required_text(command.reason, "A withdrawal reason is required.")
+            now = datetime.now(UTC)
+            prior_version = announcement.version
+            announcement.transition(AnnouncementAction.WITHDRAW, now=now)
+            uow.announcements.add_withdrawal(
+                announcement.id,
+                context.community_id,
+                AnnouncementWithdrawal(context.actor_id, reason, prior_version, now),
+            )
+            uow.announcements.save(announcement)
+            self._record_idempotency(
+                uow, announcement, context, operation, idempotency_key, request_hash
+            )
+            self._audit(
+                uow,
+                announcement,
+                context,
+                AnnouncementAction.WITHDRAW,
+                {"reason": reason},
+                now,
+            )
+            uow.commit()
+            return announcement
 
     def _review_action(
         self,

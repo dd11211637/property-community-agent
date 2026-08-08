@@ -11,6 +11,7 @@ from property_agent.announcement.domain.entities import (
     Announcement,
     AnnouncementReview,
     AnnouncementVersion,
+    AnnouncementWithdrawal,
     AudienceSnapshot,
 )
 
@@ -21,6 +22,7 @@ class FakeState:
     versions: dict[UUID, list[AnnouncementVersion]] = field(default_factory=dict)
     reviews: list[AnnouncementReview] = field(default_factory=list)
     snapshots: dict[UUID, list[AudienceSnapshot]] = field(default_factory=dict)
+    withdrawals: list[AnnouncementWithdrawal] = field(default_factory=list)
     idempotency: dict[tuple[UUID, str, str], IdempotencyRecord] = field(default_factory=dict)
     audits: list[dict[str, Any]] = field(default_factory=list)
 
@@ -71,6 +73,14 @@ class FakeRepository:
         snapshots = self.state.snapshots.get(announcement_id, [])
         return snapshots[-1] if snapshots else None
 
+    def add_withdrawal(
+        self,
+        announcement_id: UUID,
+        community_id: UUID,
+        withdrawal: AnnouncementWithdrawal,
+    ) -> None:
+        self.state.withdrawals.append(withdrawal)
+
 
 class FakeIdempotency:
     def __init__(self, state: FakeState) -> None:
@@ -105,12 +115,45 @@ class FakeAudienceResolver:
         )
 
 
+class FakeConfirmation:
+    def __init__(self) -> None:
+        self.consumed: list[str] = []
+
+    def consume(self, *, token, actor_id, action, parameter_hash, request_id) -> None:
+        if token != "confirmed" or token in self.consumed:
+            from property_agent.platform.errors import BusinessError
+
+            raise BusinessError("CONFIRMATION_INVALID", "Confirmation is invalid.", 422)
+        self.consumed.append(token)
+
+
+class FakeMessages:
+    def __init__(self) -> None:
+        self.items: list[dict[str, Any]] = []
+
+    def enqueue(self, **event: Any) -> None:
+        self.items.append({**event, "delivery_status": "PENDING", "retry_count": 0})
+
+    def fail_delivery(self, index: int, error: str) -> None:
+        self.items[index].update(
+            {"delivery_status": "FAILED", "retry_count": 1, "last_error": error}
+        )
+
+
 class FakeUnitOfWork:
-    def __init__(self, state: FakeState, audiences: FakeAudienceResolver) -> None:
+    def __init__(
+        self,
+        state: FakeState,
+        audiences: FakeAudienceResolver,
+        confirmations: FakeConfirmation,
+        messages: FakeMessages,
+    ) -> None:
         self.announcements = FakeRepository(state)
         self.idempotency = FakeIdempotency(state)
         self.audit = FakeAudit(state)
         self.audiences = audiences
+        self.confirmations = confirmations
+        self.messages = messages
         self.committed = False
 
     def __enter__(self):
@@ -131,6 +174,8 @@ class Harness:
     def __init__(self, *, audience_members: tuple[UUID, ...] = ()) -> None:
         self.state = FakeState()
         self.audiences = FakeAudienceResolver(audience_members)
+        self.confirmations = FakeConfirmation()
+        self.messages = FakeMessages()
 
     def uow(self) -> FakeUnitOfWork:
-        return FakeUnitOfWork(self.state, self.audiences)
+        return FakeUnitOfWork(self.state, self.audiences, self.confirmations, self.messages)
