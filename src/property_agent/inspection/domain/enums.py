@@ -64,5 +64,13 @@ class EventAction(StrEnum):
     CREATE = "CREATE"
     ASSIGN = "ASSIGN"
     SUBMIT_DISPOSAL = "SUBMIT_DISPOSAL"
+    GRADE_CONFIRM = "GRADE_CONFIRM"  # 高风险事件等级/处置方案人工确认（不改变状态）
     REVIEW_PASS = "REVIEW_PASS"  # 复核通过并关闭
     RETURN = "RETURN"  # 复核不通过，退回处置人
+
+
+class ReportSource(StrEnum):
+    """安防事件上报来源（PRD 6.4：模型失败时允许人工直接上报）。"""
+
+    MANUAL = "MANUAL"  # 人工直接上报（结构化表单）
+    AI = "AI"  # 由智能体/模型辅助生成后上报

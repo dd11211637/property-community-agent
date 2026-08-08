@@ -28,6 +28,7 @@ from tests.inspection_support import (
     FakeAttachmentPort,
     FakeAuditPort,
     FakeConfirmationPort,
+    FakeEscalationPort,
     FakeIdempotencyPort,
     FakeMessagePort,
     FakeStaffDirectoryPort,
@@ -54,7 +55,7 @@ def _uow_factory(engine, state, security_workers, duty_users):
     session_factory = create_session_factory(POSTGRES_URL)
 
     def factory():
-        return SqlAlchemyInspectionUnitOfWork(
+            return SqlAlchemyInspectionUnitOfWork(
             session_factory,
             lambda session: SharedPorts(
                 idempotency=FakeIdempotencyPort(state),
@@ -63,6 +64,7 @@ def _uow_factory(engine, state, security_workers, duty_users):
                 attachments=FakeAttachmentPort(),
                 audit=FakeAuditPort(state),
                 messages=FakeMessagePort(state),
+                escalation=FakeEscalationPort(state),
             ),
         )
 

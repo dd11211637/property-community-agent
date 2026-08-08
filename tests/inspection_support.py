@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from property_agent.inspection.application.commands import TimelineEntry
 from property_agent.inspection.application.ports import (
     AttachmentPort,
     AuditPort,
     ConfirmationPort,
+    EscalationPort,
     IdempotencyPort,
     IdempotencyRecord,
     MessagePort,
@@ -23,6 +24,7 @@ from property_agent.inspection.application.service import (
     TASK_ASSIGNEE_ROLES,
 )
 from property_agent.inspection.domain.entities import InspectionTask, SecurityEvent
+from property_agent.inspection.domain.enums import TaskStatus
 from property_agent.inspection.domain.errors import forbidden
 
 
@@ -38,6 +40,7 @@ class FakeState:
     audits: list[dict[str, Any]] = field(default_factory=list)
     messages: list[dict[str, Any]] = field(default_factory=list)
     confirmed: list[tuple[str, str, str]] = field(default_factory=list)  # (token, action, hash)
+    escalations: list[dict[str, Any]] = field(default_factory=list)  # 高风险升级兜底记录
 
 
 class FakeInspectionRepository:
@@ -110,6 +113,7 @@ class FakeInspectionRepository:
         attachment_ids,
         is_supplement,
         actual_time,
+        supplement_reason,
         created_at,
     ) -> None:
         self.state.task_records.append(
@@ -123,9 +127,19 @@ class FakeInspectionRepository:
                 "attachment_ids": list(attachment_ids),
                 "is_supplement": is_supplement,
                 "actual_time": actual_time,
+                "supplement_reason": supplement_reason,
                 "created_at": created_at,
             }
         )
+
+    def find_active_tasks(self, community_id: UUID) -> list[InspectionTask]:
+        return [
+            t
+            for t in self.state.tasks.values()
+            if t.community_id == community_id
+            and t.status
+            in (TaskStatus.PLANNED, TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)
+        ]
 
     def task_timeline(self, task_id: UUID, community_id: UUID) -> list[TimelineEntry]:
         entries: list[TimelineEntry] = []
@@ -351,6 +365,29 @@ class FakeMessagePort(MessagePort):
         )
 
 
+class FakeEscalationPort(EscalationPort):
+    def __init__(self, state: FakeState) -> None:
+        self.state = state
+
+    def escalate_high_risk(
+        self, *, community_id, event_id, event_business_no, reason, summary, request_id, created_at
+    ) -> UUID:
+        ticket_id = uuid4()
+        self.state.escalations.append(
+            {
+                "ticket_id": ticket_id,
+                "community_id": community_id,
+                "event_id": event_id,
+                "event_business_no": event_business_no,
+                "reason": reason,
+                "summary": summary,
+                "request_id": request_id,
+                "created_at": created_at,
+            }
+        )
+        return ticket_id
+
+
 class FakeUnitOfWork:
     def __init__(self, state: FakeState, ports: SharedPorts) -> None:
         self.state = state
@@ -362,6 +399,7 @@ class FakeUnitOfWork:
         self.attachments = ports.attachments
         self.audit = ports.audit
         self.messages = ports.messages
+        self.escalation = ports.escalation
 
     def __enter__(self) -> FakeUnitOfWork:
         return self
@@ -392,6 +430,7 @@ class Harness:
             attachments=FakeAttachmentPort(),
             audit=FakeAuditPort(self.state),
             messages=FakeMessagePort(self.state),
+            escalation=FakeEscalationPort(self.state),
         )
 
     def uow(self):

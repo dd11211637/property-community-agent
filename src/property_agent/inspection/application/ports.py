@@ -175,6 +175,14 @@ class MessagePort(Protocol):
     ) -> None: ...
 
 
+class EscalationPort(Protocol):
+    """高风险通知失败/无可用值班人员时的升级与备用联系人（PRD 6.4）。"""
+
+    def escalate_high_risk(
+        self, *, community_id, event_id, event_business_no, reason, summary, request_id, created_at
+    ) -> UUID: ...
+
+
 @dataclass(frozen=True, slots=True)
 class SharedPorts:
     idempotency: IdempotencyPort
@@ -183,6 +191,7 @@ class SharedPorts:
     attachments: AttachmentPort
     audit: AuditPort
     messages: MessagePort
+    escalation: EscalationPort
 
 
 SharedPortFactory = Callable[..., SharedPorts]
@@ -196,6 +205,7 @@ class InspectionUnitOfWork(Protocol):
     attachments: AttachmentPort
     audit: AuditPort
     messages: MessagePort
+    escalation: EscalationPort
 
     def __enter__(self) -> Self: ...
 

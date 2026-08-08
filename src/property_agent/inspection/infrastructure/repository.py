@@ -12,7 +12,11 @@ from property_agent.inspection.application.service import (
     TASK_ASSIGN_ROLES,
     TASK_ASSIGNEE_ROLES,
 )
-from property_agent.inspection.domain.entities import InspectionTask, SecurityEvent
+from property_agent.inspection.domain.entities import (
+    AiSuggestion,
+    InspectionTask,
+    SecurityEvent,
+)
 from property_agent.inspection.domain.enums import (
     EventRiskLevel,
     EventStatus,
@@ -52,6 +56,8 @@ class SqlAlchemyInspectionRepository:
                 version=task.version,
                 updated_at=task.updated_at,
                 closed_at=task.closed_at,
+                ai_suggestions=[s.to_dict() for s in task.ai_suggestions],
+                ai_pending_confirm=task.ai_pending_confirm,
             )
             .execution_options(synchronize_session=False)
         )
@@ -90,6 +96,28 @@ class SqlAlchemyInspectionRepository:
         ):
             stmt = stmt.where(InspectionTaskModel.assignee_id == context.actor_id)
         stmt = stmt.offset(search.offset).limit(search.limit)
+        return [self._task_to_domain(m) for m in self._session.scalars(stmt).all()]
+
+    def find_active_tasks(self, community_id: UUID) -> Sequence[InspectionTask]:
+        """返回社区内仍在进行的巡检任务（计划/已分派/进行中），用于冲突校验。
+
+        PRD 6.4：计划时间与路线冲突校验。仅在内存中做时间窗与路线点的交集判断，
+        避免在 JSON 列上做跨数据库（SQLite/PostgreSQL）不兼容的查询。
+        """
+        stmt = (
+            select(InspectionTaskModel)
+            .options(selectinload(InspectionTaskModel.records))
+            .where(
+                InspectionTaskModel.community_id == community_id,
+                InspectionTaskModel.status.in_(
+                    [
+                        TaskStatus.PLANNED.value,
+                        TaskStatus.ASSIGNED.value,
+                        TaskStatus.IN_PROGRESS.value,
+                    ]
+                ),
+            )
+        )
         return [self._task_to_domain(m) for m in self._session.scalars(stmt).all()]
 
     def add_task_status_log(
@@ -134,6 +162,7 @@ class SqlAlchemyInspectionRepository:
         attachment_ids,
         is_supplement,
         actual_time,
+        supplement_reason,
         created_at,
     ) -> None:
         self._session.add(
@@ -148,6 +177,7 @@ class SqlAlchemyInspectionRepository:
                 attachment_ids=[str(v) for v in attachment_ids],
                 is_supplement=is_supplement,
                 actual_time=actual_time,
+                supplement_reason=supplement_reason,
                 created_at=created_at,
             )
         )
@@ -202,6 +232,7 @@ class SqlAlchemyInspectionRepository:
                 status=event.status.value,
                 assignee_id=event.assignee_id,
                 grade_confirmed_by=event.grade_confirmed_by,
+                report_source=event.report_source,
                 version=event.version,
                 updated_at=event.updated_at,
                 closed_at=event.closed_at,
@@ -351,6 +382,8 @@ class SqlAlchemyInspectionRepository:
             created_at=task.created_at,
             updated_at=task.updated_at,
             closed_at=task.closed_at,
+            ai_suggestions=[s.to_dict() for s in task.ai_suggestions],
+            ai_pending_confirm=task.ai_pending_confirm,
         )
 
     @staticmethod
@@ -372,6 +405,8 @@ class SqlAlchemyInspectionRepository:
             created_at=model.created_at,
             updated_at=model.updated_at,
             closed_at=model.closed_at,
+            ai_suggestions=tuple(AiSuggestion.from_dict(s) for s in (model.ai_suggestions or [])),
+            ai_pending_confirm=model.ai_pending_confirm,
         )
 
     @staticmethod
@@ -390,6 +425,7 @@ class SqlAlchemyInspectionRepository:
             status=event.status.value,
             assignee_id=event.assignee_id,
             grade_confirmed_by=event.grade_confirmed_by,
+            report_source=event.report_source,
             version=event.version,
             created_at=event.created_at,
             updated_at=event.updated_at,
@@ -412,6 +448,7 @@ class SqlAlchemyInspectionRepository:
             status=EventStatus(model.status),
             assignee_id=model.assignee_id,
             grade_confirmed_by=model.grade_confirmed_by,
+            report_source=model.report_source,
             version=model.version,
             created_at=model.created_at,
             updated_at=model.updated_at,

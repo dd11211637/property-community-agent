@@ -32,7 +32,21 @@ class ExecuteTaskActionCommand:
     attachment_ids: tuple[UUID, ...] = ()
     is_supplement: bool = False
     actual_time: datetime | None = None
+    supplement_reason: str | None = None
     confirmation_token: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AddAiSuggestionCommand:
+    point: str
+    finding: str
+    severity: str = "MEDIUM"
+    model: str = "inspection-ai"
+
+
+@dataclass(frozen=True, slots=True)
+class ConfirmAiSuggestionsCommand:
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +57,7 @@ class CreateSecurityEventCommand:
     location: str
     description: str
     confirmation_token: str
+    report_source: str = "MANUAL"
     attachment_ids: tuple[UUID, ...] = ()
 
 

@@ -31,6 +31,12 @@ from property_agent.announcement.infrastructure.shared_ports import build_announ
 from property_agent.announcement.infrastructure.uow import SqlAlchemyAnnouncementUnitOfWork
 from property_agent.billing.application.service import BillingService, ConsultationService
 from property_agent.config import settings
+from property_agent.inspection.application.service import (
+    InspectionTaskService,
+    SecurityEventService,
+)
+from property_agent.inspection.infrastructure.shared_ports import build_inspection_ports
+from property_agent.inspection.infrastructure.uow import SqlAlchemyInspectionUnitOfWork
 from property_agent.platform.infrastructure.database import (
     dispose_engine,
     get_session_factory,
@@ -200,6 +206,8 @@ def build_production_container(app: FastAPI) -> None:
         app.state.announcement_service → production announcement service (PRD 6.2)
         app.state.billing_service      → production billing service (PRD 6.3)
         app.state.consultation_service → production financial consultation service (PRD 6.3)
+        app.state.task_service         → production inspection task service (PRD 6.4)
+        app.state.event_service        → production security event service (PRD 6.4)
     """
     global _services_configured
 
@@ -273,6 +281,27 @@ def build_consultation_service() -> ConsultationService:
     return ConsultationService()
 
 
+def build_inspection_services() -> tuple[InspectionTaskService, SecurityEventService]:
+    """Assemble the production inspection task + security event services (PRD 6.4).
+
+    Both share one Unit-of-Work factory backed by the platform SQLAlchemy
+    session factory and the seven production shared ports (idempotency,
+    confirmation, staff directory, attachment, audit, message outbox,
+    escalation). Each request gets a fresh session; the repository and every
+    port share it, so a single ``commit()`` persists the task / event, its
+    timeline, the audit trail, the outbox message and any escalation ticket
+    atomically.
+    """
+    session_factory = get_session_factory()
+
+    def unit_of_work_factory() -> SqlAlchemyInspectionUnitOfWork:
+        return SqlAlchemyInspectionUnitOfWork(session_factory, build_inspection_ports)
+
+    return InspectionTaskService(unit_of_work_factory), SecurityEventService(
+        unit_of_work_factory
+    )
+
+
 def _build_services(app: FastAPI) -> dict[str, Any]:
     """Create and return all application service instances.
 
@@ -307,5 +336,11 @@ def _build_services(app: FastAPI) -> dict[str, Any]:
     consultation_service = build_consultation_service()
     app.state.consultation_service = consultation_service
     services["consultation_service"] = consultation_service
+
+    task_service, event_service = build_inspection_services()
+    app.state.task_service = task_service
+    app.state.event_service = event_service
+    services["task_service"] = task_service
+    services["event_service"] = event_service
 
     return services
