@@ -11,6 +11,8 @@
   不产生任何业务对象（PRD A-03）。
 """
 
+from datetime import datetime, timezone
+
 from property_agent.agent.graph_core import interrupt
 from property_agent.agent.policies import OperationLevel, classify_operation_level
 
@@ -22,6 +24,8 @@ def _build_pending(state):
         "params": {
             k: v for k, v in state.slots.items() if k not in ("user_text", "tool")
         },
+        # 确认有效期起点：应用重启后恢复前必须重新校验（PRD §6.5.8）
+        "issued_at": datetime.now(timezone.utc).isoformat(),
     }
 
 

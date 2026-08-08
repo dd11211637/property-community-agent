@@ -110,10 +110,23 @@ class CompiledGraph:
         thread_id = thread_id or state.conversation_id or str(uuid4())
         return self._run(self._g._entry, state, thread_id)
 
-    def resume(self, thread_id: str, resume_value: Any) -> dict[str, Any]:
-        if self._cp is None:
-            raise RuntimeError("No checkpointer configured; cannot resume.")
-        state = self._cp.load(thread_id)
+    def resume(
+        self,
+        thread_id: str,
+        resume_value: Any,
+        *,
+        state: GraphState | None = None,
+    ) -> dict[str, Any]:
+        """从中断点恢复。
+
+        ``state`` 显式传入时以它为准——恢复守卫（PRD §6.5.8 的会话/房屋/有效期
+        三项校验）会先加载并校正快照身份，直接复用其结果可避免二次读取
+        导致校验后的状态被旧快照覆盖。
+        """
+        if state is None:
+            if self._cp is None:
+                raise RuntimeError("No checkpointer configured; cannot resume.")
+            state = self._cp.load(thread_id)
         if state is None:
             raise RuntimeError(f"No checkpoint found for thread {thread_id}.")
         state._resume = resume_value
