@@ -15,15 +15,17 @@ from datetime import datetime, timezone
 
 from property_agent.agent.graph_core import interrupt
 from property_agent.agent.policies import OperationLevel, classify_operation_level
+from property_agent.platform.application.hashing import canonical_hash
 
 
 def _build_pending(state):
+    params = {k: v for k, v in state.slots.items() if k not in ("user_text", "tool")}
     return {
         "intent": state.intent,
         "tool": state.slots.get("tool"),
-        "params": {
-            k: v for k, v in state.slots.items() if k not in ("user_text", "tool")
-        },
+        "params": params,
+        # 参数指纹：确认回执必须带回同一枚指纹，参数变了就不能复用旧确认
+        "params_hash": canonical_hash(params),
         # 确认有效期起点：应用重启后恢复前必须重新校验（PRD §6.5.8）
         "issued_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -62,6 +64,7 @@ def confirm_action_node():
                     "type": "confirmation",
                     "summary": _summary(pending),
                     "action": pending,
+                    "action_hash": pending["params_hash"],
                 }
             )
         return state

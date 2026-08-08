@@ -92,14 +92,34 @@ class AgentSessionRunner:
         context: AgentContext,
         confirmed: bool,
         confirmation_token: str | None = None,
+        action_hash: str | None = None,
     ) -> AgentTurn:
-        restored = self._recovery.restore(conversation_id, context)
+        restored = self._recovery.restore(
+            conversation_id, context, expected_action_hash=action_hash
+        )
         result = self._graph.resume(
             conversation_id,
             {"confirmed": confirmed, "confirmation_token": confirmation_token},
             state=restored.state,
         )
         return self._finalize(result)
+
+    def status(
+        self, *, conversation_id: str, context: AgentContext
+    ) -> tuple[ConversationSnapshot, dict[str, Any] | None]:
+        """查询会话当前状态与待确认操作（只读，不触发闸门副作用）。"""
+        conversation = self._conversations.require_owned_by(conversation_id, context)
+        state = self._recovery.peek(conversation_id)
+        pending = None
+        if state is not None and state._interrupt_node is not None:
+            pending = state.pending_action
+        return conversation, pending
+
+    def close(
+        self, *, conversation_id: str, context: AgentContext
+    ) -> ConversationSnapshot:
+        self._conversations.require_owned_by(conversation_id, context)
+        return self._conversations.close(conversation_id)
 
     # ---- 内部 ----
 

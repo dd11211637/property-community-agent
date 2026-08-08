@@ -10,7 +10,9 @@
 2. **房屋绑定** —— 快照里的 ``current_house_id`` 必须仍在可信上下文的
    ``house_ids`` 里（绑定被撤销时快照会过时）；
 3. **确认有效期** —— ``pending_action.issued_at`` 距今不得超过 TTL，
-   与平台 ``ConfirmationService`` 的 5 分钟保持一致。
+   与平台 ``ConfirmationService`` 的 5 分钟保持一致；
+4. **参数指纹** —— 确认回执带回的 ``action_hash`` 必须与当前待确认的
+   ``params_hash`` 一致，参数变化后旧确认作废。
 
 校验失败会顺手作废这条待确认（清空 ``pending_action`` / 令牌 / 中断点），
 避免过期或越权的写操作在后续某次请求里被"接着执行"。
@@ -85,6 +87,7 @@ class AgentRecoveryService:
         context: AgentContext,
         *,
         require_pending: bool = True,
+        expected_action_hash: str | None = None,
     ) -> RestoredSession:
         # 闸 1：用户会话（所有权 + 生命周期）
         conversation = self._conversations.require_owned_by(conversation_id, context)
@@ -114,12 +117,23 @@ class AgentRecoveryService:
                 self.expire_pending(conversation_id)
                 raise AgentSessionError(AgentSessionErrorCode.CONFIRMATION_EXPIRED)
 
+        # 闸 4：参数指纹（确认回执必须对应同一份参数）
+        if pending is not None and expected_action_hash is not None:
+            if expected_action_hash != pending.get("params_hash"):
+                raise AgentSessionError(
+                    AgentSessionErrorCode.CONFIRMATION_PARAMS_CHANGED
+                )
+
         return RestoredSession(
             state=state,
             conversation=conversation,
             interrupt_node=state._interrupt_node,
             pending_action=pending,
         )
+
+    def peek(self, conversation_id: str) -> GraphState | None:
+        """只读取快照，不做任何闸门校验（供状态查询用）。"""
+        return self._checkpointer.load(conversation_id)
 
     def expire_pending(self, conversation_id: str) -> None:
         """作废这条待确认：清空待办 / 令牌 / 中断点，会话回到 ACTIVE。"""

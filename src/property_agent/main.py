@@ -13,6 +13,7 @@
   - announcement (公告)
   - inspection (巡检与安防)
   - billing   (费用查询与智能缴费)
+  - agent     (统一智能体会话)
 ────────────────────────────────────────────────────────
 """
 from __future__ import annotations
@@ -22,6 +23,8 @@ from uuid import uuid4
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from property_agent.agent.adapters.api.router import router as agent_router
+from property_agent.agent.application.errors import AgentSessionError
 from property_agent.announcement.adapters.api.router import router as announcement_router
 from property_agent.billing.adapters.api.router import router as billing_router
 from property_agent.inspection.adapters.api.router import (
@@ -117,6 +120,18 @@ def create_app() -> FastAPI:
             details=exc.details,
         )
 
+    @app.exception_handler(AgentSessionError)
+    async def agent_session_error_handler(
+        request: Request, exc: AgentSessionError
+    ) -> JSONResponse:
+        # 会话归属 / 生命周期 / 恢复守卫失败（PRD §6.5.8）
+        return error_envelope(
+            request,
+            status_code=exc.status_code,
+            code=exc.code,
+            message=exc.message,
+        )
+
     # PlatformError / HTTPException / RequestValidationError
     register_common_error_handlers(app)
 
@@ -134,6 +149,10 @@ def create_app() -> FastAPI:
     app.include_router(inspection_task_router)
     app.include_router(inspection_event_router)
     app.include_router(billing_router)
+
+    # 统一智能体：运行时未装配时同样返回 503 ADAPTER_NOT_CONFIGURED，
+    # 因此模型/编排不可用绝不影响上面的结构化业务接口（PRD §6.5.11）
+    app.include_router(agent_router)
 
     # The announcement router depends on the auth *seam*
     # (``platform.dependencies.get_request_context``) so it can also run as a
