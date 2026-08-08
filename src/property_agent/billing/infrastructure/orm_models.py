@@ -11,8 +11,9 @@ from decimal import Decimal
 from typing import Optional, List
 from sqlalchemy import (
     Column, String, Integer, Numeric, Date, DateTime, Boolean, Text,
-    ForeignKey, UniqueConstraint, CheckConstraint, Index, func,
+    ForeignKey, UniqueConstraint, CheckConstraint, Index, func, JSON,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from property_agent.platform.infrastructure.orm_models import Base
@@ -204,6 +205,24 @@ class BillModel(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="UNPAID", comment="状态")
     payment_time: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="缴费时间")
     receipt_no: Mapped[Optional[str]] = mapped_column(String(32), comment="关联票据号")
+    # ── PRD 6.3 生产化扩展字段 ───────────────────────────────
+    community_id: Mapped[Optional[str]] = mapped_column(
+        String(64), comment="社区标识(轻量接入: 使用平台 CommunityModel.name 作为社区码)"
+    )
+    house_id: Mapped[Optional[str]] = mapped_column(
+        String(64), comment="房屋标识(轻量接入: 平台 house.id 的 UUID 字符串或 legacy room_id)"
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, comment="账单版本(乐观并发 + 展示)"
+    )
+    fee_type: Mapped[Optional[str]] = mapped_column(
+        String(32), comment="费用类型: PROPERTY / UTILITY / PARKING / LATE_FEE / MIXED"
+    )
+    source_time: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, comment="账单来源时间(本地演示账单源生成时间)"
+    )
+    rule_version: Mapped[Optional[str]] = mapped_column(String(32), comment="适用规则版本")
+    rule_name: Mapped[Optional[str]] = mapped_column(String(128), comment="适用规则名称")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), comment="创建时间")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now(), comment="更新时间")
 
@@ -218,6 +237,9 @@ class BillModel(Base):
         Index("idx_bills_status", "status"),
         Index("idx_bills_due_date", "due_date"),
         Index("idx_bills_period", "bill_period"),
+        Index("idx_bills_community", "community_id"),
+        Index("idx_bills_house", "house_id"),
+        Index("idx_bills_fee_type", "fee_type"),
     )
 
 
@@ -323,7 +345,74 @@ class ReceiptModel(Base):
     user_ref: Mapped["BillingUserModel"] = relationship("BillingUserModel", back_populates="receipts")
     payment_ref: Mapped["PaymentModel"] = relationship("PaymentModel", back_populates="receipt")
 
-    __table_args__ = (
-        Index("idx_receipts_user_id", "user_id"),
-        Index("idx_receipts_bill_id", "bill_id"),
+
+# ── 7. 计费规则表（PRD 6.3：规则按小区 + 费用类型 + 版本 + 有效期配置）──
+
+
+class BillingRuleModel(Base):
+    """
+    计费规则表（PRD 6.3）。
+
+    规则按 (community_id, fee_type, version) 配置，带有效期。无有效规则时
+    账单查询应声明未知并引导用户进入财务咨询入口。
+    """
+
+    __tablename__ = "billing_rules"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="规则ID")
+    community_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="社区标识(= CommunityModel.name)"
     )
+    fee_type: Mapped[str] = mapped_column(String(32), nullable=False, comment="费用类型")
+    version: Mapped[str] = mapped_column(String(32), nullable=False, comment="规则版本")
+    name: Mapped[str] = mapped_column(String(128), nullable=False, comment="规则名称")
+    parameters: Mapped[dict | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), comment="规则参数(费率/口径等)"
+    )
+    valid_from: Mapped[datetime] = mapped_column(DateTime, nullable=False, comment="生效时间")
+    valid_until: Mapped[Optional[datetime]] = mapped_column(DateTime, comment="失效时间(NULL 表示长期有效)")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), comment="创建时间")
+
+    __table_args__ = (
+        Index("idx_billing_rules_community", "community_id"),
+        Index("idx_billing_rules_fee_type", "fee_type"),
+    )
+
+
+# ── 8. 财务咨询单表（PRD 6.3：DRAFT→SUBMITTED→PROCESSING→ANSWERED→RESOLVED）──
+
+
+class ConsultationModel(Base):
+    """
+    财务咨询单（PRD 6.3）。
+
+    状态机: DRAFT → SUBMITTED → PROCESSING → ANSWERED → RESOLVED
+                                          ↑________ APPEALED ← ANSWERED
+    AI 不得修改账单金额、不得承诺减免、不得发起退款（仅记录文本答案）。
+    """
+
+    __tablename__ = "billing_consultations"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="咨询单ID")
+    community_id: Mapped[str] = mapped_column(String(64), nullable=False, comment="社区标识")
+    house_id: Mapped[Optional[str]] = mapped_column(String(64), comment="关联房屋标识")
+    actor_id: Mapped[str] = mapped_column(String(64), nullable=False, comment="发起用户ID(平台 user.id UUID 字符串)")
+    bill_id: Mapped[Optional[str]] = mapped_column(String(32), comment="关联账单ID(可选)")
+    subject: Mapped[str] = mapped_column(String(255), nullable=False, comment="咨询主题")
+    description: Mapped[str] = mapped_column(Text, nullable=False, comment="咨询内容")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="DRAFT", comment="状态")
+    answer: Mapped[Optional[str]] = mapped_column(Text, comment="答复内容(仅文本, 不改性账单)")
+    handler_id: Mapped[Optional[str]] = mapped_column(String(64), comment="处理人ID")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), comment="创建时间")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now(), comment="更新时间"
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, comment="乐观并发版本")
+
+    __table_args__ = (
+        Index("idx_consultations_community", "community_id"),
+        Index("idx_consultations_house", "house_id"),
+        Index("idx_consultations_actor", "actor_id"),
+        Index("idx_consultations_status", "status"),
+    )
+

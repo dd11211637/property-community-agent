@@ -7,11 +7,13 @@ application/ports.py     端口接口（Port）
 """
 from __future__ import annotations
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Optional, Protocol
 from datetime import date
+from uuid import UUID
 
-from ..domain.entities import Bill, User, Payment, Receipt, Building, Room
-from ..domain.enums import ReminderLevel
+from ..domain.entities import Bill, User, Payment, Receipt, Building, Room, BillingRule, ConsultationTicket
+from ..domain.enums import ReminderLevel, ConsultationStatus
 
 
 # ── 仓储端口 ─────────────────────────────────────────
@@ -510,4 +512,78 @@ class PaymentGateway(ABC):
                 (:payment_id, :bill_id, :user_id, :amount, :method, 'SUCCESS',
                  :txn_id, :receipt_no, :paid_at, NOW());
         """
+        ...
+
+
+# ═══════════════════════════════════════════════════
+# PRD 6.3 端口：账单来源 / 规则 / 咨询单
+# ═══════════════════════════════════════════════════
+
+@dataclass
+class IdempotencyRecord:
+    """幂等记录（billing 模块本地复用平台 idempotency_records 表）。"""
+
+    actor_id: UUID
+    operation: str
+    key: str
+    request_hash: str
+    resource_id: UUID
+    response_snapshot: dict
+
+
+class BillingSourcePort(Protocol):
+    """账单数据源抽象（PRD 6.3）。
+
+    隔离本地演示账单源与未来真实财务接口。本地实现读取 fee_bills；
+    真实实现可调用外部账务系统。接口失败时抛 ``BillingSourceUnavailable``，
+    调用方必须允许保存财务咨询草稿而不猜测金额（R-02）。
+    """
+
+    def list_bills(
+        self,
+        *,
+        community_id: str,
+        house_id: Optional[str] = None,
+        fee_type: Optional[str] = None,
+        period: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> list[Bill]:
+        ...
+
+    def get_bill(self, *, bill_id: str) -> Optional[Bill]:
+        ...
+
+
+class RuleRepository(ABC):
+    """计费规则仓储（PRD 6.3）。"""
+
+    @abstractmethod
+    def find_effective(
+        self, community_id: str, fee_type: str, as_of: Optional[str] = None
+    ) -> Optional[BillingRule]:
+        """返回当前生效的规则；无有效规则返回 None（声明未知）。"""
+        ...
+
+    @abstractmethod
+    def save(self, rule: BillingRule) -> BillingRule:
+        ...
+
+
+class ConsultationRepository(ABC):
+    """财务咨询单仓储（PRD 6.3）。"""
+
+    @abstractmethod
+    def add(self, ticket: ConsultationTicket) -> ConsultationTicket:
+        ...
+
+    @abstractmethod
+    def get(self, consultation_id: str) -> Optional[ConsultationTicket]:
+        ...
+
+    @abstractmethod
+    def list_by_actor(self, actor_id: str, community_id: str) -> list[ConsultationTicket]:
+        ...
+
+    @abstractmethod
+    def update(self, ticket: ConsultationTicket) -> ConsultationTicket:
         ...

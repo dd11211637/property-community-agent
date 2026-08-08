@@ -8,15 +8,20 @@ infrastructure/repositories.py     Repository 实现
 """
 from __future__ import annotations
 from typing import Optional
-from datetime import date as date_type
+from datetime import date as date_type, datetime as _dt
 from sqlalchemy.orm import Session, joinedload
 
 from .orm_models import (
     BillModel, BillingUserModel, PaymentModel, ReceiptModel,
-    BuildingModel, RoomModel,
+    BuildingModel, RoomModel, BillingRuleModel, ConsultationModel,
 )
-from ..domain.entities import Bill, User, Payment, Receipt, Building, Room
-from ..domain.enums import BillStatus, UserRole, PayMethod, PayStatus, BuildingType, RoomStatus, BuildingStatus
+from ..domain.entities import (
+    Bill, User, Payment, Receipt, Building, Room, BillingRule, ConsultationTicket,
+)
+from ..domain.enums import (
+    BillStatus, UserRole, PayMethod, PayStatus, BuildingType, RoomStatus,
+    BuildingStatus, ConsultationStatus,
+)
 from ..application.ports import (
     BillRepository, UserRepository, PaymentRepository, ReceiptRepository,
     BuildingRepository, RoomRepository, UnitOfWork,
@@ -40,6 +45,13 @@ def _bill_from_model(m: BillModel) -> Bill:
         status=BillStatus(m.status),
         payment_time=m.payment_time.strftime("%Y-%m-%d %H:%M:%S") if m.payment_time else None,
         receipt_no=m.receipt_no,
+        community_id=m.community_id,
+        house_id=m.house_id,
+        version=m.version,
+        fee_type=m.fee_type,
+        source_time=m.source_time.isoformat() if m.source_time else None,
+        rule_version=m.rule_version,
+        rule_name=m.rule_name,
         user_name=m.user_ref.user_name if m.user_ref else "",
         building_name=m.room_ref.building.building_name if m.room_ref and m.room_ref.building else "",
         room_number=m.room_ref.room_number if m.room_ref else "",
@@ -172,6 +184,28 @@ class SqlAlchemyBillRepository(BillRepository):
             SELECT * FROM fee_bills ORDER BY bill_period DESC;
         """
         rows = self._query().order_by(BillModel.bill_period.desc()).all()
+        return [_bill_from_model(r) for r in rows]
+
+    def find_by_community_and_house(
+        self,
+        *,
+        community_id: str,
+        house_id: str | None = None,
+        fee_type: str | None = None,
+        period: str | None = None,
+        status: str | None = None,
+    ) -> list[Bill]:
+        """PRD 6.3: 按社区(必选) + 房屋(可选) + 费用类型/账期/状态筛选。"""
+        statement = self._query().filter(BillModel.community_id == community_id)
+        if house_id is not None:
+            statement = statement.filter(BillModel.house_id == house_id)
+        if fee_type is not None:
+            statement = statement.filter(BillModel.fee_type == fee_type)
+        if period is not None:
+            statement = statement.filter(BillModel.bill_period == period)
+        if status is not None:
+            statement = statement.filter(BillModel.status == status)
+        rows = statement.order_by(BillModel.bill_period.desc()).all()
         return [_bill_from_model(r) for r in rows]
 
     def save(self, bill: Bill) -> Bill:
@@ -745,3 +779,143 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
             ROLLBACK;
         """
         self._db.rollback()
+
+
+# ── BillingRuleRepository 实现 ──────────────────────────
+
+class SqlAlchemyBillingRuleRepository:
+    """计费规则仓储实现（PRD 6.3）。"""
+
+    def __init__(self, db: Session):
+        self._db = db
+
+    def find_effective(
+        self, community_id: str, fee_type: str, as_of: Optional[str] = None
+    ) -> Optional[BillingRule]:
+        from datetime import datetime as _dt
+
+        now = _dt.fromisoformat(as_of) if as_of else _dt.now()
+        rows = (
+            self._db.query(BillingRuleModel)
+            .filter(
+                BillingRuleModel.community_id == community_id,
+                BillingRuleModel.fee_type == fee_type,
+            )
+            .all()
+        )
+        for m in rows:
+            valid_from = m.valid_from
+            valid_until = m.valid_until
+            if valid_from and now < valid_from:
+                continue
+            if valid_until and now > valid_until:
+                continue
+            return BillingRule(
+                id=m.id,
+                community_id=m.community_id,
+                fee_type=m.fee_type,
+                version=m.version,
+                name=m.name,
+                parameters=dict(m.parameters) if m.parameters else None,
+                valid_from=m.valid_from.isoformat() if m.valid_from else None,
+                valid_until=m.valid_until.isoformat() if m.valid_until else None,
+            )
+        return None
+
+    def save(self, rule: BillingRule) -> BillingRule:
+        model = BillingRuleModel(
+            id=rule.id,
+            community_id=rule.community_id,
+            fee_type=rule.fee_type,
+            version=rule.version,
+            name=rule.name,
+            parameters=rule.parameters,
+            valid_from=(
+                _dt.fromisoformat(rule.valid_from) if rule.valid_from else _dt.now()
+            ),
+            valid_until=(
+                _dt.fromisoformat(rule.valid_until) if rule.valid_until else None
+            ),
+        )
+        self._db.add(model)
+        self._db.flush()
+        return rule
+
+
+# ── ConsultationRepository 实现 ────────────────────────
+
+class SqlAlchemyConsultationRepository:
+    """财务咨询单仓储实现（PRD 6.3）。"""
+
+    def __init__(self, db: Session):
+        self._db = db
+
+    def add(self, ticket: ConsultationTicket) -> ConsultationTicket:
+        model = ConsultationModel(
+            id=ticket.id,
+            community_id=ticket.community_id,
+            house_id=ticket.house_id,
+            actor_id=ticket.actor_id,
+            bill_id=ticket.bill_id,
+            subject=ticket.subject,
+            description=ticket.description,
+            status=ticket.status.value,
+            answer=ticket.answer,
+            handler_id=ticket.handler_id,
+            version=ticket.version,
+        )
+        self._db.add(model)
+        self._db.flush()
+        return ticket
+
+    def get(self, consultation_id: str) -> Optional[ConsultationTicket]:
+        m = self._db.query(ConsultationModel).filter(
+            ConsultationModel.id == consultation_id
+        ).first()
+        return _consultation_from_model(m) if m else None
+
+    def list_by_actor(self, actor_id: str, community_id: str) -> list[ConsultationTicket]:
+        rows = (
+            self._db.query(ConsultationModel)
+            .filter(
+                ConsultationModel.actor_id == actor_id,
+                ConsultationModel.community_id == community_id,
+            )
+            .order_by(ConsultationModel.created_at.desc())
+            .all()
+        )
+        return [_consultation_from_model(r) for r in rows]
+
+    def update(self, ticket: ConsultationTicket) -> ConsultationTicket:
+        m = self._db.query(ConsultationModel).filter(
+            ConsultationModel.id == ticket.id
+        ).first()
+        if not m:
+            raise ValueError(f"咨询单 {ticket.id} 不存在")
+        m.status = ticket.status.value
+        m.answer = ticket.answer
+        m.handler_id = ticket.handler_id
+        m.house_id = ticket.house_id
+        m.bill_id = ticket.bill_id
+        m.version = ticket.version
+        m.updated_at = _dt.now()
+        self._db.flush()
+        return ticket
+
+
+def _consultation_from_model(m: ConsultationModel) -> ConsultationTicket:
+    return ConsultationTicket(
+        id=m.id,
+        community_id=m.community_id,
+        actor_id=m.actor_id,
+        subject=m.subject,
+        description=m.description,
+        house_id=m.house_id,
+        bill_id=m.bill_id,
+        status=ConsultationStatus(m.status),
+        answer=m.answer,
+        handler_id=m.handler_id,
+        version=m.version,
+        created_at=m.created_at.isoformat() if m.created_at else None,
+        updated_at=m.updated_at.isoformat() if m.updated_at else None,
+    )

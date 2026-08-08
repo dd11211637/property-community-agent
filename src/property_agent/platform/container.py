@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import (
 from property_agent.announcement.application.service import AnnouncementService
 from property_agent.announcement.infrastructure.shared_ports import build_announcement_ports
 from property_agent.announcement.infrastructure.uow import SqlAlchemyAnnouncementUnitOfWork
+from property_agent.billing.application.service import BillingService, ConsultationService
 from property_agent.config import settings
 from property_agent.platform.infrastructure.database import (
     dispose_engine,
@@ -197,6 +198,8 @@ def build_production_container(app: FastAPI) -> None:
         app.state.container            → ContainerState with initialized services
         app.state.work_order_service   → production repair service (PRD 6.1)
         app.state.announcement_service → production announcement service (PRD 6.2)
+        app.state.billing_service      → production billing service (PRD 6.3)
+        app.state.consultation_service → production financial consultation service (PRD 6.3)
     """
     global _services_configured
 
@@ -248,6 +251,28 @@ def build_announcement_service() -> AnnouncementService:
     return AnnouncementService(unit_of_work_factory)
 
 
+def build_billing_service() -> BillingService:
+    """Assemble the production billing service (PRD 6.3).
+
+    The billing read path is isolated behind ``BillingSourcePort`` (local demo
+    source by default; a remote/unavailable variant exists for R-02). Bill
+    queries are scoped by community + current house and audited via the
+    platform ``AuditService``. The billing DB keeps its own engine (轻量接入);
+    the platform DB carries audit / idempotency rows.
+    """
+    return BillingService()
+
+
+def build_consultation_service() -> ConsultationService:
+    """Assemble the production financial-consultation service (PRD 6.3).
+
+    Persists the consultation ticket lifecycle in the billing DB and every
+    transition/audit row in the platform DB via the shared ports. Stateless —
+    holds no session; sessions are opened per call.
+    """
+    return ConsultationService()
+
+
 def _build_services(app: FastAPI) -> dict[str, Any]:
     """Create and return all application service instances.
 
@@ -274,5 +299,13 @@ def _build_services(app: FastAPI) -> dict[str, Any]:
     announcement_service = build_announcement_service()
     app.state.announcement_service = announcement_service
     services["announcement_service"] = announcement_service
+
+    billing_service = build_billing_service()
+    app.state.billing_service = billing_service
+    services["billing_service"] = billing_service
+
+    consultation_service = build_consultation_service()
+    app.state.consultation_service = consultation_service
+    services["consultation_service"] = consultation_service
 
     return services

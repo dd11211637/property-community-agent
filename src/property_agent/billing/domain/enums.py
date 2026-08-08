@@ -33,6 +33,35 @@ from enum import Enum
 
 
 # ═══════════════════════════════════════════════════════════════
+# FeeType · 费用类型（PRD 6.3 筛选维度）
+# ═══════════════════════════════════════════════════════════════
+
+class FeeType(str, Enum):
+    """账单费用类型维度。"""
+
+    PROPERTY = "PROPERTY"   # 物业费
+    UTILITY = "UTILITY"     # 公摊水电费
+    PARKING = "PARKING"     # 车位费
+    LATE_FEE = "LATE_FEE"   # 滞纳金
+    MIXED = "MIXED"         # 混合/未分类
+
+
+# ═══════════════════════════════════════════════════════════════
+# ConsultationStatus · 财务咨询单状态（PRD 6.3）
+# ═══════════════════════════════════════════════════════════════
+
+class ConsultationStatus(str, Enum):
+    """财务咨询单状态机节点。"""
+
+    DRAFT = "DRAFT"
+    SUBMITTED = "SUBMITTED"
+    PROCESSING = "PROCESSING"
+    ANSWERED = "ANSWERED"
+    RESOLVED = "RESOLVED"
+    APPEALED = "APPEALED"
+
+
+# ═══════════════════════════════════════════════════════════════
 # BillStatus · 账单状态
 # ═══════════════════════════════════════════════════════════════
 

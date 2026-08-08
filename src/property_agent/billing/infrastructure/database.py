@@ -86,6 +86,23 @@ else:
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+def init_billing_db() -> None:
+    """Create all billing tables (idempotent) in the billing database.
+
+    PRD 6.3 added ``billing_rules`` and ``billing_consultations`` plus new
+    columns on ``fee_bills``; ``create_all`` provisions them without dropping
+    existing data. Production deployments should still run the Alembic chain,
+    but ``create_all`` keeps the demo / test paths self-contained.
+    """
+    from .orm_models import Base
+
+    Base.metadata.create_all(bind=engine)
+
+
+# 轻量接入: 启动时确保账单库表存在（幂等）。
+init_billing_db()
+
+
 # ═══════════════════════════════════════════════════════════════
 # FastAPI 依赖注入
 # ═══════════════════════════════════════════════════════════════

@@ -23,7 +23,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from property_agent.announcement.adapters.api.router import router as announcement_router
-from property_agent.billing.adapters.api.routes import router as billing_router
+from property_agent.billing.adapters.api.router import router as billing_router
 from property_agent.inspection.adapters.api.router import (
     event_router as inspection_event_router,
 )

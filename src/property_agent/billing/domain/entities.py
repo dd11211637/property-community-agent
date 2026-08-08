@@ -33,7 +33,10 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from .enums import BillStatus, UserRole, PayMethod, PayStatus, BuildingType, RoomStatus, UserStatus, BuildingStatus
+from .enums import (
+    BillStatus, UserRole, PayMethod, PayStatus, BuildingType, RoomStatus,
+    UserStatus, BuildingStatus, FeeType, ConsultationStatus,
+)
 from .value_objects import Money, FeeDetail, BillPeriod, Address
 
 
@@ -244,6 +247,15 @@ class Bill:
     payment_time: Optional[str] = None
     receipt_no: Optional[str] = None
 
+    # ── PRD 6.3 生产化字段 ─────────────────────────────────
+    community_id: Optional[str] = None
+    house_id: Optional[str] = None
+    version: int = 1
+    fee_type: Optional[str] = None
+    source_time: Optional[str] = None
+    rule_version: Optional[str] = None
+    rule_name: Optional[str] = None
+
     # 关联（懒加载，由 Repository 填充）
     user_name: str = ""
     building_name: str = ""
@@ -424,3 +436,91 @@ class Receipt:
     building_name: str = ""
     room_number: str = ""
     payment_time: str = ""
+
+
+# ═══════════════════════════════════════════════════
+# BillingRule · 计费规则实体（PRD 6.3）
+# ═══════════════════════════════════════════════════
+
+@dataclass
+class BillingRule:
+    """计费规则：按社区 + 费用类型 + 版本配置，带有效期。"""
+
+    id: str
+    community_id: str
+    fee_type: str
+    version: str
+    name: str
+    parameters: Optional[dict] = None
+    valid_from: Optional[str] = None
+    valid_until: Optional[str] = None
+
+    def is_effective(self, as_of: Optional[str] = None) -> bool:
+        """判断规则在给定时间(ISO 字符串)是否生效。"""
+        from datetime import datetime as _dt
+
+        now = _dt.fromisoformat(as_of) if as_of else _dt.now()
+        if self.valid_from and now < _dt.fromisoformat(self.valid_from):
+            return False
+        if self.valid_until and now > _dt.fromisoformat(self.valid_until):
+            return False
+        return True
+
+
+# ═══════════════════════════════════════════════════
+# ConsultationTicket · 财务咨询单（PRD 6.3）
+# ═══════════════════════════════════════════════════
+
+class ConsultationTransitionError(Exception):
+    """状态机非法迁移。"""
+
+
+@dataclass
+class ConsultationTicket:
+    """
+    财务咨询单（聚合根）。
+
+    状态机:
+        DRAFT → SUBMITTED → PROCESSING → ANSWERED → RESOLVED
+                                          ↑________ APPEALED ← ANSWERED
+
+    AI 答复（answer）只写入文本，绝不改账单金额/减免/退款。
+    """
+
+    id: str
+    community_id: str
+    actor_id: str
+    subject: str
+    description: str
+    house_id: Optional[str] = None
+    bill_id: Optional[str] = None
+    status: ConsultationStatus = ConsultationStatus.DRAFT
+    answer: Optional[str] = None
+    handler_id: Optional[str] = None
+    version: int = 1
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+    def transition_to(self, target: ConsultationStatus) -> None:
+        allowed = CONSULTATION_ALLOWED_TRANSITIONS.get(self.status, set())
+        if target not in allowed:
+            raise ConsultationTransitionError(
+                f"非法咨询单状态迁移: {self.status.value} → {target.value}"
+            )
+        self.status = target
+
+    def apply_answer(self, answer: str, handler_id: str) -> None:
+        """财务人员在 PROCESSING 阶段写入文本答复（不改账单）。"""
+        self.answer = answer
+        self.handler_id = handler_id
+
+
+# 咨询单状态机允许迁移
+CONSULTATION_ALLOWED_TRANSITIONS: dict[ConsultationStatus, set[ConsultationStatus]] = {
+    ConsultationStatus.DRAFT: {ConsultationStatus.SUBMITTED},
+    ConsultationStatus.SUBMITTED: {ConsultationStatus.PROCESSING},
+    ConsultationStatus.PROCESSING: {ConsultationStatus.ANSWERED},
+    ConsultationStatus.ANSWERED: {ConsultationStatus.RESOLVED, ConsultationStatus.APPEALED},
+    ConsultationStatus.APPEALED: {ConsultationStatus.PROCESSING},
+    ConsultationStatus.RESOLVED: set(),
+}
