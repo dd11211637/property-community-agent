@@ -155,6 +155,9 @@ class CompiledGraph:
         return self._finish(state, thread_id)
 
     def _finish(self, state: GraphState, thread_id: str) -> dict[str, Any]:
+        # 本轮结束即清理恢复态，避免下一轮从检查点恢复时被误判为"已确认"
+        state._resume = None
+        state._interrupt_node = None
         if self._cp is not None:
             self._cp.save(thread_id, state)
         return {"state": state, "interrupt": None, "thread_id": thread_id, "done": True}

@@ -1,10 +1,16 @@
 """槽位补全节点 — PRD §6.5.5（必须使用确定性逻辑）。
 
-只追问缺失的必填槽位（PRD §6.5.10），不臆造业务数据。UNCERTAIN / GENERAL_HELP
-不需要业务槽位，直接放行。
+只追问缺失的必填槽位（PRD §6.5.10），不臆造业务数据。
+若上游已选定工具（``slots["tool"]``），按**工具级**必填槽位校验（查询类不会
+被写操作的参数卡住）；否则退回意图级必填槽位。
+UNCERTAIN / GENERAL_HELP 不需要业务槽位，直接放行。
 """
 
-from property_agent.agent.policies import Intent, missing_slots_for
+from property_agent.agent.policies import (
+    Intent,
+    missing_slots_for,
+    missing_slots_for_tool,
+)
 
 _CLARIFY: dict[str, str] = {
     "REPAIR": "请提供：报修类别、具体位置、问题描述。",
@@ -18,7 +24,11 @@ def collect_slots_node():
     def node(state):
         if state.intent in (Intent.UNCERTAIN.value, Intent.GENERAL_HELP.value):
             return state
-        missing = missing_slots_for(state.intent, state.slots)
+        tool = state.slots.get("tool")
+        if tool:
+            missing = missing_slots_for_tool(tool, state.slots)
+        else:
+            missing = missing_slots_for(state.intent, state.slots)
         state.missing_slots = missing
         if missing:
             prompt = _CLARIFY.get(state.intent, "请补充必要信息。")

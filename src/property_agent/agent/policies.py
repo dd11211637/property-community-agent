@@ -61,12 +61,44 @@ TOOL_LEVELS: dict[str, str] = {
 }
 
 
+# 工具级必填槽位。比意图级更精确：同一意图下"查询"不需要写操作的参数，
+# 因此槽位补全在选定工具之后按工具校验（PRD §6.5.5 确定性必填校验）。
+TOOL_SLOTS: dict[str, list[str]] = {
+    "repair_list": [],
+    "repair_get": ["work_order_id"],
+    "repair_create": ["category", "location", "description"],
+    "announcement_list": [],
+    "announcement_get": ["announcement_id"],
+    "announce_publish": ["announcement_id"],
+    "billing_query": [],
+    "billing_consult": ["subject", "description"],
+    "inspection_list": [],
+    "inspection_create": ["title", "description"],
+    "inspection_submit_record": ["task_id", "expected_version", "point"],
+    "inspection_ai_suggest": ["task_id", "point", "finding"],
+    "close_high_risk_event": ["event_id"],
+}
+
+
 def required_slots(intent: str) -> list[str]:
     return SLOT_SPECS.get(intent, [])
 
 
 def missing_slots_for(intent: str, slots: dict) -> list[str]:
     return [name for name in required_slots(intent) if not slots.get(name)]
+
+
+def required_slots_for_tool(tool_name: str) -> list[str]:
+    return TOOL_SLOTS.get(tool_name, [])
+
+
+def missing_slots_for_tool(tool_name: str, slots: dict) -> list[str]:
+    missing = []
+    for name in required_slots_for_tool(tool_name):
+        value = slots.get(name)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            missing.append(name)
+    return missing
 
 
 def classify_operation_level(intent: str, tool_name: str | None = None) -> str:
