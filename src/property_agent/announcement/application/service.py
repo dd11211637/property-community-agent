@@ -10,13 +10,19 @@ from property_agent.announcement.application.commands import (
     AnnouncementSearch,
     CreateAnnouncementCommand,
     EditAnnouncementCommand,
+    ReviewActionCommand,
 )
 from property_agent.announcement.application.ports import (
     AnnouncementUnitOfWork,
     AnnouncementUnitOfWorkFactory,
     IdempotencyRecord,
 )
-from property_agent.announcement.domain.entities import Announcement, AnnouncementVersion
+from property_agent.announcement.domain.entities import (
+    Announcement,
+    AnnouncementReview,
+    AnnouncementVersion,
+    AudienceSnapshot,
+)
 from property_agent.announcement.domain.enums import (
     CREATE_ROLES,
     READ_ROLES,
@@ -24,6 +30,7 @@ from property_agent.announcement.domain.enums import (
     AnnouncementStatus,
 )
 from property_agent.announcement.domain.errors import (
+    empty_audience,
     idempotency_conflict,
     not_found,
     version_conflict,
@@ -34,6 +41,7 @@ from property_agent.announcement.domain.policies import (
     validate_category,
 )
 from property_agent.platform.context import RequestContext
+from property_agent.platform.roles import Role
 from property_agent.platform.validation import (
     new_business_no,
     require_idempotency_key,
@@ -150,6 +158,107 @@ class AnnouncementService:
         require_role(context, *READ_ROLES)
         with self._unit_of_work_factory() as uow:
             return self._get(uow, announcement_id, context)
+
+    def preview_audience(self, announcement_id: UUID, context: RequestContext) -> AudienceSnapshot:
+        require_role(context, *CREATE_ROLES)
+        with self._unit_of_work_factory() as uow:
+            announcement = self._get(uow, announcement_id, context)
+            return uow.audiences.resolve(
+                community_id=context.community_id,
+                condition=announcement.audience_condition,
+                request_id=context.request_id,
+            )
+
+    def submit_review(
+        self,
+        announcement_id: UUID,
+        command: ReviewActionCommand,
+        context: RequestContext,
+        *,
+        idempotency_key: str,
+    ) -> Announcement:
+        require_role(context, *CREATE_ROLES)
+        if command.action != AnnouncementAction.SUBMIT_REVIEW:
+            from property_agent.announcement.domain.errors import validation_error
+
+            raise validation_error("submit_review requires the SUBMIT_REVIEW action.")
+        return self._review_action(
+            announcement_id, command, context, idempotency_key=idempotency_key
+        )
+
+    def review_action(
+        self,
+        announcement_id: UUID,
+        command: ReviewActionCommand,
+        context: RequestContext,
+        *,
+        idempotency_key: str,
+    ) -> Announcement:
+        require_role(context, Role.MANAGER)
+        if command.action not in {AnnouncementAction.APPROVE, AnnouncementAction.REJECT}:
+            from property_agent.announcement.domain.errors import validation_error
+
+            raise validation_error("Only APPROVE and REJECT are review actions.")
+        return self._review_action(
+            announcement_id, command, context, idempotency_key=idempotency_key
+        )
+
+    def _review_action(
+        self,
+        announcement_id: UUID,
+        command: ReviewActionCommand,
+        context: RequestContext,
+        *,
+        idempotency_key: str,
+    ) -> Announcement:
+        require_idempotency_key(idempotency_key)
+        operation = f"ANNOUNCEMENT_{command.action.value}"
+        request_hash = canonical_hash({"announcement_id": announcement_id, **asdict(command)})
+        with self._unit_of_work_factory() as uow:
+            replay = self._replay(uow, context, operation, idempotency_key, request_hash)
+            if replay is not None:
+                return replay
+            announcement = self._get(uow, announcement_id, context)
+            if announcement.version != command.expected_version:
+                raise version_conflict(announcement.version)
+            now = datetime.now(UTC)
+            if command.action == AnnouncementAction.SUBMIT_REVIEW:
+                snapshot = uow.audiences.resolve(
+                    community_id=context.community_id,
+                    condition=announcement.audience_condition,
+                    request_id=context.request_id,
+                )
+                if snapshot.count <= 0 or not snapshot.member_ids:
+                    raise empty_audience()
+                uow.announcements.add_audience_snapshot(
+                    announcement.id, context.community_id, snapshot
+                )
+            reason = None
+            if command.action == AnnouncementAction.REJECT:
+                reason = required_text(command.reason, "A rejection reason is required.")
+            announcement.transition(command.action, now=now)
+            uow.announcements.add_review(
+                announcement.id,
+                context.community_id,
+                AnnouncementReview(command.action, context.actor_id, reason, now),
+            )
+            uow.announcements.save(announcement)
+            self._record_idempotency(
+                uow, announcement, context, operation, idempotency_key, request_hash
+            )
+            self._audit(
+                uow,
+                announcement,
+                context,
+                command.action,
+                {
+                    "reason": reason,
+                    "manager_recheck_required": announcement.manager_recheck_required,
+                },
+                now,
+            )
+            uow.commit()
+            return announcement
 
     def search(self, search: AnnouncementSearch, context: RequestContext) -> list[Announcement]:
         require_role(context, *READ_ROLES)

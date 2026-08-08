@@ -1,18 +1,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
 from property_agent.announcement.application.commands import AnnouncementSearch
 from property_agent.announcement.application.ports import IdempotencyRecord
-from property_agent.announcement.domain.entities import Announcement, AnnouncementVersion
+from property_agent.announcement.domain.entities import (
+    Announcement,
+    AnnouncementReview,
+    AnnouncementVersion,
+    AudienceSnapshot,
+)
 
 
 @dataclass
 class FakeState:
     announcements: dict[UUID, Announcement] = field(default_factory=dict)
     versions: dict[UUID, list[AnnouncementVersion]] = field(default_factory=dict)
+    reviews: list[AnnouncementReview] = field(default_factory=list)
+    snapshots: dict[UUID, list[AudienceSnapshot]] = field(default_factory=dict)
     idempotency: dict[tuple[UUID, str, str], IdempotencyRecord] = field(default_factory=dict)
     audits: list[dict[str, Any]] = field(default_factory=list)
 
@@ -47,6 +55,22 @@ class FakeRepository:
     def versions(self, announcement_id: UUID, community_id: UUID) -> list[AnnouncementVersion]:
         return list(self.state.versions.get(announcement_id, ()))
 
+    def add_review(
+        self, announcement_id: UUID, community_id: UUID, review: AnnouncementReview
+    ) -> None:
+        self.state.reviews.append(review)
+
+    def add_audience_snapshot(
+        self, announcement_id: UUID, community_id: UUID, snapshot: AudienceSnapshot
+    ) -> None:
+        self.state.snapshots.setdefault(announcement_id, []).append(snapshot)
+
+    def latest_audience_snapshot(
+        self, announcement_id: UUID, community_id: UUID
+    ) -> AudienceSnapshot | None:
+        snapshots = self.state.snapshots.get(announcement_id, [])
+        return snapshots[-1] if snapshots else None
+
 
 class FakeIdempotency:
     def __init__(self, state: FakeState) -> None:
@@ -67,11 +91,26 @@ class FakeAudit:
         self.state.audits.append(event)
 
 
+class FakeAudienceResolver:
+    def __init__(self, member_ids: tuple[UUID, ...] = ()) -> None:
+        self.member_ids = member_ids
+
+    def resolve(self, *, community_id, condition, request_id) -> AudienceSnapshot:
+        return AudienceSnapshot(
+            condition=condition,
+            member_ids=self.member_ids,
+            count=len(self.member_ids),
+            samples=tuple({"member": "masked"} for _ in self.member_ids[:3]),
+            generated_at=datetime.now(UTC),
+        )
+
+
 class FakeUnitOfWork:
-    def __init__(self, state: FakeState) -> None:
+    def __init__(self, state: FakeState, audiences: FakeAudienceResolver) -> None:
         self.announcements = FakeRepository(state)
         self.idempotency = FakeIdempotency(state)
         self.audit = FakeAudit(state)
+        self.audiences = audiences
         self.committed = False
 
     def __enter__(self):
@@ -89,8 +128,9 @@ class FakeUnitOfWork:
 
 
 class Harness:
-    def __init__(self) -> None:
+    def __init__(self, *, audience_members: tuple[UUID, ...] = ()) -> None:
         self.state = FakeState()
+        self.audiences = FakeAudienceResolver(audience_members)
 
     def uow(self) -> FakeUnitOfWork:
-        return FakeUnitOfWork(self.state)
+        return FakeUnitOfWork(self.state, self.audiences)
