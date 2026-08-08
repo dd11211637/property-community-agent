@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from property_agent.announcement.application.service import AnnouncementService
 from property_agent.inspection.adapters.api.dependencies import (
     get_event_service,
     get_task_service,
@@ -12,6 +13,7 @@ from property_agent.main import create_app
 from property_agent.platform.context import RequestContext
 from property_agent.platform.dependencies import get_request_context
 from property_agent.platform.roles import Role
+from tests.announcement.support import Harness as AnnouncementHarness
 from tests.conftest import Ids as RepairIds
 from tests.inspection.support import Harness as InspectionHarness
 
@@ -25,6 +27,7 @@ def test_project_app_registers_repair_and_inspection_routes() -> None:
     assert "/api/inspection-tasks" in paths
     assert "/api/security-events" in paths
     assert "/api/bills" in paths
+    assert "/api/announcements" in paths
     assert "/health" in paths
 
 
@@ -36,6 +39,7 @@ def test_project_app_runs_both_module_entry_points(
     inspection_harness = InspectionHarness(security_workers=set(), duty_users=[])
     task_service = InspectionTaskService(inspection_harness.uow)
     event_service = SecurityEventService(inspection_harness.uow)
+    announcement_service = AnnouncementService(AnnouncementHarness().uow)
     integrated_context = RequestContext(
         actor_id=resident_context.actor_id,
         community_id=resident_context.community_id,
@@ -47,6 +51,7 @@ def test_project_app_runs_both_module_entry_points(
         repair_service=service,
         inspection_task_service=task_service,
         security_event_service=event_service,
+        announcement_service=announcement_service,
     )
     app.dependency_overrides[get_request_context] = lambda: integrated_context
     app.dependency_overrides[get_task_service] = lambda: task_service

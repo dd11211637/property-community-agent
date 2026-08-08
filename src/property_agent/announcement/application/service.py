@@ -404,13 +404,15 @@ class AnnouncementService:
     ) -> list[AnnouncementAction]:
         if not context.has_any_role(*READ_ROLES):
             return []
-        actions = list(announcement.state_actions())
-        if not context.has_any_role(*CREATE_ROLES):
-            actions = []
-        if not context.has_any_role(*CREATE_ROLES):
-            return []
-        if not context.has_any_role(*READ_ROLES):
-            return []
+        actions: list[AnnouncementAction] = []
+        if announcement.status in {AnnouncementStatus.DRAFT, AnnouncementStatus.REJECTED}:
+            if context.has_any_role(*CREATE_ROLES):
+                actions.append(AnnouncementAction.EDIT)
+                actions.append(AnnouncementAction.SUBMIT_REVIEW)
+        if context.has_any_role(Role.MANAGER):
+            actions.extend(
+                action for action in announcement.state_actions() if action not in actions
+            )
         return actions
 
     @staticmethod

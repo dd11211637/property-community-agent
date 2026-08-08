@@ -1,5 +1,7 @@
 from fastapi import FastAPI
 
+from property_agent.announcement.adapters.api.router import router as announcement_router
+from property_agent.announcement.application.service import AnnouncementService
 from property_agent.billing.adapters.api.router import router as billing_router
 from property_agent.billing.application.service import BillingService
 from property_agent.inspection.adapters.api.router import event_router, task_router
@@ -18,6 +20,7 @@ def create_app(
     inspection_task_service: InspectionTaskService | None = None,
     security_event_service: SecurityEventService | None = None,
     billing_service: BillingService | None = None,
+    announcement_service: AnnouncementService | None = None,
 ) -> FastAPI:
     """Create the project-level API and attach configured business services."""
 
@@ -26,6 +29,7 @@ def create_app(
     app.state.task_service = inspection_task_service
     app.state.event_service = security_event_service
     app.state.billing_service = billing_service
+    app.state.announcement_service = announcement_service
 
     install_http_foundation(app)
 
@@ -37,6 +41,8 @@ def create_app(
     app.include_router(task_router)
     app.include_router(event_router)
     app.include_router(billing_router)
+    app.include_router(announcement_router)
     return app
+
 
 __all__ = ["create_app"]
