@@ -26,6 +26,19 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from property_agent.agent.application.conversation_service import ConversationService
+from property_agent.agent.application.recovery import AgentRecoveryService
+from property_agent.agent.application.runner import AgentSessionRunner
+from property_agent.agent.graph import build_agent_graph
+from property_agent.agent.infrastructure.checkpointer import SqlAlchemyCheckpointer
+from property_agent.agent.model_gateway import DeterministicModelGateway
+from property_agent.agent.state import GraphState
+from property_agent.agent.tools import (
+    build_announcement_tools,
+    build_billing_tools,
+    build_inspection_tools,
+    build_repair_tools,
+)
 from property_agent.announcement.application.service import AnnouncementService
 from property_agent.announcement.infrastructure.shared_ports import build_announcement_ports
 from property_agent.announcement.infrastructure.uow import SqlAlchemyAnnouncementUnitOfWork
@@ -37,6 +50,7 @@ from property_agent.inspection.application.service import (
 )
 from property_agent.inspection.infrastructure.shared_ports import build_inspection_ports
 from property_agent.inspection.infrastructure.uow import SqlAlchemyInspectionUnitOfWork
+from property_agent.platform.context import RequestContext
 from property_agent.platform.infrastructure.database import (
     dispose_engine,
     get_session_factory,
@@ -208,6 +222,7 @@ def build_production_container(app: FastAPI) -> None:
         app.state.consultation_service → production financial consultation service (PRD 6.3)
         app.state.task_service         → production inspection task service (PRD 6.4)
         app.state.event_service        → production security event service (PRD 6.4)
+        app.state.agent_runner         → production agent session runner (PRD 6.5)
     """
     global _services_configured
 
@@ -302,6 +317,72 @@ def build_inspection_services() -> tuple[InspectionTaskService, SecurityEventSer
     )
 
 
+def build_agent_runner(app: FastAPI) -> AgentSessionRunner:
+    """Assemble the production agent session runner (PRD §6.5).
+
+    Wires the compiled agent graph with the real business services already on
+    ``app.state`` (repair / announcement / billing / inspection), a persistent
+    ``SqlAlchemyCheckpointer`` so pending-confirmation flows survive restarts,
+    and a ``DeterministicModelGateway`` that routes by keywords — the agent works
+    without an LLM API key, satisfying PRD R-02 (model unavailable → degrade,
+    structured interfaces stay up).
+
+    Identity in tools comes from the trusted ``RequestContext`` activated by the
+    platform auth layer (``RequestContext.current()``); a GraphState fallback is
+    used only outside a request scope (background scans / tests).
+    """
+    session_factory = get_session_factory()
+    checkpointer = SqlAlchemyCheckpointer(session_factory)
+    gateway = DeterministicModelGateway()
+
+    def context_provider(state: GraphState) -> RequestContext:
+        current = RequestContext.current()
+        if current is not None:
+            return current
+        house = state.current_house_id
+        return RequestContext(
+            actor_id=state.actor_id,
+            community_id=state.community_id,
+            roles=frozenset({"RESIDENT"}),
+            request_id=f"agent-{state.conversation_id}"[:64],
+            current_house_id=house,
+            bound_house_ids=frozenset({house}) if house else frozenset(),
+        )
+
+    def session_provider(state: GraphState) -> Any:
+        return session_factory()
+
+    repair_tools = build_repair_tools(app.state.work_order_service, context_provider)
+    announcement_tools = build_announcement_tools(
+        app.state.announcement_service, context_provider
+    )
+    billing_tools = build_billing_tools(
+        app.state.billing_service,
+        app.state.consultation_service,
+        context_provider,
+        session_provider,
+    )
+    inspection_tools = build_inspection_tools(
+        app.state.task_service, app.state.event_service, context_provider
+    )
+
+    graph = build_agent_graph(
+        gateway=gateway,
+        repair_tools=repair_tools,
+        announcement_tools=announcement_tools,
+        billing_tools=billing_tools,
+        inspection_tools=inspection_tools,
+        checkpointer=checkpointer,
+    )
+    conversations = ConversationService(session_factory)
+    recovery = AgentRecoveryService(
+        conversations=conversations, checkpointer=checkpointer
+    )
+    return AgentSessionRunner(
+        graph=graph, conversations=conversations, recovery=recovery
+    )
+
+
 def _build_services(app: FastAPI) -> dict[str, Any]:
     """Create and return all application service instances.
 
@@ -342,5 +423,11 @@ def _build_services(app: FastAPI) -> dict[str, Any]:
     app.state.event_service = event_service
     services["task_service"] = task_service
     services["event_service"] = event_service
+
+    # 统一智能体运行时（PRD §6.5）：依赖上面全部业务 service，装配后对话接口
+    # 不再返回 503；模型用确定性关键词路由，无 LLM Key 也可跑通（R-02）。
+    agent_runner = build_agent_runner(app)
+    app.state.agent_runner = agent_runner
+    services["agent_runner"] = agent_runner
 
     return services
