@@ -1,0 +1,60 @@
+"""智能体策略与门控 — PRD §6.5.4 / §6.5.6 / §6.5.7.
+
+确定性规则层：意图枚举、各意图必填槽位、操作等级判定、以及"高风险转人工"门控。
+所有判定都是纯 Python 逻辑（不依赖模型），保证可测与可审计。
+"""
+
+from enum import StrEnum
+
+
+class Intent(StrEnum):
+    REPAIR = "REPAIR"
+    ANNOUNCEMENT = "ANNOUNCEMENT"
+    BILLING = "BILLING"
+    INSPECTION = "INSPECTION"
+    GENERAL_HELP = "GENERAL_HELP"
+    UNCERTAIN = "UNCERTAIN"
+
+
+class OperationLevel(StrEnum):
+    READ = "read"
+    WRITE_LOW_RISK = "write-low-risk"
+    WRITE_HIGH_RISK = "write-high-risk"
+
+
+# 各意图的必填槽位（确定性必填校验，PRD §6.5.5 必须用确定性逻辑）。
+SLOT_SPECS: dict[str, list[str]] = {
+    "REPAIR": ["category", "location", "description"],
+    "ANNOUNCEMENT": ["title", "body", "audience"],
+    "BILLING": ["query_type"],
+    "INSPECTION": ["action"],
+    "GENERAL_HELP": [],
+    "UNCERTAIN": [],
+}
+
+# 低风险写意图（需用户确认 + 幂等 + 审计后才调用业务写 Service）。
+WRITE_LOW_RISK_INTENTS = {"REPAIR", "BILLING", "INSPECTION"}
+
+# 高风险工具名：Agent 不执行，只转授权人工接管（PRD §6.5.7）。
+HIGH_RISK_TOOLS = {"announce_publish", "close_high_risk_event"}
+
+
+def required_slots(intent: str) -> list[str]:
+    return SLOT_SPECS.get(intent, [])
+
+
+def missing_slots_for(intent: str, slots: dict) -> list[str]:
+    return [name for name in required_slots(intent) if not slots.get(name)]
+
+
+def classify_operation_level(intent: str, tool_name: str | None = None) -> str:
+    """依据意图与具体工具名判定操作等级（PRD §6.5.7）。"""
+    if tool_name in HIGH_RISK_TOOLS:
+        return OperationLevel.WRITE_HIGH_RISK.value
+    if intent in WRITE_LOW_RISK_INTENTS:
+        return OperationLevel.WRITE_LOW_RISK.value
+    return OperationLevel.READ.value
+
+
+def is_high_risk(tool_name: str | None) -> bool:
+    return tool_name in HIGH_RISK_TOOLS
