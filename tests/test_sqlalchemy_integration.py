@@ -30,6 +30,7 @@ from tests.support import (
     FakeAttachments,
     FakeAudit,
     FakeConfirmation,
+    FakeHandover,
     FakeHouseAccess,
     FakeIdempotency,
     FakeMessages,
@@ -50,6 +51,7 @@ def make_shared_ports(state: FakeState, ids: Ids, *, fail_audit: bool = False):
             attachments=FakeAttachments(),
             audit=FakeAudit(state, fail=fail_audit),
             messages=FakeMessages(state),
+            handover=FakeHandover(state),
         )
 
     return factory

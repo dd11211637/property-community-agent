@@ -6,8 +6,6 @@ tokens bound to actor, action, parameter hash, and expiration time.
 """
 from __future__ import annotations
 
-import hashlib
-import json
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -15,6 +13,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from property_agent.platform.application.hashing import canonical_hash
 from property_agent.platform.domain.exceptions import InvalidConfirmationTokenException
 from property_agent.platform.infrastructure.orm_models import ConfirmationTokenModel
 
@@ -22,9 +21,13 @@ CONFIRMATION_TTL_MINUTES = 5
 
 
 def _hash_dict(data: dict[str, Any]) -> str:
-    """Compute a deterministic SHA-256 hash of a dictionary."""
-    canonical = json.dumps(data, sort_keys=True, ensure_ascii=False, default=str)
-    return hashlib.sha256(canonical.encode()).hexdigest()
+    """Deterministic SHA-256 of a parameter dictionary.
+
+    Delegates to the single canonical algorithm so that tokens generated via
+    ``POST /api/confirmations`` (raw JSON parameters) match the hash computed
+    by a business service from its parsed command object.
+    """
+    return canonical_hash(data)
 
 
 class ConfirmationService:

@@ -8,6 +8,7 @@ from property_agent.repair.application.ports import (
     AttachmentPort,
     AuditPort,
     ConfirmationPort,
+    HandoverPort,
     HouseAccessPort,
     IdempotencyPort,
     MessagePort,
@@ -25,6 +26,7 @@ class SharedPorts:
     attachments: AttachmentPort
     audit: AuditPort
     messages: MessagePort
+    handover: HandoverPort
 
 
 SharedPortFactory = Callable[[Session], SharedPorts]
@@ -50,6 +52,7 @@ class SqlAlchemyRepairUnitOfWork:
         self.attachments = ports.attachments
         self.audit = ports.audit
         self.messages = ports.messages
+        self.handover = ports.handover
         return self
 
     def __exit__(

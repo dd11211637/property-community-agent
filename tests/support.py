@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from property_agent.repair.application.commands import TimelineEntry, WorkOrderSearch
 from property_agent.repair.application.ports import (
@@ -26,6 +26,7 @@ class FakeState:
     )
     audits: list[dict[str, Any]] = field(default_factory=list)
     messages: list[dict[str, Any]] = field(default_factory=list)
+    handovers: list[dict[str, Any]] = field(default_factory=list)
 
 
 class FakeWorkOrderRepository:
@@ -182,14 +183,18 @@ class FakeHouseAccess:
 
 
 class FakeStaffDirectory:
-    def __init__(self, repair_workers: set[UUID]) -> None:
+    def __init__(self, repair_workers: set[UUID], duty_staff: set[UUID] | None = None) -> None:
         self.repair_workers = repair_workers
+        self.duty_staff = duty_staff if duty_staff is not None else set()
 
     def ensure_repair_worker(
         self, *, user_id: UUID, community_id: UUID, request_id: str
     ) -> None:
         if user_id not in self.repair_workers:
             raise forbidden()
+
+    def list_duty_staff(self, *, community_id: UUID, request_id: str) -> tuple[UUID, ...]:
+        return tuple(sorted(self.duty_staff, key=str))
 
 
 class FakeAttachments:
@@ -223,6 +228,16 @@ class FakeMessages:
         self.state.messages.append(event)
 
 
+class FakeHandover:
+    def __init__(self, state: FakeState) -> None:
+        self.state = state
+
+    def create(self, **ticket: Any) -> UUID:
+        ticket_id = uuid4()
+        self.state.handovers.append({"id": ticket_id, **ticket})
+        return ticket_id
+
+
 class FakeUnitOfWork:
     def __init__(self, harness: Harness) -> None:
         self.work_orders = FakeWorkOrderRepository(harness.state)
@@ -233,6 +248,7 @@ class FakeUnitOfWork:
         self.attachments = harness.attachments
         self.audit = harness.audit
         self.messages = harness.messages
+        self.handover = harness.handover
         self.committed = False
 
     def __enter__(self) -> FakeUnitOfWork:
@@ -250,14 +266,21 @@ class FakeUnitOfWork:
 
 
 class Harness:
-    def __init__(self, *, houses: set[UUID], repair_workers: set[UUID]) -> None:
+    def __init__(
+        self,
+        *,
+        houses: set[UUID],
+        repair_workers: set[UUID],
+        duty_staff: set[UUID] | None = None,
+    ) -> None:
         self.state = FakeState()
         self.confirmations = FakeConfirmation()
         self.house_access = FakeHouseAccess(houses)
-        self.staff_directory = FakeStaffDirectory(repair_workers)
+        self.staff_directory = FakeStaffDirectory(repair_workers, duty_staff)
         self.attachments = FakeAttachments()
         self.audit = FakeAudit(self.state)
         self.messages = FakeMessages(self.state)
+        self.handover = FakeHandover(self.state)
 
     def uow(self) -> FakeUnitOfWork:
         return FakeUnitOfWork(self)

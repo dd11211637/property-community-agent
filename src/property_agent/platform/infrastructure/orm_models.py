@@ -424,10 +424,30 @@ class HandoverTicketModel(Base):
     __table_args__ = (
         Index("ix_handover_tickets_status", "status"),
         Index("ix_handover_tickets_queue", "queue"),
+        Index("ix_handover_tickets_community", "community_id"),
+        Index("ix_handover_tickets_resource", "resource_type", "resource_id"),
     )
 
     id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), primary_key=True, default=uuid4, comment="接管单ID"
+    )
+    community_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), comment="所属社区(数据隔离)"
+    )
+    requester_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), comment="发起人ID"
+    )
+    resource_type: Mapped[str | None] = mapped_column(
+        String(32), comment="关联资源类型: WORK_ORDER / ANNOUNCEMENT / BILL / EVENT"
+    )
+    resource_id: Mapped[str | None] = mapped_column(
+        String(64), comment="关联资源ID"
+    )
+    request_id: Mapped[str | None] = mapped_column(
+        String(64), comment="发起请求ID(链路追踪)"
+    )
+    payload: Mapped[dict | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), comment="接管上下文(脱敏)"
     )
     source: Mapped[str] = mapped_column(
         String(32), nullable=False, comment="来源: REPAIR / ANNOUNCEMENT / BILLING / INSPECTION / AGENT"
@@ -460,4 +480,72 @@ class HandoverTicketModel(Base):
     )
     closed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), comment="关闭时间"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════
+# 11. Attachment — uploaded file registry (PRD 6.1 附件校验)
+# ═══════════════════════════════════════════════════════════════
+
+ATTACHMENT_MAX_SIZE_BYTES = 10 * 1024 * 1024
+ATTACHMENT_ALLOWED_CONTENT_TYPES = frozenset({
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/heic",
+    "video/mp4",
+    "application/pdf",
+})
+
+
+class AttachmentModel(Base):
+    """Uploaded file metadata.
+
+    Business modules never trust a client-supplied attachment ID directly:
+    ``AttachmentPort.ensure_usable`` verifies community scope, uploader
+    ownership, upload status, declared content type and size before an
+    attachment can be linked to a work order / event / announcement.
+    """
+
+    __tablename__ = "attachments"
+    __table_args__ = (
+        Index("ix_attachments_community_status", "community_id", "status"),
+        Index("ix_attachments_uploader", "uploader_id"),
+        CheckConstraint("size_bytes >= 0", name="ck_attachments_size_non_negative"),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid4, comment="附件ID"
+    )
+    community_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), nullable=False, comment="所属社区"
+    )
+    uploader_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), nullable=False, comment="上传人ID"
+    )
+    file_name: Mapped[str] = mapped_column(
+        String(256), nullable=False, comment="原始文件名"
+    )
+    content_type: Mapped[str] = mapped_column(
+        String(128), nullable=False, comment="MIME 类型"
+    )
+    size_bytes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, comment="文件大小(字节)"
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="UPLOADING",
+        comment="状态: UPLOADING / UPLOADED / FAILED / DELETED"
+    )
+    storage_key: Mapped[str] = mapped_column(
+        String(512), nullable=False, comment="对象存储键"
+    )
+    business_type: Mapped[str | None] = mapped_column(
+        String(32), comment="业务类型: REPAIR / INSPECTION / ANNOUNCEMENT"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=func.now(), comment="创建时间"
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=func.now(), onupdate=func.now(),
+        comment="更新时间"
     )

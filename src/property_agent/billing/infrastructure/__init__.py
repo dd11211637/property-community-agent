@@ -38,7 +38,7 @@ infrastructure/    基础设施层
 
   orm_models.py
     - SQLAlchemy ORM 模型 (6 张表)
-    - BuildingModel, RoomModel, UserModel, BillModel, PaymentModel, ReceiptModel
+    - BuildingModel, RoomModel, BillingUserModel, BillModel, PaymentModel, ReceiptModel
     - 每个模型标注完整的 DDL CREATE TABLE + 索引 + 外键 + CHECK 约束
     - 与 domain/entities.py 中的领域实体一一对应
     - 通过 repositories.py 中的映射函数转换为领域实体

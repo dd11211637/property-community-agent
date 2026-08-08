@@ -118,6 +118,12 @@ class StaffDirectoryPort(Protocol):
         self, *, user_id: UUID, community_id: UUID, request_id: str
     ) -> None: ...
 
+    def list_duty_staff(
+        self, *, community_id: UUID, request_id: str
+    ) -> tuple[UUID, ...]:
+        """Return on-duty staff who must be notified about high-risk reports."""
+        ...
+
 
 class AttachmentPort(Protocol):
     def ensure_usable(
@@ -158,6 +164,23 @@ class MessagePort(Protocol):
     ) -> None: ...
 
 
+class HandoverPort(Protocol):
+    def create(
+        self,
+        *,
+        community_id: UUID,
+        requester_id: UUID,
+        queue: str,
+        reason: str,
+        summary: str,
+        payload: dict[str, Any],
+        request_id: str,
+        created_at: datetime,
+    ) -> UUID:
+        """Create a manual-handover ticket and return its identifier."""
+        ...
+
+
 class RepairUnitOfWork(Protocol):
     work_orders: WorkOrderRepository
     idempotency: IdempotencyPort
@@ -167,6 +190,7 @@ class RepairUnitOfWork(Protocol):
     attachments: AttachmentPort
     audit: AuditPort
     messages: MessagePort
+    handover: HandoverPort
 
     def __enter__(self) -> Self: ...
 

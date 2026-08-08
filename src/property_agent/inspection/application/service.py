@@ -1,5 +1,3 @@
-import hashlib
-import json
 from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
@@ -38,6 +36,7 @@ from property_agent.inspection.domain.errors import (
     validation_error,
     version_conflict,
 )
+from property_agent.platform.application.hashing import canonical_hash
 
 # 角色分组
 TASK_READ_ROLES = (Role.MANAGER, Role.SECURITY_STAFF)
@@ -51,11 +50,6 @@ EVENT_CREATE_ROLES = (Role.RESIDENT, Role.CUSTOMER_SERVICE, Role.SECURITY_STAFF,
 EVENT_ASSIGN_ROLES = (Role.MANAGER,)
 EVENT_HANDLER_ROLES = (Role.SECURITY_STAFF,)
 EVENT_REVIEW_ROLES = (Role.MANAGER,)
-
-
-def canonical_hash(obj: Any) -> str:
-    payload = json.dumps(obj, sort_keys=True, default=str)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 class InspectionTaskService:

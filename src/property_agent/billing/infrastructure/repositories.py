@@ -12,7 +12,7 @@ from datetime import date as date_type
 from sqlalchemy.orm import Session, joinedload
 
 from .orm_models import (
-    BillModel, UserModel, PaymentModel, ReceiptModel,
+    BillModel, BillingUserModel, PaymentModel, ReceiptModel,
     BuildingModel, RoomModel,
 )
 from ..domain.entities import Bill, User, Payment, Receipt, Building, Room
@@ -46,7 +46,7 @@ def _bill_from_model(m: BillModel) -> Bill:
     )
 
 
-def _user_from_model(m: UserModel) -> User:
+def _user_from_model(m: BillingUserModel) -> User:
     return User(
         user_id=m.user_id,
         user_name=m.user_name,
@@ -320,12 +320,12 @@ class SqlAlchemyUserRepository(UserRepository):
              WHERE u.user_id = :user_id;
         """
         row = (
-            self._db.query(UserModel)
+            self._db.query(BillingUserModel)
             .options(
-                joinedload(UserModel.building_ref),
-                joinedload(UserModel.room_ref),
+                joinedload(BillingUserModel.building_ref),
+                joinedload(BillingUserModel.room_ref),
             )
-            .filter(UserModel.user_id == user_id)
+            .filter(BillingUserModel.user_id == user_id)
             .first()
         )
         if not row:
@@ -346,11 +346,11 @@ class SqlAlchemyUserRepository(UserRepository):
              LIMIT 1;
         """
         row = (
-            self._db.query(UserModel)
+            self._db.query(BillingUserModel)
             .filter(
-                UserModel.room_id == room_id,
-                UserModel.role == "owner",
-                UserModel.status == "ACTIVE",
+                BillingUserModel.room_id == room_id,
+                BillingUserModel.role == "owner",
+                BillingUserModel.status == "ACTIVE",
             )
             .first()
         )
@@ -508,8 +508,8 @@ class SqlAlchemyReceiptRepository(ReceiptRepository):
         row = (
             self._db.query(ReceiptModel)
             .options(
-                joinedload(ReceiptModel.user_ref).joinedload(UserModel.building_ref),
-                joinedload(ReceiptModel.user_ref).joinedload(UserModel.room_ref),
+                joinedload(ReceiptModel.user_ref).joinedload(BillingUserModel.building_ref),
+                joinedload(ReceiptModel.user_ref).joinedload(BillingUserModel.room_ref),
                 joinedload(ReceiptModel.payment_ref),
             )
             .filter(ReceiptModel.receipt_no == receipt_no)

@@ -27,6 +27,13 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from property_agent.config import settings
+from property_agent.platform.infrastructure.database import (
+    dispose_engine,
+    get_session_factory,
+)
+from property_agent.repair.application.service import WorkOrderService
+from property_agent.repair.infrastructure.shared_ports import build_shared_ports
+from property_agent.repair.infrastructure.uow import SqlAlchemyRepairUnitOfWork
 
 logger = logging.getLogger(__name__)
 
@@ -155,12 +162,8 @@ async def lifespan(app: FastAPI):
     get_async_session_factory()
     logger.info("Async database engine created")
 
-    # Initialize application services
-    container = ContainerState()
-    container.services = _build_services()
-    app.state.container = container
-    _services_configured = True
-    logger.info("Application services assembled: %s", list(container.services.keys()))
+    # Initialize application services and bind them to app.state
+    build_production_container(app)
 
     yield  # ── Application runs here ──
 
@@ -172,6 +175,7 @@ async def lifespan(app: FastAPI):
         await _async_engine.dispose()
     _async_engine = None
     _async_session_factory = None
+    dispose_engine()
 
     logger.info("Container shutdown complete")
 
@@ -187,13 +191,13 @@ def build_production_container(app: FastAPI) -> None:
     outside of the lifespan context manager.
 
     Sets:
-        app.state.container → ContainerState with initialized services
-        app.dependency_overrides → production service overrides
+        app.state.container          → ContainerState with initialized services
+        app.state.work_order_service → production repair service (PRD 6.1)
     """
     global _services_configured
 
     container = ContainerState()
-    container.services = _build_services()
+    container.services = _build_services(app)
     app.state.container = container
     _services_configured = True
 
@@ -204,19 +208,45 @@ def build_production_container(app: FastAPI) -> None:
 # Internal: service factory
 # ---------------------------------------------------------------------------
 
-def _build_services() -> dict[str, Any]:
+def build_work_order_service() -> WorkOrderService:
+    """Assemble the production repair service.
+
+    Wires the sync SQLAlchemy session factory into the repair Unit of Work and
+    the eight production shared ports (idempotency, confirmation, house access,
+    staff directory, attachment, audit, message outbox, handover). Each request
+    gets a fresh session; the repository and every port share it, so a single
+    ``commit()`` persists the work order, timeline, audit trail and outbox
+    message atomically.
+    """
+    session_factory = get_session_factory()
+
+    def unit_of_work_factory() -> SqlAlchemyRepairUnitOfWork:
+        return SqlAlchemyRepairUnitOfWork(session_factory, build_shared_ports)
+
+    return WorkOrderService(unit_of_work_factory)
+
+
+def _build_services(app: FastAPI) -> dict[str, Any]:
     """Create and return all application service instances.
 
     Services are created with their production dependencies (real database
     sessions, real JWT secret, etc.). No fake/mock backends are used.
+    Fakes live in ``tests/``; local demo adapters live in ``testing/``.
     """
     services: dict[str, Any] = {}
 
-    # Core services that are always available
+    # Session-scoped platform services are constructed per request from the
+    # `get_db` dependency, so here we only record that they are available.
     services["auth_service"] = "configured"
     services["audit_service"] = "configured"
     services["idempotency_service"] = "configured"
     services["confirmation_service"] = "configured"
     services["message_outbox_service"] = "configured"
+
+    # Business services are long-lived: they hold a Unit-of-Work factory
+    # rather than a session, so a single instance is safe to share.
+    work_order_service = build_work_order_service()
+    app.state.work_order_service = work_order_service
+    services["work_order_service"] = work_order_service
 
     return services

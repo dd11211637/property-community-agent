@@ -54,7 +54,7 @@ class BuildingModel(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now(), comment="更新时间")
 
     rooms: Mapped[List["RoomModel"]] = relationship("RoomModel", back_populates="building", lazy="selectin")
-    users: Mapped[List["UserModel"]] = relationship("UserModel", back_populates="building_ref", lazy="selectin")
+    users: Mapped[List["BillingUserModel"]] = relationship("BillingUserModel", back_populates="building_ref", lazy="selectin")
 
 
 # ── 2. 房号信息表 ────────────────────────────────────
@@ -96,7 +96,7 @@ class RoomModel(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now(), comment="更新时间")
 
     building: Mapped["BuildingModel"] = relationship("BuildingModel", back_populates="rooms")
-    users: Mapped[List["UserModel"]] = relationship("UserModel", back_populates="room_ref", lazy="selectin")
+    users: Mapped[List["BillingUserModel"]] = relationship("BillingUserModel", back_populates="room_ref", lazy="selectin")
     bills: Mapped[List["BillModel"]] = relationship("BillModel", back_populates="room_ref", lazy="selectin")
 
     __table_args__ = (
@@ -105,8 +105,16 @@ class RoomModel(Base):
 
 
 # ── 3. 用户表 ─────────────────────────────────────────
+#
+# NOTE: the class is named ``BillingUserModel`` (not ``UserModel``) on purpose.
+# All modules share one declarative ``Base``, and the platform already
+# registers ``UserModel`` for the canonical ``users`` table. Two classes with
+# the same name in one registry make every string-based relationship path
+# ambiguous ("Multiple classes found for path 'UserModel'"), which breaks
+# mapper configuration for the *entire* application. ``sys_users`` is the
+# billing module's legacy demo table and will be folded into ``users`` in 6.3.
 
-class UserModel(Base):
+class BillingUserModel(Base):
     """
     用户表
 
@@ -199,7 +207,7 @@ class BillModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), comment="创建时间")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now(), comment="更新时间")
 
-    user_ref: Mapped["UserModel"] = relationship("UserModel", back_populates="bills")
+    user_ref: Mapped["BillingUserModel"] = relationship("BillingUserModel", back_populates="bills")
     room_ref: Mapped["RoomModel"] = relationship("RoomModel", back_populates="bills")
     payments: Mapped[List["PaymentModel"]] = relationship("PaymentModel", back_populates="bill_ref", lazy="selectin")
     receipts: Mapped[List["ReceiptModel"]] = relationship("ReceiptModel", back_populates="bill_ref", lazy="selectin")
@@ -255,7 +263,7 @@ class PaymentModel(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now(), comment="更新时间")
 
     bill_ref: Mapped["BillModel"] = relationship("BillModel", back_populates="payments")
-    user_ref: Mapped["UserModel"] = relationship("UserModel", back_populates="payments")
+    user_ref: Mapped["BillingUserModel"] = relationship("BillingUserModel", back_populates="payments")
     receipt: Mapped[Optional["ReceiptModel"]] = relationship(
         "ReceiptModel", back_populates="payment_ref", uselist=False
     )
@@ -312,7 +320,7 @@ class ReceiptModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), comment="创建时间")
 
     bill_ref: Mapped["BillModel"] = relationship("BillModel", back_populates="receipts")
-    user_ref: Mapped["UserModel"] = relationship("UserModel", back_populates="receipts")
+    user_ref: Mapped["BillingUserModel"] = relationship("BillingUserModel", back_populates="receipts")
     payment_ref: Mapped["PaymentModel"] = relationship("PaymentModel", back_populates="receipt")
 
     __table_args__ = (

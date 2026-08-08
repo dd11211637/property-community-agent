@@ -19,8 +19,6 @@ from __future__ import annotations
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
-from fastapi.encoders import jsonable_encoder
-from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from property_agent.billing.adapters.api.routes import router as billing_router
@@ -31,6 +29,10 @@ from property_agent.inspection.adapters.api.router import (
     task_router as inspection_task_router,
 )
 from property_agent.inspection.domain.errors import BusinessError as InspectionBusinessError
+from property_agent.platform.adapters.api.envelope import (
+    error_envelope,
+    register_common_error_handlers,
+)
 from property_agent.platform.adapters.api.health_routes import router as health_router
 from property_agent.platform.adapters.api.routes import router as platform_router
 from property_agent.platform.container import lifespan
@@ -78,55 +80,28 @@ def create_app() -> FastAPI:
     # ── Error Handlers ─────────────────────────────────────────
     @app.exception_handler(RepairBusinessError)
     async def repair_error_handler(request: Request, exc: RepairBusinessError) -> JSONResponse:
-        return JSONResponse(
+        return error_envelope(
+            request,
             status_code=exc.status_code,
-            content={
-                "success": False,
-                "data": None,
-                "error": {
-                    "code": exc.code,
-                    "message": exc.message,
-                    "details": exc.details,
-                },
-                "request_id": getattr(request.state, "request_id", ""),
-            },
+            code=exc.code,
+            message=exc.message,
+            details=exc.details,
         )
 
     @app.exception_handler(InspectionBusinessError)
     async def inspection_error_handler(
         request: Request, exc: InspectionBusinessError
     ) -> JSONResponse:
-        return JSONResponse(
+        return error_envelope(
+            request,
             status_code=exc.status_code,
-            content={
-                "success": False,
-                "data": None,
-                "error": {
-                    "code": exc.code,
-                    "message": exc.message,
-                    "details": exc.details,
-                },
-                "request_id": getattr(request.state, "request_id", ""),
-            },
+            code=exc.code,
+            message=exc.message,
+            details=exc.details,
         )
 
-    @app.exception_handler(RequestValidationError)
-    async def validation_error_handler(
-        request: Request, exc: RequestValidationError
-    ) -> JSONResponse:
-        return JSONResponse(
-            status_code=422,
-            content={
-                "success": False,
-                "data": None,
-                "error": {
-                    "code": "VALIDATION_ERROR",
-                    "message": "The request payload is invalid.",
-                    "details": {"errors": jsonable_encoder(exc.errors())},
-                },
-                "request_id": getattr(request.state, "request_id", ""),
-            },
-        )
+    # PlatformError / HTTPException / RequestValidationError
+    register_common_error_handlers(app)
 
     # ── Mount Routers ──────────────────────────────────────────
     # Health probes (PRD 5.4) — always mounted first

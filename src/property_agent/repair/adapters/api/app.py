@@ -1,10 +1,19 @@
+"""
+Standalone repair FastAPI application.
+
+Used by tests and local single-module runs. The unified production entry point
+is ``property_agent.main``; both share the same error envelope and handlers so
+responses are byte-compatible.
+"""
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
-from fastapi.encoders import jsonable_encoder
-from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from property_agent.platform.adapters.api.envelope import (
+    error_envelope,
+    register_common_error_handlers,
+)
 from property_agent.repair.adapters.api.router import router
 from property_agent.repair.application.service import WorkOrderService
 from property_agent.repair.domain.errors import BusinessError
@@ -34,37 +43,15 @@ def create_app(service: WorkOrderService | None = None) -> FastAPI:
 
     @app.exception_handler(BusinessError)
     async def business_error_handler(request: Request, exc: BusinessError) -> JSONResponse:
-        return JSONResponse(
+        return error_envelope(
+            request,
             status_code=exc.status_code,
-            content={
-                "success": False,
-                "data": None,
-                "error": {
-                    "code": exc.code,
-                    "message": exc.message,
-                    "details": exc.details,
-                },
-                "request_id": getattr(request.state, "request_id", ""),
-            },
+            code=exc.code,
+            message=exc.message,
+            details=exc.details,
         )
 
-    @app.exception_handler(RequestValidationError)
-    async def validation_error_handler(
-        request: Request, exc: RequestValidationError
-    ) -> JSONResponse:
-        return JSONResponse(
-            status_code=422,
-            content={
-                "success": False,
-                "data": None,
-                "error": {
-                    "code": "VALIDATION_ERROR",
-                    "message": "The request payload is invalid.",
-                    "details": {"errors": jsonable_encoder(exc.errors())},
-                },
-                "request_id": getattr(request.state, "request_id", ""),
-            },
-        )
+    register_common_error_handlers(app)
 
     app.include_router(router)
     return app
