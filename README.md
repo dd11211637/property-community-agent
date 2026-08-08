@@ -24,7 +24,7 @@ AI 负责意图识别、信息补全、只读查询、内容生成和操作建�
 | 公共身份认证、基础数据和生产服务装配 | 待实现 |
 | 费用只读查询与规则解释 | 已重构并接入统一应用 |
 | 财务咨询状态机 | 待实现 |
-| 公告后端 | 待开发 |
+| 公告后端 | P0 已实现，等待生产 Port 装配 |
 | Web 前端 | 已建立目录，待初始化 |
 | Agent 编排 | 待开发 |
 | 演示部署环境 | 待开发 |
@@ -79,10 +79,16 @@ $env:DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost/property_a
 .\.venv\Scripts\alembic.exe upgrade head
 ```
 
-项目级入口为 `property_agent.main:create_app`，当前统一注册报修、巡检和安防 Router。各业务
+项目级入口为 `property_agent.main:create_app`，当前统一注册报修、公告、巡检和安防 Router。各业务
 Service 仍须由生产组合根装配数据库、身份、权限、确认、幂等、审计和消息 Port；未装配时
 业务接口会明确返回 `503 ADAPTER_NOT_CONFIGURED`，不会回退到 fake backend。费用模块只公开
 查询、详情和规则解释，不提供支付、退款、减免或账单状态修改入口。
+
+公告 P0 使用 `/api/announcements`：客服或管理员创建/编辑草稿并提交审核，管理员批准后必须
+携带绑定操作人、参数哈希和有效期的确认令牌才能发布。受众由服务端在当前小区内解析并在提交
+审核及发布时冻结快照；发布写入共享站内消息 Outbox，投递状态与公告状态分离。生产组合根须
+装配公告的 UoW、受众、确认、幂等、审计和消息 Port；Agent 只暴露草稿、查询、预览和提交审核
+工具。详细契约及人工验收见 [`docs/announcement_module.md`](docs/announcement_module.md)。
 
 验证统一应用入口：
 
@@ -97,6 +103,7 @@ Service 仍须由生产组合根装配数据库、身份、权限、确认、幂
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe -m ruff check src tests alembic
+.\.venv\Scripts\python.exe -m compileall -q src tests
 ```
 
 ## 协作约定

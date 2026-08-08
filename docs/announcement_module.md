@@ -57,3 +57,13 @@ AI 只能经草稿建议契约提供可追溯的草稿内容；没有直接发�
 2. 确认 Outbox 只含冻结受众、公告含版本/审核/受众快照/审计记录；投递失败显示为 `FAILED` 而公告仍为 `PUBLISHED`。
 3. 用客服身份审批或发布、跨小区筛选、使用失效确认令牌、空受众和重复幂等键均须被拒绝并留下审计。
 4. 在专用 PostgreSQL 测试数据库执行 `alembic upgrade head` 与 `pytest -m postgres` 验证迁移和租户隔离。
+
+## 启动与验证
+
+运行 `property_agent.main:create_app` 后，公告 Router 已存在，但未装配生产服务时会明确返回
+`503 ADAPTER_NOT_CONFIGURED`。生产组合根应使用 `SqlAlchemyAnnouncementUnitOfWork` 配置真实的
+身份、确认、幂等、受众、审计及共享消息 Outbox Port；测试 Fake 仅位于 `tests/announcement`。
+
+执行 `python -m pytest`、`python -m ruff check src tests alembic`、`python -m compileall -q src tests`。
+需要迁移验证时设置独立的 `TEST_POSTGRES_URL`，执行 `alembic upgrade head` 和
+`pytest -m postgres`；不得针对开发数据库执行重置操作。

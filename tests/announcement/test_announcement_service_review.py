@@ -54,6 +54,7 @@ def test_review_flow_freezes_audience_and_requires_manager() -> None:
             idempotency_key="forbidden",
         )
     assert exc.value.code == "FORBIDDEN"
+    assert harness.state.audits[-1]["action"] == "UNAUTHORIZED_ANNOUNCEMENT_ACTION"
 
 
 def test_empty_audience_rejection_reason_and_version_conflict() -> None:

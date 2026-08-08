@@ -33,6 +33,7 @@ from property_agent.announcement.domain.enums import (
 from property_agent.announcement.domain.errors import (
     confirmation_required,
     empty_audience,
+    forbidden,
     idempotency_conflict,
     not_found,
     version_conflict,
@@ -196,7 +197,7 @@ class AnnouncementService:
         *,
         idempotency_key: str,
     ) -> Announcement:
-        require_role(context, Role.MANAGER)
+        self._require_manager(context, announcement_id, command.action.value)
         if command.action not in {AnnouncementAction.APPROVE, AnnouncementAction.REJECT}:
             from property_agent.announcement.domain.errors import validation_error
 
@@ -213,7 +214,7 @@ class AnnouncementService:
         *,
         idempotency_key: str,
     ) -> Announcement:
-        require_role(context, Role.MANAGER)
+        self._require_manager(context, announcement_id, command.action.value)
         require_idempotency_key(idempotency_key)
         if command.action != AnnouncementAction.PUBLISH:
             from property_agent.announcement.domain.errors import validation_error
@@ -291,7 +292,7 @@ class AnnouncementService:
         *,
         idempotency_key: str,
     ) -> Announcement:
-        require_role(context, Role.MANAGER)
+        self._require_manager(context, announcement_id, command.action.value)
         require_idempotency_key(idempotency_key)
         if command.action != AnnouncementAction.WITHDRAW:
             from property_agent.announcement.domain.errors import validation_error
@@ -436,6 +437,24 @@ class AnnouncementService:
         if announcement is None:
             raise not_found()
         return announcement
+
+    def _require_manager(self, context: RequestContext, announcement_id: UUID, action: str) -> None:
+        if context.has_any_role(Role.MANAGER):
+            return
+        now = datetime.now(UTC)
+        with self._unit_of_work_factory() as uow:
+            uow.audit.add(
+                community_id=context.community_id,
+                actor_id=context.actor_id,
+                action="UNAUTHORIZED_ANNOUNCEMENT_ACTION",
+                resource_type="ANNOUNCEMENT",
+                resource_id=announcement_id,
+                parameter_summary={"attempted_action": action},
+                request_id=context.request_id,
+                created_at=now,
+            )
+            uow.commit()
+        raise forbidden()
 
     def _replay(
         self,
