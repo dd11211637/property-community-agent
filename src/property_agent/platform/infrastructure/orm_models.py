@@ -143,6 +143,9 @@ class HouseModel(Base):
     building: Mapped[str] = mapped_column(String(32), nullable=False, comment="楼栋")
     unit: Mapped[str] = mapped_column(String(16), nullable=False, comment="单元")
     room_no: Mapped[str] = mapped_column(String(16), nullable=False, comment="房号")
+    house_type: Mapped[str | None] = mapped_column(
+        String(32), comment="房屋类型: RESIDENTIAL / SHOP / OFFICE / PARKING (公告受众维度)"
+    )
     area: Mapped[float | None] = mapped_column(comment="建筑面积(m²)")
     status: Mapped[str] = mapped_column(
         String(16), nullable=False, default="ACTIVE",

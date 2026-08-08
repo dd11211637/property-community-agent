@@ -26,6 +26,9 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from property_agent.announcement.application.service import AnnouncementService
+from property_agent.announcement.infrastructure.shared_ports import build_announcement_ports
+from property_agent.announcement.infrastructure.uow import SqlAlchemyAnnouncementUnitOfWork
 from property_agent.config import settings
 from property_agent.platform.infrastructure.database import (
     dispose_engine,
@@ -191,8 +194,9 @@ def build_production_container(app: FastAPI) -> None:
     outside of the lifespan context manager.
 
     Sets:
-        app.state.container          → ContainerState with initialized services
-        app.state.work_order_service → production repair service (PRD 6.1)
+        app.state.container            → ContainerState with initialized services
+        app.state.work_order_service   → production repair service (PRD 6.1)
+        app.state.announcement_service → production announcement service (PRD 6.2)
     """
     global _services_configured
 
@@ -226,6 +230,24 @@ def build_work_order_service() -> WorkOrderService:
     return WorkOrderService(unit_of_work_factory)
 
 
+def build_announcement_service() -> AnnouncementService:
+    """Assemble the production announcement service (PRD 6.2).
+
+    Wires the sync SQLAlchemy session factory into the announcement Unit of
+    Work and the five production shared ports (idempotency, confirmation,
+    audience resolution, audit, message outbox). The repository and every port
+    share one session per request, so publishing an announcement writes the
+    state transition, the frozen audience snapshot, the audit row and all
+    station messages in a single transaction.
+    """
+    session_factory = get_session_factory()
+
+    def unit_of_work_factory() -> SqlAlchemyAnnouncementUnitOfWork:
+        return SqlAlchemyAnnouncementUnitOfWork(session_factory, build_announcement_ports)
+
+    return AnnouncementService(unit_of_work_factory)
+
+
 def _build_services(app: FastAPI) -> dict[str, Any]:
     """Create and return all application service instances.
 
@@ -248,5 +270,9 @@ def _build_services(app: FastAPI) -> dict[str, Any]:
     work_order_service = build_work_order_service()
     app.state.work_order_service = work_order_service
     services["work_order_service"] = work_order_service
+
+    announcement_service = build_announcement_service()
+    app.state.announcement_service = announcement_service
+    services["announcement_service"] = announcement_service
 
     return services

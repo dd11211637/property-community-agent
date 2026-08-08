@@ -10,6 +10,7 @@
 挂载模块:
   - platform  (auth, health, shared services)
   - repair    (报修)
+  - announcement (公告)
   - inspection (巡检与安防)
   - billing   (费用查询与智能缴费)
 ────────────────────────────────────────────────────────
@@ -21,6 +22,7 @@ from uuid import uuid4
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from property_agent.announcement.adapters.api.router import router as announcement_router
 from property_agent.billing.adapters.api.routes import router as billing_router
 from property_agent.inspection.adapters.api.router import (
     event_router as inspection_event_router,
@@ -36,6 +38,8 @@ from property_agent.platform.adapters.api.envelope import (
 from property_agent.platform.adapters.api.health_routes import router as health_router
 from property_agent.platform.adapters.api.routes import router as platform_router
 from property_agent.platform.container import lifespan
+from property_agent.platform.dependencies import bind_request_context_to_jwt
+from property_agent.platform.errors import BusinessError as PlatformBusinessError
 from property_agent.repair.adapters.api.router import router as repair_router
 from property_agent.repair.domain.errors import BusinessError as RepairBusinessError
 
@@ -100,6 +104,19 @@ def create_app() -> FastAPI:
             details=exc.details,
         )
 
+    @app.exception_handler(PlatformBusinessError)
+    async def business_error_handler(
+        request: Request, exc: PlatformBusinessError
+    ) -> JSONResponse:
+        # Raised by the announcement module and the shared validation helpers.
+        return error_envelope(
+            request,
+            status_code=exc.status_code,
+            code=exc.code,
+            message=exc.message,
+            details=exc.details,
+        )
+
     # PlatformError / HTTPException / RequestValidationError
     register_common_error_handlers(app)
 
@@ -113,9 +130,16 @@ def create_app() -> FastAPI:
     # Business modules — mounted unconditionally; endpoints return 503
     # if services are not yet injected (per PRD: "未装配返回 503 ADAPTER_NOT_CONFIGURED")
     app.include_router(repair_router)
+    app.include_router(announcement_router)
     app.include_router(inspection_task_router)
     app.include_router(inspection_event_router)
     app.include_router(billing_router)
+
+    # The announcement router depends on the auth *seam*
+    # (``platform.dependencies.get_request_context``) so it can also run as a
+    # standalone app. In the unified application the seam is bound to the real
+    # JWT dependency — no endpoint is reachable without a valid token.
+    bind_request_context_to_jwt(app)
 
     return app
 
