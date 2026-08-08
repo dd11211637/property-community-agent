@@ -38,6 +38,28 @@ WRITE_LOW_RISK_INTENTS = {"REPAIR", "BILLING", "INSPECTION"}
 # 高风险工具名：Agent 不执行，只转授权人工接管（PRD §6.5.7）。
 HIGH_RISK_TOOLS = {"announce_publish", "close_high_risk_event"}
 
+# 工具名 -> 操作等级（确定性门控，PRD §6.5.7）。优先于意图判定，避免把
+# "查询类"工具误判为低风险写。
+TOOL_LEVELS: dict[str, str] = {
+    # 报修
+    "repair_list": OperationLevel.READ.value,
+    "repair_get": OperationLevel.READ.value,
+    "repair_create": OperationLevel.WRITE_LOW_RISK.value,
+    # 公告
+    "announcement_list": OperationLevel.READ.value,
+    "announcement_get": OperationLevel.READ.value,
+    "announce_publish": OperationLevel.WRITE_HIGH_RISK.value,
+    # 账单
+    "billing_query": OperationLevel.READ.value,
+    "billing_consult": OperationLevel.WRITE_LOW_RISK.value,
+    # 巡检
+    "inspection_list": OperationLevel.READ.value,
+    "inspection_create": OperationLevel.WRITE_LOW_RISK.value,
+    "inspection_submit_record": OperationLevel.WRITE_LOW_RISK.value,
+    "inspection_ai_suggest": OperationLevel.WRITE_LOW_RISK.value,
+    "close_high_risk_event": OperationLevel.WRITE_HIGH_RISK.value,
+}
+
 
 def required_slots(intent: str) -> list[str]:
     return SLOT_SPECS.get(intent, [])
@@ -48,7 +70,9 @@ def missing_slots_for(intent: str, slots: dict) -> list[str]:
 
 
 def classify_operation_level(intent: str, tool_name: str | None = None) -> str:
-    """依据意图与具体工具名判定操作等级（PRD §6.5.7）。"""
+    """依据具体工具名（优先）与意图判定操作等级（PRD §6.5.7）。"""
+    if tool_name in TOOL_LEVELS:
+        return TOOL_LEVELS[tool_name]
     if tool_name in HIGH_RISK_TOOLS:
         return OperationLevel.WRITE_HIGH_RISK.value
     if intent in WRITE_LOW_RISK_INTENTS:
@@ -57,4 +81,7 @@ def classify_operation_level(intent: str, tool_name: str | None = None) -> str:
 
 
 def is_high_risk(tool_name: str | None) -> bool:
-    return tool_name in HIGH_RISK_TOOLS
+    return tool_name in HIGH_RISK_TOOLS or (
+        tool_name in TOOL_LEVELS
+        and TOOL_LEVELS[tool_name] == OperationLevel.WRITE_HIGH_RISK.value
+    )
