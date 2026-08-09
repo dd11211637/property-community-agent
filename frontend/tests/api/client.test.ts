@@ -19,6 +19,11 @@ describe("apiRequest", () => {
     await expect(apiRequest("/api/example")).rejects.toMatchObject({ status: 409, code: "VERSION_CONFLICT", requestId: "req-409" } satisfies Partial<ApiError>);
   });
 
+  it("accepts successful platform responses that do not use an envelope", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ status: "READY", components: { database: "UP" } }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    await expect(apiRequest("/ready")).resolves.toEqual({ status: "READY", components: { database: "UP" } });
+  });
+
   it("maps connection failures without fabricating data", async () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("offline"));
     await expect(apiRequest("/api/example")).rejects.toMatchObject({ code: "NETWORK_ERROR", status: 0 });

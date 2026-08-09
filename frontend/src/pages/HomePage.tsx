@@ -26,7 +26,7 @@ export function HomePage() {
     { role: "assistant", text: "你好，我是社区服务助手。你可以查询账单、发起报修，或了解社区服务。" },
   ]);
   const [pending, setPending] = useState(false);
-  const [action, setAction] = useState<AgentReply["pending_action"]>();
+  const [action, setAction] = useState<AgentReply["pending_confirmation"]>();
   const send = async (event: FormEvent) => {
     event.preventDefault();
     const text = input.trim();
