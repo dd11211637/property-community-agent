@@ -4,6 +4,7 @@ Application-layer idempotency service — PF-04.
 Provides IdempotencyService with request hash computation, idempotency record
 lookup, snapshot storage, and conflict detection.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -65,12 +66,14 @@ class IdempotencyService:
 
         if record is None:
             # New request — record the hash, proceed
-            self._session.add(IdempotencyRecordModel(
-                actor_id=actor_id,
-                operation=operation,
-                key=key,
-                request_hash=request_hash,
-            ))
+            self._session.add(
+                IdempotencyRecordModel(
+                    actor_id=actor_id,
+                    operation=operation,
+                    key=key,
+                    request_hash=request_hash,
+                )
+            )
             return None
 
         if record.request_hash != request_hash:

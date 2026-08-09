@@ -34,9 +34,7 @@ def _facts(tool_result: dict[str, Any] | None) -> dict[str, Any] | None:
 def turn_data(turn: AgentTurn) -> dict[str, Any]:
     state = turn.state
     interrupt = turn.interrupt if isinstance(turn.interrupt, dict) else None
-    pending = _pending_card(
-        interrupt.get("action") if interrupt else None
-    )
+    pending = _pending_card(interrupt.get("action") if interrupt else None)
     return {
         "conversation_id": state.conversation_id,
         "status": turn.conversation.status,

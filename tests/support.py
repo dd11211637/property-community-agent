@@ -21,9 +21,7 @@ class FakeState:
     status_logs: list[TimelineEntry] = field(default_factory=list)
     process_records: list[TimelineEntry] = field(default_factory=list)
     reviews: dict[UUID, dict[str, Any]] = field(default_factory=dict)
-    idempotency: dict[tuple[UUID, str, str], IdempotencyRecord] = field(
-        default_factory=dict
-    )
+    idempotency: dict[tuple[UUID, str, str], IdempotencyRecord] = field(default_factory=dict)
     audits: list[dict[str, Any]] = field(default_factory=list)
     messages: list[dict[str, Any]] = field(default_factory=list)
     handovers: list[dict[str, Any]] = field(default_factory=list)
@@ -46,11 +44,7 @@ class FakeWorkOrderRepository:
     def list(
         self, community_id: UUID, search: WorkOrderSearch, context: RequestContext
     ) -> list[WorkOrder]:
-        results = [
-            item
-            for item in self.state.orders.values()
-            if item.community_id == community_id
-        ]
+        results = [item for item in self.state.orders.values() if item.community_id == community_id]
         if context.has_any_role(Role.RESIDENT) and not context.has_any_role(
             Role.CUSTOMER_SERVICE, Role.MANAGER
         ):
@@ -187,9 +181,7 @@ class FakeStaffDirectory:
         self.repair_workers = repair_workers
         self.duty_staff = duty_staff if duty_staff is not None else set()
 
-    def ensure_repair_worker(
-        self, *, user_id: UUID, community_id: UUID, request_id: str
-    ) -> None:
+    def ensure_repair_worker(self, *, user_id: UUID, community_id: UUID, request_id: str) -> None:
         if user_id not in self.repair_workers:
             raise forbidden()
 

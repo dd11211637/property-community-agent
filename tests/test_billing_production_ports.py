@@ -20,10 +20,11 @@ Coverage:
   * owner_only / staff_only 越权拦截
   * R-02：账单源不可用时仍保存咨询草稿
 """
+
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
-from uuid import UUID, uuid4
+from datetime import date, datetime
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine
@@ -35,12 +36,15 @@ from property_agent.billing.application.service import (
     ConsultationService,
 )
 from property_agent.billing.domain.entities import ConsultationStatus
-from property_agent.billing.errors import BillingError, ConsultationError
+from property_agent.billing.errors import (
+    BillingError,
+    BillingSourceUnavailable,
+    ConsultationError,
+)
 from property_agent.billing.infrastructure.orm_models import (
     BillingRuleModel,
     BillModel,
 )
-from property_agent.billing.infrastructure.source_port import UnavailableBillingSourcePort
 from property_agent.platform.context import RequestContext
 from property_agent.platform.infrastructure.orm_models import (
     AuditLogModel,
@@ -49,6 +53,16 @@ from property_agent.platform.infrastructure.orm_models import (
 )
 
 COMMUNITY_CODE = "阳光花园"
+
+
+class UnavailableBillingSourcePort:
+    """Test fake for the R-02 source-outage path."""
+
+    def list_bills(self, **_: object):
+        raise BillingSourceUnavailable("账单数据源暂时不可用")
+
+    def get_bill(self, *, bill_id: str):
+        raise BillingSourceUnavailable("账单数据源暂时不可用")
 
 
 @pytest.fixture
@@ -97,31 +111,65 @@ def seed(sessions: sessionmaker[Session]):
         bdb.add_all(
             [
                 BillModel(
-                    bill_id="B001", user_id="u1", room_id="r1", bill_period="2026-08",
-                    property_fee=1200.0, utility_fee=0, parking_fee=0, late_fee=0,
-                    total_amount=1200.0, due_date=date(2026, 8, 31),
-                    status="UNPAID", community_id=COMMUNITY_CODE,
-                    house_id=str(current_house), version=1, fee_type="PROPERTY",
+                    bill_id="B001",
+                    user_id="u1",
+                    room_id="r1",
+                    bill_period="2026-08",
+                    property_fee=1200.0,
+                    utility_fee=0,
+                    parking_fee=0,
+                    late_fee=0,
+                    total_amount=1200.0,
+                    due_date=date(2026, 8, 31),
+                    status="UNPAID",
+                    community_id=COMMUNITY_CODE,
+                    house_id=str(current_house),
+                    version=1,
+                    fee_type="PROPERTY",
                 ),
                 BillModel(
-                    bill_id="B002", user_id="u2", room_id="r2", bill_period="2026-08",
-                    property_fee=0, utility_fee=300.0, parking_fee=0, late_fee=0,
-                    total_amount=300.0, due_date=date(2026, 8, 31),
-                    status="UNPAID", community_id=COMMUNITY_CODE,
-                    house_id=str(another_house), version=1, fee_type="UTILITY",
+                    bill_id="B002",
+                    user_id="u2",
+                    room_id="r2",
+                    bill_period="2026-08",
+                    property_fee=0,
+                    utility_fee=300.0,
+                    parking_fee=0,
+                    late_fee=0,
+                    total_amount=300.0,
+                    due_date=date(2026, 8, 31),
+                    status="UNPAID",
+                    community_id=COMMUNITY_CODE,
+                    house_id=str(another_house),
+                    version=1,
+                    fee_type="UTILITY",
                 ),
                 BillModel(
-                    bill_id="B003", user_id="u3", room_id="r3", bill_period="2026-08",
-                    property_fee=900.0, utility_fee=0, parking_fee=0, late_fee=0,
-                    total_amount=900.0, due_date=date(2026, 8, 31),
-                    status="UNPAID", community_id="其他社区",
-                    house_id=str(other_house), version=1, fee_type="PROPERTY",
+                    bill_id="B003",
+                    user_id="u3",
+                    room_id="r3",
+                    bill_period="2026-08",
+                    property_fee=900.0,
+                    utility_fee=0,
+                    parking_fee=0,
+                    late_fee=0,
+                    total_amount=900.0,
+                    due_date=date(2026, 8, 31),
+                    status="UNPAID",
+                    community_id="其他社区",
+                    house_id=str(other_house),
+                    version=1,
+                    fee_type="PROPERTY",
                 ),
                 BillingRuleModel(
-                    id="R001", community_id=COMMUNITY_CODE, fee_type="PROPERTY",
-                    version="2026Q3", name="住宅物业费口径",
+                    id="R001",
+                    community_id=COMMUNITY_CODE,
+                    fee_type="PROPERTY",
+                    version="2026Q3",
+                    name="住宅物业费口径",
                     parameters={"unit_price": 2.5},
-                    valid_from=datetime(2026, 1, 1), valid_until=None,
+                    valid_from=datetime(2026, 1, 1),
+                    valid_until=None,
                 ),
             ]
         )
@@ -151,6 +199,7 @@ def _ctx(seed, actor_field, *, with_house=True, roles=("RESIDENT",)):
 
 
 # ── 账单查询 ─────────────────────────────────────────────
+
 
 def test_list_bills_requires_current_house(sessions, seed):
     ctx = _ctx(seed, "resident", with_house=False)
@@ -205,16 +254,23 @@ def test_query_is_audited(sessions, seed):
 
 # ── 财务咨询单 ───────────────────────────────────────────
 
+
 def test_create_consultation_idempotent(sessions, seed):
     resident_ctx = _ctx(seed, "resident")
     service = ConsultationService()
     with sessions() as db:
         t1 = service.create_draft(
-            resident_ctx, db, subject="物业费怎么算", description="详询",
+            resident_ctx,
+            db,
+            subject="物业费怎么算",
+            description="详询",
             idempotency_key="idem-1",
         )
         t2 = service.create_draft(
-            resident_ctx, db, subject="物业费怎么算", description="详询",
+            resident_ctx,
+            db,
+            subject="物业费怎么算",
+            description="详询",
             idempotency_key="idem-1",
         )
     assert t1.id == t2.id
@@ -227,7 +283,11 @@ def test_consultation_lifecycle(sessions, seed):
     service = ConsultationService()
     with sessions() as db:
         ticket = service.create_draft(
-            resident_ctx, db, subject="s", description="d", idempotency_key="idem-2",
+            resident_ctx,
+            db,
+            subject="s",
+            description="d",
+            idempotency_key="idem-2",
         )
         ticket = service.submit(resident_ctx, db, ticket.id)
         assert ticket.status == ConsultationStatus.SUBMITTED
@@ -245,7 +305,9 @@ def test_consultation_appeal(sessions, seed):
     staff_ctx = _ctx(seed, "staff", roles=("FINANCE",))
     service = ConsultationService()
     with sessions() as db:
-        ticket = service.create_draft(resident_ctx, db, subject="s", description="d", idempotency_key="idem-3")
+        ticket = service.create_draft(
+            resident_ctx, db, subject="s", description="d", idempotency_key="idem-3"
+        )
         ticket = service.submit(resident_ctx, db, ticket.id)
         ticket = service.start_processing(staff_ctx, db, ticket.id)
         ticket = service.answer(staff_ctx, db, ticket.id, "a")
@@ -260,7 +322,9 @@ def test_consultation_owner_only(sessions, seed):
     other_ctx = _ctx(seed, "other_resident")
     service = ConsultationService()
     with sessions() as db:
-        ticket = service.create_draft(resident_ctx, db, subject="s", description="d", idempotency_key="idem-4")
+        ticket = service.create_draft(
+            resident_ctx, db, subject="s", description="d", idempotency_key="idem-4"
+        )
         with pytest.raises(ConsultationError) as exc:
             service.submit(other_ctx, db, ticket.id)
     assert exc.value.code == "CONSULTATION_FORBIDDEN"
@@ -270,7 +334,9 @@ def test_consultation_staff_only(sessions, seed):
     resident_ctx = _ctx(seed, "resident")
     service = ConsultationService()
     with sessions() as db:
-        ticket = service.create_draft(resident_ctx, db, subject="s", description="d", idempotency_key="idem-5")
+        ticket = service.create_draft(
+            resident_ctx, db, subject="s", description="d", idempotency_key="idem-5"
+        )
         with pytest.raises(ConsultationError) as exc:
             service.start_processing(resident_ctx, db, ticket.id)
     assert exc.value.code == "CONSULTATION_FORBIDDEN"

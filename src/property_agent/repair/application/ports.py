@@ -118,9 +118,7 @@ class StaffDirectoryPort(Protocol):
         self, *, user_id: UUID, community_id: UUID, request_id: str
     ) -> None: ...
 
-    def list_duty_staff(
-        self, *, community_id: UUID, request_id: str
-    ) -> tuple[UUID, ...]:
+    def list_duty_staff(self, *, community_id: UUID, request_id: str) -> tuple[UUID, ...]:
         """Return on-duty staff who must be notified about high-risk reports."""
         ...
 

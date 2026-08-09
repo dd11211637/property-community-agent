@@ -11,18 +11,19 @@ from property_agent.repair.domain.enums import (
 from property_agent.repair.domain.errors import invalid_transition, validation_error
 
 TRANSITIONS: dict[tuple[WorkOrderStatus, ActionCode], WorkOrderStatus] = {
-    (WorkOrderStatus.PENDING_ASSIGNMENT, ActionCode.ASSIGN):
-        WorkOrderStatus.PENDING_ACCEPTANCE,
+    (WorkOrderStatus.PENDING_ASSIGNMENT, ActionCode.ASSIGN): WorkOrderStatus.PENDING_ACCEPTANCE,
     (WorkOrderStatus.PENDING_ACCEPTANCE, ActionCode.ACCEPT): WorkOrderStatus.PROCESSING,
-    (WorkOrderStatus.PENDING_ACCEPTANCE, ActionCode.REJECT):
-        WorkOrderStatus.PENDING_ASSIGNMENT,
-    (WorkOrderStatus.PROCESSING, ActionCode.SUBMIT_COMPLETION):
-        WorkOrderStatus.PENDING_VERIFICATION,
+    (WorkOrderStatus.PENDING_ACCEPTANCE, ActionCode.REJECT): WorkOrderStatus.PENDING_ASSIGNMENT,
+    (
+        WorkOrderStatus.PROCESSING,
+        ActionCode.SUBMIT_COMPLETION,
+    ): WorkOrderStatus.PENDING_VERIFICATION,
     (WorkOrderStatus.PENDING_VERIFICATION, ActionCode.VERIFY_PASS): WorkOrderStatus.CLOSED,
-    (WorkOrderStatus.PENDING_VERIFICATION, ActionCode.REQUEST_REWORK):
+    (WorkOrderStatus.PENDING_VERIFICATION, ActionCode.REQUEST_REWORK): WorkOrderStatus.REWORKING,
+    (
         WorkOrderStatus.REWORKING,
-    (WorkOrderStatus.REWORKING, ActionCode.SUBMIT_REWORK_COMPLETION):
-        WorkOrderStatus.PENDING_VERIFICATION,
+        ActionCode.SUBMIT_REWORK_COMPLETION,
+    ): WorkOrderStatus.PENDING_VERIFICATION,
 }
 
 

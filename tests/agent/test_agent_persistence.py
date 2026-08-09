@@ -133,9 +133,7 @@ def boot(session_factory, *, clock=None, ttl_seconds=300):
     recovery = AgentRecoveryService(
         conversations=conversations, checkpointer=checkpointer, **recovery_kwargs
     )
-    runner = AgentSessionRunner(
-        graph=graph, conversations=conversations, recovery=recovery
-    )
+    runner = AgentSessionRunner(graph=graph, conversations=conversations, recovery=recovery)
     return runner, rec, checkpointer, conversations, recovery
 
 
@@ -310,9 +308,7 @@ def test_resume_rejects_other_user_session(session_factory, ctx):
     start_repair(runner, ctx)
 
     runner2, rec2, _, _, _ = boot(session_factory)
-    intruder = Ctx(
-        actor_id=uuid4(), community_id=ctx.community_id, house_ids=ctx.house_ids
-    )
+    intruder = Ctx(actor_id=uuid4(), community_id=ctx.community_id, house_ids=ctx.house_ids)
     with pytest.raises(AgentSessionError) as excinfo:
         runner2.resume(conversation_id="conv-1", context=intruder, confirmed=True)
 
@@ -338,9 +334,7 @@ def test_resume_rejects_revoked_house_binding(session_factory, ctx):
     start_repair(runner, ctx)
 
     # 绑定被撤销：可信上下文里不再包含这套房
-    unbound = Ctx(
-        actor_id=ctx.actor_id, community_id=ctx.community_id, house_ids=frozenset()
-    )
+    unbound = Ctx(actor_id=ctx.actor_id, community_id=ctx.community_id, house_ids=frozenset())
     runner2, rec2, cp2, _, _ = boot(session_factory)
     with pytest.raises(AgentSessionError) as excinfo:
         runner2.resume(conversation_id="conv-1", context=unbound, confirmed=True)

@@ -11,6 +11,7 @@ Provides:
   - get_current_house_context: resolve current house, auto-select for single-house users
   - require_role: role-based access control guard
 """
+
 from __future__ import annotations
 
 import contextvars
@@ -34,8 +35,8 @@ from property_agent.platform.services.shared import AuditService
 # contextvars — coroutine-safe RequestContext
 # ---------------------------------------------------------------------------
 
-_request_context_var: contextvars.ContextVar[RequestContext | None] = (
-    contextvars.ContextVar("request_context", default=None)
+_request_context_var: contextvars.ContextVar[RequestContext | None] = contextvars.ContextVar(
+    "request_context", default=None
 )
 
 
@@ -51,6 +52,7 @@ class RequestContext:
         current_house_id: resolved current house (None until house selection)
         bound_house_ids: all active house bindings
     """
+
     actor_id: UUID
     community_id: UUID
     roles: frozenset[str]
@@ -80,6 +82,7 @@ class RequestContext:
 # ═══════════════════════════════════════════════════════════════
 # get_current_user — FastAPI dependency (JWT-based, PF-01)
 # ═══════════════════════════════════════════════════════════════
+
 
 async def get_current_user(
     request: Request,
@@ -153,6 +156,7 @@ async def get_current_user(
 # get_current_house_context — FastAPI dependency (PF-02)
 # ═══════════════════════════════════════════════════════════════
 
+
 async def get_current_house_context(
     request: Request,
     context: RequestContext = Depends(get_current_user),  # noqa: B008
@@ -223,11 +227,7 @@ async def get_current_house_context(
         return updated
 
     # Multi-house, none specified — return HOUSE_SELECTION_REQUIRED
-    houses = (
-        db.query(HouseModel)
-        .filter(HouseModel.id.in_(context.bound_house_ids))
-        .all()
-    )
+    houses = db.query(HouseModel).filter(HouseModel.id.in_(context.bound_house_ids)).all()
     house_options = [
         {"id": str(h.id), "building": h.building, "unit": h.unit, "room_no": h.room_no}
         for h in houses
@@ -247,8 +247,10 @@ async def get_current_house_context(
 # require_role — RBAC guard (PF-03)
 # ═══════════════════════════════════════════════════════════════
 
+
 def require_role(*allowed_roles: str):
     """FastAPI dependency factory: require at least one of the given roles."""
+
     async def _guard(context: RequestContext = Depends(get_current_user)) -> RequestContext:  # noqa: B008
         if not context.has_any_role(*allowed_roles):
             raise HTTPException(
@@ -260,12 +262,14 @@ def require_role(*allowed_roles: str):
                 },
             )
         return context
+
     return _guard
 
 
 # ═══════════════════════════════════════════════════════════════
 # require_idempotency_key — PF-04 idempotency interceptor
 # ═══════════════════════════════════════════════════════════════
+
 
 async def require_idempotency_key(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
@@ -300,6 +304,7 @@ async def require_idempotency_key(
 # ═══════════════════════════════════════════════════════════════
 # get_current_house_id — simple dependency for house_id
 # ═══════════════════════════════════════════════════════════════
+
 
 async def get_current_house_id(
     context: RequestContext = Depends(get_current_house_context),  # noqa: B008

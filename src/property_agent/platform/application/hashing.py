@@ -23,6 +23,7 @@ Normalisation rules (applied recursively before serialisation):
 Serialisation is ``json.dumps(..., sort_keys=True, separators=(",", ":"),
 ensure_ascii=False)`` followed by SHA-256 hex digest.
 """
+
 from __future__ import annotations
 
 import hashlib

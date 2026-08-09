@@ -79,9 +79,7 @@ class WorkOrderService:
 
         operation = "CREATE_WORK_ORDER"
         with self._unit_of_work_factory() as uow:
-            replay = self._idempotent_replay(
-                uow, context, operation, idempotency_key, request_hash
-            )
+            replay = self._idempotent_replay(uow, context, operation, idempotency_key, request_hash)
             if replay is not None:
                 return replay
 
@@ -188,13 +186,9 @@ class WorkOrderService:
     ) -> WorkOrder:
         self._require_idempotency_key(idempotency_key)
         operation = f"WORK_ORDER_{command.action.value}"
-        request_hash = canonical_hash(
-            {"work_order_id": work_order_id, **asdict(command)}
-        )
+        request_hash = canonical_hash({"work_order_id": work_order_id, **asdict(command)})
         with self._unit_of_work_factory() as uow:
-            replay = self._idempotent_replay(
-                uow, context, operation, idempotency_key, request_hash
-            )
+            replay = self._idempotent_replay(uow, context, operation, idempotency_key, request_hash)
             if replay is not None:
                 return replay
 
@@ -249,13 +243,9 @@ class WorkOrderService:
         if command.rating < 1 or command.rating > 5:
             raise validation_error("Rating must be between 1 and 5.")
         operation = "WORK_ORDER_CREATE_REVIEW"
-        request_hash = canonical_hash(
-            {"work_order_id": work_order_id, **asdict(command)}
-        )
+        request_hash = canonical_hash({"work_order_id": work_order_id, **asdict(command)})
         with self._unit_of_work_factory() as uow:
-            replay = self._idempotent_replay(
-                uow, context, operation, idempotency_key, request_hash
-            )
+            replay = self._idempotent_replay(uow, context, operation, idempotency_key, request_hash)
             if replay is not None:
                 return replay
             work_order = self._get_authorized(uow, work_order_id, context)
@@ -303,9 +293,7 @@ class WorkOrderService:
             uow.commit()
             return work_order
 
-    def available_actions(
-        self, work_order: WorkOrder, context: RequestContext
-    ) -> list[ActionCode]:
+    def available_actions(self, work_order: WorkOrder, context: RequestContext) -> list[ActionCode]:
         status = work_order.status
         if status == WorkOrderStatus.PENDING_ASSIGNMENT and context.has_any_role(*ASSIGN_ROLES):
             return [ActionCode.ASSIGN]
@@ -328,10 +316,7 @@ class WorkOrderService:
             return [ActionCode.RECORD_PROGRESS, completion]
         if status == WorkOrderStatus.PENDING_VERIFICATION and (
             context.has_any_role(Role.MANAGER)
-            or (
-                context.has_any_role(Role.RESIDENT)
-                and work_order.house_id in context.house_ids
-            )
+            or (context.has_any_role(Role.RESIDENT) and work_order.house_id in context.house_ids)
         ):
             return [ActionCode.VERIFY_PASS, ActionCode.REQUEST_REWORK]
         if (
@@ -553,10 +538,7 @@ class WorkOrderService:
             )
 
             now = datetime.now(UTC)
-            summary = (
-                f"高风险报修待人工核实：{command.category.value} / "
-                f"{command.location.strip()}"
-            )
+            summary = f"高风险报修待人工核实：{command.category.value} / {command.location.strip()}"
             ticket_id = uow.handover.create(
                 community_id=context.community_id,
                 requester_id=context.actor_id,
@@ -742,9 +724,7 @@ class WorkOrderService:
             created_at=datetime.fromisoformat(snapshot["created_at"]),
             updated_at=datetime.fromisoformat(snapshot["updated_at"]),
             closed_at=(
-                datetime.fromisoformat(snapshot["closed_at"])
-                if snapshot["closed_at"]
-                else None
+                datetime.fromisoformat(snapshot["closed_at"]) if snapshot["closed_at"] else None
             ),
             has_review=snapshot["has_review"],
         )

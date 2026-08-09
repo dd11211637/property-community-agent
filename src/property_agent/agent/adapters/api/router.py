@@ -124,9 +124,7 @@ def get_conversation(
     runner: RunnerDep,
     context: ContextDep,
 ) -> Envelope:
-    conversation, pending = runner.status(
-        conversation_id=conversation_id, context=context
-    )
+    conversation, pending = runner.status(conversation_id=conversation_id, context=context)
     return _envelope(status_data(conversation, pending), context)
 
 

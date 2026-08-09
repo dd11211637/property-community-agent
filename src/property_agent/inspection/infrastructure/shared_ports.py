@@ -24,6 +24,7 @@ its timeline, the audit trail, the outbox message and (when needed) the
 escalation handover ticket. Platform exceptions are translated into inspection
 ``BusinessError`` values so the API keeps emitting the unified error envelope.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -74,6 +75,7 @@ def _template(event_type: str) -> tuple[str, str]:
 # ═══════════════════════════════════════════════════════════════
 # IdempotencyPort
 # ═══════════════════════════════════════════════════════════════
+
 
 class SqlAlchemyIdempotencyPort:
     """Two-phase idempotency on the shared ``idempotency_records`` table."""
@@ -132,6 +134,7 @@ class SqlAlchemyIdempotencyPort:
 # ConfirmationPort
 # ═══════════════════════════════════════════════════════════════
 
+
 class PlatformConfirmationPort:
     """Consume a platform confirmation token, translating platform errors."""
 
@@ -169,15 +172,14 @@ class PlatformConfirmationPort:
 # StaffDirectoryPort
 # ═══════════════════════════════════════════════════════════════
 
+
 class SqlAlchemyStaffDirectoryPort:
     """安保人员目录与值班人员查询（PRD 6.4 高风险通知值班人员）。"""
 
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def ensure_security_staff(
-        self, *, user_id: UUID, community_id: UUID, request_id: str
-    ) -> None:
+    def ensure_security_staff(self, *, user_id: UUID, community_id: UUID, request_id: str) -> None:
         found = self._session.execute(
             select(UserModel.id)
             .join(UserRoleModel, UserRoleModel.user_id == UserModel.id)
@@ -195,22 +197,27 @@ class SqlAlchemyStaffDirectoryPort:
             )
 
     def list_duty_users(self, community_id: UUID) -> list[UUID]:
-        rows = self._session.execute(
-            select(UserModel.id)
-            .join(UserRoleModel, UserRoleModel.user_id == UserModel.id)
-            .where(
-                UserModel.community_id == community_id,
-                UserModel.status == "ACTIVE",
-                UserRoleModel.role.in_(DUTY_ROLES),
+        rows = (
+            self._session.execute(
+                select(UserModel.id)
+                .join(UserRoleModel, UserRoleModel.user_id == UserModel.id)
+                .where(
+                    UserModel.community_id == community_id,
+                    UserModel.status == "ACTIVE",
+                    UserRoleModel.role.in_(DUTY_ROLES),
+                )
+                .distinct()
             )
-            .distinct()
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         return list(rows)
 
 
 # ═══════════════════════════════════════════════════════════════
 # AttachmentPort
 # ═══════════════════════════════════════════════════════════════
+
 
 class SqlAlchemyAttachmentPort:
     """校验附件归属、上传状态、类型与大小（PRD 6.4：附件上传状态）。"""
@@ -236,9 +243,13 @@ class SqlAlchemyAttachmentPort:
                 attachment_count=len(attachment_ids),
             )
 
-        rows = self._session.execute(
-            select(AttachmentModel).where(AttachmentModel.id.in_(attachment_ids))
-        ).scalars().all()
+        rows = (
+            self._session.execute(
+                select(AttachmentModel).where(AttachmentModel.id.in_(attachment_ids))
+            )
+            .scalars()
+            .all()
+        )
         found = {row.id: row for row in rows}
 
         missing = [str(item) for item in attachment_ids if item not in found]
@@ -277,6 +288,7 @@ class SqlAlchemyAttachmentPort:
 # AuditPort
 # ═══════════════════════════════════════════════════════════════
 
+
 class PlatformAuditPort:
     """Write audit rows through the platform service (sensitive data masked)."""
 
@@ -310,6 +322,7 @@ class PlatformAuditPort:
 # ═══════════════════════════════════════════════════════════════
 # MessagePort
 # ═══════════════════════════════════════════════════════════════
+
 
 class PlatformMessagePort:
     """Enqueue station messages into the transactional outbox.
@@ -346,6 +359,7 @@ class PlatformMessagePort:
 # ═══════════════════════════════════════════════════════════════
 # EscalationPort
 # ═══════════════════════════════════════════════════════════════
+
 
 class SqlAlchemyEscalationPort:
     """高风险事件无可用值班人员时，升级到备用联系人（PRD 6.4）。
@@ -386,6 +400,7 @@ class SqlAlchemyEscalationPort:
 # ═══════════════════════════════════════════════════════════════
 # Assembly
 # ═══════════════════════════════════════════════════════════════
+
 
 def build_inspection_ports(session: Session):
     """Create every production shared port bound to one SQLAlchemy session."""

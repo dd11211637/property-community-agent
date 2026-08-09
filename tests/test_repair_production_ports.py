@@ -21,6 +21,7 @@ Coverage:
   * high-risk handover ticket + duty-staff notification (no work order)
   * status change → timeline + outbox message + audit written in one commit
 """
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
@@ -92,9 +93,7 @@ def sessions() -> sessionmaker[Session]:
         poolclass=StaticPool,
     )
     Base.metadata.create_all(engine)
-    return sessionmaker(
-        bind=engine, autocommit=False, autoflush=False, expire_on_commit=False
-    )
+    return sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
 
 
 @pytest.fixture
@@ -117,16 +116,25 @@ def seed(sessions: sessionmaker[Session]) -> Seed:
                 CommunityModel(id=data.community, name="阳光花园"),
                 CommunityModel(id=data.other_community, name="翠竹苑"),
                 HouseModel(
-                    id=data.house, community_id=data.community,
-                    building="1", unit="2", room_no="301",
+                    id=data.house,
+                    community_id=data.community,
+                    building="1",
+                    unit="2",
+                    room_no="301",
                 ),
                 HouseModel(
-                    id=data.unbound_house, community_id=data.community,
-                    building="1", unit="2", room_no="302",
+                    id=data.unbound_house,
+                    community_id=data.community,
+                    building="1",
+                    unit="2",
+                    room_no="302",
                 ),
                 HouseModel(
-                    id=data.foreign_house, community_id=data.other_community,
-                    building="9", unit="1", room_no="101",
+                    id=data.foreign_house,
+                    community_id=data.other_community,
+                    building="9",
+                    unit="1",
+                    room_no="101",
                 ),
             ]
         )
@@ -148,9 +156,7 @@ def seed(sessions: sessionmaker[Session]) -> Seed:
             )
             session.add(UserRoleModel(user_id=user_id, role=role))
         session.add(
-            UserHouseBindingModel(
-                user_id=data.resident, house_id=data.house, status="ACTIVE"
-            )
+            UserHouseBindingModel(user_id=data.resident, house_id=data.house, status="ACTIVE")
         )
         session.commit()
     return data
@@ -158,9 +164,7 @@ def seed(sessions: sessionmaker[Session]) -> Seed:
 
 @pytest.fixture
 def service(sessions: sessionmaker[Session]) -> WorkOrderService:
-    return WorkOrderService(
-        lambda: SqlAlchemyRepairUnitOfWork(sessions, build_shared_ports)
-    )
+    return WorkOrderService(lambda: SqlAlchemyRepairUnitOfWork(sessions, build_shared_ports))
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -297,9 +301,7 @@ def count(sessions: sessionmaker[Session], model) -> int:
 # ═══════════════════════════════════════════════════════════════
 
 
-def test_create_persists_order_timeline_audit_and_idempotency(
-    sessions, seed, service
-) -> None:
+def test_create_persists_order_timeline_audit_and_idempotency(sessions, seed, service) -> None:
     command = confirmed_command(sessions, seed)
 
     work_order = service.create(command, resident_ctx(seed), idempotency_key="k-create")
@@ -410,9 +412,7 @@ def test_token_minted_by_confirmation_service_is_accepted(sessions, seed, servic
         session.commit()
 
     command = make_command(seed, token=token)
-    work_order = service.create(
-        command, resident_ctx(seed), idempotency_key="k-platform-token"
-    )
+    work_order = service.create(command, resident_ctx(seed), idempotency_key="k-platform-token")
 
     assert work_order.status == WorkOrderStatus.PENDING_ASSIGNMENT
     assert canonical_hash(params) == command_hash(command)
@@ -452,9 +452,7 @@ def test_customer_service_may_report_for_any_house_in_the_community(
         house_id=seed.unbound_house,
     )
 
-    work_order = service.create(
-        command, staff_ctx(seed), idempotency_key="k-staff-create"
-    )
+    work_order = service.create(command, staff_ctx(seed), idempotency_key="k-staff-create")
 
     assert work_order.house_id == seed.unbound_house
     assert work_order.reporter_id == seed.customer_service
@@ -464,9 +462,7 @@ def test_revoked_role_loses_community_wide_access(sessions, seed, service) -> No
     """Roles are re-read from the database, not trusted from the token."""
     with sessions() as session:
         session.execute(
-            UserRoleModel.__table__.delete().where(
-                UserRoleModel.user_id == seed.customer_service
-            )
+            UserRoleModel.__table__.delete().where(UserRoleModel.user_id == seed.customer_service)
         )
         session.commit()
 
@@ -485,14 +481,10 @@ def test_revoked_role_loses_community_wide_access(sessions, seed, service) -> No
 
 
 def test_valid_attachment_is_accepted(sessions, seed, service) -> None:
-    attachment = add_attachment(
-        sessions, community_id=seed.community, uploader_id=seed.resident
-    )
+    attachment = add_attachment(sessions, community_id=seed.community, uploader_id=seed.resident)
     command = confirmed_command(sessions, seed, attachment_ids=(attachment,))
 
-    work_order = service.create(
-        command, resident_ctx(seed), idempotency_key="k-attach-ok"
-    )
+    work_order = service.create(command, resident_ctx(seed), idempotency_key="k-attach-ok")
 
     assert work_order.id is not None
 
@@ -505,9 +497,7 @@ def test_valid_attachment_is_accepted(sessions, seed, service) -> None:
         ({"size_bytes": ATTACHMENT_MAX_SIZE_BYTES + 1}, "VALIDATION_ERROR"),
     ],
 )
-def test_attachment_metadata_is_validated(
-    sessions, seed, service, kwargs, expected_code
-) -> None:
+def test_attachment_metadata_is_validated(sessions, seed, service, kwargs, expected_code) -> None:
     attachment = add_attachment(
         sessions, community_id=seed.community, uploader_id=seed.resident, **kwargs
     )
@@ -558,9 +548,7 @@ def test_unknown_attachment_id_is_rejected(sessions, seed, service) -> None:
 # ═══════════════════════════════════════════════════════════════
 
 
-def test_high_risk_creates_handover_ticket_and_notifies_duty_staff(
-    sessions, seed, service
-) -> None:
+def test_high_risk_creates_handover_ticket_and_notifies_duty_staff(sessions, seed, service) -> None:
     command = confirmed_command(
         sessions,
         seed,
@@ -617,10 +605,7 @@ def test_high_risk_retry_replays_the_same_ticket(sessions, seed, service) -> Non
     with pytest.raises(BusinessError) as second:
         service.create(command, resident_ctx(seed), idempotency_key="k-hr-retry")
 
-    assert (
-        first.value.details["handover_ticket_id"]
-        == second.value.details["handover_ticket_id"]
-    )
+    assert first.value.details["handover_ticket_id"] == second.value.details["handover_ticket_id"]
     assert count(sessions, HandoverTicketModel) == 1
     assert count(sessions, MessageRecordModel) == 2
 
@@ -651,9 +636,7 @@ def _create_order(sessions, seed, service, key: str = "k-flow"):
     )
 
 
-def test_assign_notifies_the_worker_and_records_the_transition(
-    sessions, seed, service
-) -> None:
+def test_assign_notifies_the_worker_and_records_the_transition(sessions, seed, service) -> None:
     work_order = _create_order(sessions, seed, service)
 
     assigned = service.execute_action(

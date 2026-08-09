@@ -24,6 +24,7 @@ its timeline, the audit trail and the outbox message. Platform exceptions are
 translated into repair ``BusinessError`` values so the API keeps emitting the
 unified error envelope.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -81,6 +82,7 @@ def _template(event_type: str) -> tuple[str, str]:
 # ═══════════════════════════════════════════════════════════════
 # IdempotencyPort
 # ═══════════════════════════════════════════════════════════════
+
 
 class SqlAlchemyIdempotencyPort:
     """Two-phase idempotency using the shared ``idempotency_records`` table.
@@ -149,6 +151,7 @@ class SqlAlchemyIdempotencyPort:
 # ConfirmationPort
 # ═══════════════════════════════════════════════════════════════
 
+
 class PlatformConfirmationPort:
     """Consume a platform confirmation token, translating platform errors.
 
@@ -192,6 +195,7 @@ class PlatformConfirmationPort:
 # ═══════════════════════════════════════════════════════════════
 # HouseAccessPort
 # ═══════════════════════════════════════════════════════════════
+
 
 class SqlAlchemyHouseAccessPort:
     """Verify the actor may act on a house inside the current community.
@@ -247,15 +251,14 @@ class SqlAlchemyHouseAccessPort:
 # StaffDirectoryPort
 # ═══════════════════════════════════════════════════════════════
 
+
 class SqlAlchemyStaffDirectoryPort:
     """Look up staff by role within a community."""
 
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def ensure_repair_worker(
-        self, *, user_id: UUID, community_id: UUID, request_id: str
-    ) -> None:
+    def ensure_repair_worker(self, *, user_id: UUID, community_id: UUID, request_id: str) -> None:
         found = self._session.execute(
             select(UserModel.id)
             .join(UserRoleModel, UserRoleModel.user_id == UserModel.id)
@@ -272,25 +275,28 @@ class SqlAlchemyStaffDirectoryPort:
                 assignee_id=str(user_id),
             )
 
-    def list_duty_staff(
-        self, *, community_id: UUID, request_id: str
-    ) -> tuple[UUID, ...]:
-        rows = self._session.execute(
-            select(UserModel.id)
-            .join(UserRoleModel, UserRoleModel.user_id == UserModel.id)
-            .where(
-                UserModel.community_id == community_id,
-                UserModel.status == "ACTIVE",
-                UserRoleModel.role.in_(DUTY_ROLES),
+    def list_duty_staff(self, *, community_id: UUID, request_id: str) -> tuple[UUID, ...]:
+        rows = (
+            self._session.execute(
+                select(UserModel.id)
+                .join(UserRoleModel, UserRoleModel.user_id == UserModel.id)
+                .where(
+                    UserModel.community_id == community_id,
+                    UserModel.status == "ACTIVE",
+                    UserRoleModel.role.in_(DUTY_ROLES),
+                )
+                .distinct()
             )
-            .distinct()
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         return tuple(rows)
 
 
 # ═══════════════════════════════════════════════════════════════
 # AttachmentPort
 # ═══════════════════════════════════════════════════════════════
+
 
 class SqlAlchemyAttachmentPort:
     """Validate attachment ownership, scope, upload status, type and size.
@@ -321,9 +327,13 @@ class SqlAlchemyAttachmentPort:
                 attachment_count=len(attachment_ids),
             )
 
-        rows = self._session.execute(
-            select(AttachmentModel).where(AttachmentModel.id.in_(attachment_ids))
-        ).scalars().all()
+        rows = (
+            self._session.execute(
+                select(AttachmentModel).where(AttachmentModel.id.in_(attachment_ids))
+            )
+            .scalars()
+            .all()
+        )
         found = {row.id: row for row in rows}
 
         missing = [str(item) for item in attachment_ids if item not in found]
@@ -362,6 +372,7 @@ class SqlAlchemyAttachmentPort:
 # AuditPort
 # ═══════════════════════════════════════════════════════════════
 
+
 class PlatformAuditPort:
     """Write audit rows through the platform service (sensitive data masked)."""
 
@@ -395,6 +406,7 @@ class PlatformAuditPort:
 # ═══════════════════════════════════════════════════════════════
 # MessagePort
 # ═══════════════════════════════════════════════════════════════
+
 
 class PlatformMessagePort:
     """Enqueue station messages into the transactional outbox.
@@ -431,6 +443,7 @@ class PlatformMessagePort:
 # ═══════════════════════════════════════════════════════════════
 # HandoverPort
 # ═══════════════════════════════════════════════════════════════
+
 
 class SqlAlchemyHandoverPort:
     """Create manual-handover tickets for cases the system must not auto-handle."""
@@ -471,6 +484,7 @@ class SqlAlchemyHandoverPort:
 # ═══════════════════════════════════════════════════════════════
 # Assembly
 # ═══════════════════════════════════════════════════════════════
+
 
 def build_shared_ports(session: Session) -> SharedPorts:
     """Create every production shared port bound to one SQLAlchemy session."""

@@ -92,9 +92,7 @@ def upgrade() -> None:
             "version", sa.Integer(), nullable=False, server_default="1", comment="快照版本号"
         ),
         sa.Column("state", json_col, nullable=False, comment="GraphState 快照"),
-        sa.Column(
-            "interrupt_node", sa.String(length=64), nullable=True, comment="中断所在节点"
-        ),
+        sa.Column("interrupt_node", sa.String(length=64), nullable=True, comment="中断所在节点"),
         sa.Column(
             "pending_confirm",
             sa.Boolean(),

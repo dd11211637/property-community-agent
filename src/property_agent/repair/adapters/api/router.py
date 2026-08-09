@@ -153,9 +153,7 @@ def accept_work_order(
 ) -> Envelope:
     return _execute(
         work_order_id,
-        ExecuteActionCommand(
-            action=ActionCode.ACCEPT, expected_version=payload.expected_version
-        ),
+        ExecuteActionCommand(action=ActionCode.ACCEPT, expected_version=payload.expected_version),
         idempotency_key,
         service,
         context,

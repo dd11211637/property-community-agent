@@ -7,6 +7,7 @@ Covers:
 - GET /ready   → 503 when database DOWN
 - GET /ready   → 503 when services not configured
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
@@ -23,6 +24,7 @@ from property_agent.platform.container import build_production_container
 # Fixtures
 # ═══════════════════════════════════════════════════════════════
 
+
 @pytest.fixture(autouse=True)
 def _reset_container_state():
     """Reset global container state before each test."""
@@ -33,6 +35,7 @@ def _reset_container_state():
     container_module._services_configured = False
     container_module._async_engine = None
     container_module._async_session_factory = None
+
 
 @pytest.fixture
 def app() -> FastAPI:
@@ -50,6 +53,7 @@ def client(app: FastAPI) -> TestClient:
 # ═══════════════════════════════════════════════════════════════
 # GET /health — Liveness Probe
 # ═══════════════════════════════════════════════════════════════
+
 
 class TestHealthLiveness:
     """Tests for GET /health liveness probe."""
@@ -76,6 +80,7 @@ class TestHealthLiveness:
 # ═══════════════════════════════════════════════════════════════
 # GET /ready — Readiness Probe (happy path)
 # ═══════════════════════════════════════════════════════════════
+
 
 class TestReadyReadinessSuccess:
     """Tests for GET /ready when database is UP and services are configured."""
@@ -124,6 +129,7 @@ class TestReadyReadinessSuccess:
 # ═══════════════════════════════════════════════════════════════
 # GET /ready — Readiness Probe (failure cases)
 # ═══════════════════════════════════════════════════════════════
+
 
 class TestReadyReadinessFailure:
     """Tests for GET /ready when components are unhealthy."""
@@ -206,6 +212,7 @@ class TestReadyReadinessFailure:
 # ═══════════════════════════════════════════════════════════════
 # Integration: Health + Ready co-existence
 # ═══════════════════════════════════════════════════════════════
+
 
 class TestHealthAndReadyIntegration:
     """Verify that /health and /ready work independently."""

@@ -3,6 +3,7 @@ Platform infrastructure database — shared engine and session factory.
 
 Provides a single database connection pool used by all domain modules.
 """
+
 from __future__ import annotations
 
 import os

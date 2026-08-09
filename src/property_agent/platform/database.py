@@ -11,6 +11,7 @@ This module also offers the URL-based factories used by standalone module apps
 and integration tests, on top of the process-wide singletons defined in
 ``platform.infrastructure.database``.
 """
+
 from __future__ import annotations
 
 from sqlalchemy import Engine, create_engine

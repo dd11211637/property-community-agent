@@ -41,14 +41,10 @@ def create_order(
     *,
     key: str = "create-1",
 ):
-    return service.create(
-        create_command(ids), resident_context, idempotency_key=key
-    )
+    return service.create(create_command(ids), resident_context, idempotency_key=key)
 
 
-def test_create_is_confirmed_and_idempotent(
-    service, harness, ids, resident_context
-) -> None:
+def test_create_is_confirmed_and_idempotent(service, harness, ids, resident_context) -> None:
     first = create_order(service, ids, resident_context)
     second = create_order(service, ids, resident_context)
 
@@ -121,9 +117,7 @@ def test_complete_rework_and_review_flow(
     )
     order = service.execute_action(
         order.id,
-        ExecuteActionCommand(
-            action=ActionCode.ACCEPT, expected_version=order.version
-        ),
+        ExecuteActionCommand(action=ActionCode.ACCEPT, expected_version=order.version),
         repair_context,
         idempotency_key="accept-1",
     )
@@ -159,9 +153,7 @@ def test_complete_rework_and_review_flow(
     )
     order = service.execute_action(
         order.id,
-        ExecuteActionCommand(
-            action=ActionCode.VERIFY_PASS, expected_version=order.version
-        ),
+        ExecuteActionCommand(action=ActionCode.VERIFY_PASS, expected_version=order.version),
         resident_context,
         idempotency_key="verify-1",
     )
@@ -209,9 +201,7 @@ def test_wrong_worker_cannot_accept(
     with pytest.raises(BusinessError) as error:
         service.execute_action(
             order.id,
-            ExecuteActionCommand(
-                action=ActionCode.ACCEPT, expected_version=order.version
-            ),
+            ExecuteActionCommand(action=ActionCode.ACCEPT, expected_version=order.version),
             other_worker,
             idempotency_key="accept-other",
         )
@@ -311,9 +301,7 @@ def test_resident_cannot_access_other_house(service, harness, ids) -> None:
     assert error.value.code == "RESOURCE_NOT_FOUND"
 
 
-def test_read_operations_require_an_explicit_role(
-    service, ids, resident_context
-) -> None:
+def test_read_operations_require_an_explicit_role(service, ids, resident_context) -> None:
     order = service.create(
         create_command(ids),
         resident_context,
@@ -335,9 +323,7 @@ def test_read_operations_require_an_explicit_role(
     assert search_error.value.code == "FORBIDDEN"
 
 
-def test_whitespace_idempotency_key_is_rejected(
-    service, ids, resident_context
-) -> None:
+def test_whitespace_idempotency_key_is_rejected(service, ids, resident_context) -> None:
     with pytest.raises(BusinessError) as error:
         service.create(
             create_command(ids),

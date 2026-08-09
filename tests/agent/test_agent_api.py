@@ -128,9 +128,7 @@ def build_runner(session_factory, *, clock=None, ttl_seconds=300):
     recovery = AgentRecoveryService(
         conversations=conversations, checkpointer=checkpointer, **recovery_kwargs
     )
-    runner = AgentSessionRunner(
-        graph=graph, conversations=conversations, recovery=recovery
-    )
+    runner = AgentSessionRunner(graph=graph, conversations=conversations, recovery=recovery)
     return runner, rec, checkpointer, conversations, recovery
 
 

@@ -5,6 +5,7 @@ Used by tests and local single-module runs. The unified production entry point
 is ``property_agent.main``; both share the same error envelope and handlers so
 responses are byte-compatible.
 """
+
 from uuid import uuid4
 
 from fastapi import FastAPI, Request

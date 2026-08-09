@@ -115,9 +115,7 @@ class AgentSessionRunner:
             pending = state.pending_action
         return conversation, pending
 
-    def close(
-        self, *, conversation_id: str, context: AgentContext
-    ) -> ConversationSnapshot:
+    def close(self, *, conversation_id: str, context: AgentContext) -> ConversationSnapshot:
         self._conversations.require_owned_by(conversation_id, context)
         return self._conversations.close(conversation_id)
 
@@ -126,9 +124,7 @@ class AgentSessionRunner:
     def _finalize(self, result: dict[str, Any]) -> AgentTurn:
         state: GraphState = result["state"]
         done = bool(result["done"])
-        conversation = self._conversations.sync_from_state(
-            state, waiting_confirm=not done
-        )
+        conversation = self._conversations.sync_from_state(state, waiting_confirm=not done)
         return AgentTurn(
             state=state,
             conversation=conversation,

@@ -10,7 +10,8 @@ domain/enums.py     枚举定义
   BillStatus     账单状态    → CHECK (status IN ('UNPAID','OVERDUE','PAID','CANCELLED'))
   UserRole       用户角色    → CHECK (role IN ('owner','staff','admin'))
   ReminderLevel  催缴层级    → 应用层计算，基于逾期天数
-  PayMethod      支付方式    → CHECK (pay_method IN ('WECHAT','ALIPAY','BANK_CARD','CASH','OFFLINE'))
+  PayMethod      支付方式    → CHECK (pay_method IN
+                                      ('WECHAT','ALIPAY','BANK_CARD','CASH','OFFLINE'))
   PayStatus      支付状态    → CHECK (pay_status IN ('PENDING','SUCCESS','FAILED','REFUNDED'))
   BuildingType   楼栋类型    → CHECK (building_type IN ('RESIDENTIAL','COMMERCIAL','OFFICE'))
   RoomStatus     房号状态    → CHECK (status IN ('OCCUPIED','VACANT','DECORATING'))
@@ -28,29 +29,32 @@ domain/enums.py     枚举定义
     → queries.py: GetBillsByRole.execute(user_id, role)
       → SQL: SELECT * FROM fee_bills WHERE user_id = :user_id;  -- owner
 """
-from __future__ import annotations
-from enum import Enum
 
+from __future__ import annotations
+
+from enum import StrEnum
 
 # ═══════════════════════════════════════════════════════════════
 # FeeType · 费用类型（PRD 6.3 筛选维度）
 # ═══════════════════════════════════════════════════════════════
 
-class FeeType(str, Enum):
+
+class FeeType(StrEnum):
     """账单费用类型维度。"""
 
-    PROPERTY = "PROPERTY"   # 物业费
-    UTILITY = "UTILITY"     # 公摊水电费
-    PARKING = "PARKING"     # 车位费
-    LATE_FEE = "LATE_FEE"   # 滞纳金
-    MIXED = "MIXED"         # 混合/未分类
+    PROPERTY = "PROPERTY"  # 物业费
+    UTILITY = "UTILITY"  # 公摊水电费
+    PARKING = "PARKING"  # 车位费
+    LATE_FEE = "LATE_FEE"  # 滞纳金
+    MIXED = "MIXED"  # 混合/未分类
 
 
 # ═══════════════════════════════════════════════════════════════
 # ConsultationStatus · 财务咨询单状态（PRD 6.3）
 # ═══════════════════════════════════════════════════════════════
 
-class ConsultationStatus(str, Enum):
+
+class ConsultationStatus(StrEnum):
     """财务咨询单状态机节点。"""
 
     DRAFT = "DRAFT"
@@ -65,7 +69,8 @@ class ConsultationStatus(str, Enum):
 # BillStatus · 账单状态
 # ═══════════════════════════════════════════════════════════════
 
-class BillStatus(str, Enum):
+
+class BillStatus(StrEnum):
     """
     账单状态枚举
 
@@ -80,17 +85,19 @@ class BillStatus(str, Enum):
         SELECT COUNT(*) FROM fee_bills WHERE status = 'OVERDUE';
         UPDATE fee_bills SET status='OVERDUE' WHERE status='UNPAID' AND due_date < CURRENT_DATE;
     """
-    UNPAID = "UNPAID"           # 未到期
-    OVERDUE = "OVERDUE"         # 已逾期
-    PAID = "PAID"               # 已缴费
-    CANCELLED = "CANCELLED"     # 已作废
+
+    UNPAID = "UNPAID"  # 未到期
+    OVERDUE = "OVERDUE"  # 已逾期
+    PAID = "PAID"  # 已缴费
+    CANCELLED = "CANCELLED"  # 已作废
 
 
 # ═══════════════════════════════════════════════════════════════
 # UserRole · 用户角色
 # ═══════════════════════════════════════════════════════════════
 
-class UserRole(str, Enum):
+
+class UserRole(StrEnum):
     """
     用户角色
 
@@ -107,16 +114,18 @@ class UserRole(str, Enum):
         SELECT * FROM sys_users WHERE role = 'owner';
         SELECT * FROM sys_users WHERE role = 'staff';
     """
-    OWNER = "owner"              # 业主用户
-    PROPERTY_STAFF = "staff"      # 物业工作人员
-    COMMUNITY_ADMIN = "admin"     # 社区管理员
+
+    OWNER = "owner"  # 业主用户
+    PROPERTY_STAFF = "staff"  # 物业工作人员
+    COMMUNITY_ADMIN = "admin"  # 社区管理员
 
 
 # ═══════════════════════════════════════════════════════════════
 # ReminderLevel · 催缴提醒层级
 # ═══════════════════════════════════════════════════════════════
 
-class ReminderLevel(str, Enum):
+
+class ReminderLevel(StrEnum):
     """
     催缴提醒层级
 
@@ -131,16 +140,18 @@ class ReminderLevel(str, Enum):
         END AS reminder_level
         FROM fee_bills WHERE bill_id = :bill_id;
     """
-    GENTLE = "gentle"              # 未到期，温和提醒
-    SHORT_OVERDUE = "short"        # 逾期 ≤30天，快捷缴费引导
-    LONG_OVERDUE = "long"          # 逾期 >30天，警示 + 管家介入
+
+    GENTLE = "gentle"  # 未到期，温和提醒
+    SHORT_OVERDUE = "short"  # 逾期 ≤30天，快捷缴费引导
+    LONG_OVERDUE = "long"  # 逾期 >30天，警示 + 管家介入
 
 
 # ═══════════════════════════════════════════════════════════════
 # PayMethod · 支付方式
 # ═══════════════════════════════════════════════════════════════
 
-class PayMethod(str, Enum):
+
+class PayMethod(StrEnum):
     """
     支付方式
 
@@ -152,6 +163,7 @@ class PayMethod(str, Enum):
         SELECT pay_method, COUNT(*) FROM fee_payments GROUP BY pay_method;
         INSERT INTO fee_payments (..., pay_method, ...) VALUES (..., 'WECHAT', ...);
     """
+
     WECHAT = "WECHAT"
     ALIPAY = "ALIPAY"
     BANK_CARD = "BANK_CARD"
@@ -163,7 +175,8 @@ class PayMethod(str, Enum):
 # PayStatus · 支付状态
 # ═══════════════════════════════════════════════════════════════
 
-class PayStatus(str, Enum):
+
+class PayStatus(StrEnum):
     """
     支付状态
 
@@ -175,6 +188,7 @@ class PayStatus(str, Enum):
         SELECT * FROM fee_payments WHERE pay_status = 'SUCCESS';
         UPDATE fee_payments SET pay_status='REFUNDED' WHERE bill_id=:bill_id;
     """
+
     PENDING = "PENDING"
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
@@ -185,7 +199,8 @@ class PayStatus(str, Enum):
 # BuildingType · 楼栋类型
 # ═══════════════════════════════════════════════════════════════
 
-class BuildingType(str, Enum):
+
+class BuildingType(StrEnum):
     """
     楼栋类型
 
@@ -196,6 +211,7 @@ class BuildingType(str, Enum):
     SQL 查询示例:
         SELECT * FROM community_buildings WHERE building_type = 'RESIDENTIAL';
     """
+
     RESIDENTIAL = "RESIDENTIAL"
     COMMERCIAL = "COMMERCIAL"
     OFFICE = "OFFICE"
@@ -205,7 +221,8 @@ class BuildingType(str, Enum):
 # RoomStatus · 房号状态
 # ═══════════════════════════════════════════════════════════════
 
-class RoomStatus(str, Enum):
+
+class RoomStatus(StrEnum):
     """
     房号状态
 
@@ -216,6 +233,7 @@ class RoomStatus(str, Enum):
     SQL 查询示例:
         SELECT * FROM community_rooms WHERE status = 'OCCUPIED';
     """
+
     OCCUPIED = "OCCUPIED"
     VACANT = "VACANT"
     DECORATING = "DECORATING"
@@ -225,7 +243,8 @@ class RoomStatus(str, Enum):
 # BuildingStatus · 楼栋状态
 # ═══════════════════════════════════════════════════════════════
 
-class BuildingStatus(str, Enum):
+
+class BuildingStatus(StrEnum):
     """
     楼栋状态
 
@@ -236,6 +255,7 @@ class BuildingStatus(str, Enum):
     SQL 查询示例:
         SELECT * FROM community_buildings WHERE status = 'ACTIVE';
     """
+
     ACTIVE = "ACTIVE"
     INACTIVE = "INACTIVE"
     MAINTENANCE = "MAINTENANCE"
@@ -245,7 +265,8 @@ class BuildingStatus(str, Enum):
 # UserStatus · 用户状态
 # ═══════════════════════════════════════════════════════════════
 
-class UserStatus(str, Enum):
+
+class UserStatus(StrEnum):
     """
     用户状态
 
@@ -257,6 +278,7 @@ class UserStatus(str, Enum):
         SELECT * FROM sys_users WHERE status = 'ACTIVE';
         SELECT user_id FROM sys_users WHERE room_id=:room_id AND status='ACTIVE' AND role='owner';
     """
+
     ACTIVE = "ACTIVE"
     INACTIVE = "INACTIVE"
     FROZEN = "FROZEN"

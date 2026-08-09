@@ -13,6 +13,7 @@ string placeholders. These tests drive the *real* stack:
 
 so a regression that unwires the container fails here immediately.
 """
+
 from __future__ import annotations
 
 from dataclasses import asdict
@@ -58,9 +59,7 @@ def sessions(monkeypatch) -> sessionmaker:
         poolclass=StaticPool,
     )
     Base.metadata.create_all(engine)
-    factory = sessionmaker(
-        bind=engine, autocommit=False, autoflush=False, expire_on_commit=False
-    )
+    factory = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
     monkeypatch.setattr(platform_db, "_engine", engine)
     monkeypatch.setattr(platform_db, "_SessionLocal", factory)
     yield factory
@@ -74,22 +73,29 @@ def seeded(sessions) -> sessionmaker:
             [
                 CommunityModel(id=COMMUNITY, name="生产验收社区"),
                 HouseModel(
-                    id=HOUSE, community_id=COMMUNITY,
-                    building="3", unit="1", room_no="702",
+                    id=HOUSE,
+                    community_id=COMMUNITY,
+                    building="3",
+                    unit="1",
+                    room_no="702",
                 ),
                 UserModel(
-                    id=RESIDENT, community_id=COMMUNITY, username="resident",
-                    display_name="住户", password_hash=hash_password("123456"),
+                    id=RESIDENT,
+                    community_id=COMMUNITY,
+                    username="resident",
+                    display_name="住户",
+                    password_hash=hash_password("123456"),
                 ),
                 UserModel(
-                    id=CUSTOMER_SERVICE, community_id=COMMUNITY, username="cs",
-                    display_name="客服", password_hash=hash_password("123456"),
+                    id=CUSTOMER_SERVICE,
+                    community_id=COMMUNITY,
+                    username="cs",
+                    display_name="客服",
+                    password_hash=hash_password("123456"),
                 ),
                 UserRoleModel(user_id=RESIDENT, role="RESIDENT"),
                 UserRoleModel(user_id=CUSTOMER_SERVICE, role="CUSTOMER_SERVICE"),
-                UserHouseBindingModel(
-                    user_id=RESIDENT, house_id=HOUSE, status="ACTIVE"
-                ),
+                UserHouseBindingModel(user_id=RESIDENT, house_id=HOUSE, status="ACTIVE"),
             ]
         )
         session.commit()
@@ -194,9 +200,7 @@ def test_create_work_order_through_the_assembled_app(seeded, client) -> None:
     response = client.post(
         "/api/work-orders",
         json=create_body(token=token),
-        headers=auth_headers(
-            resident_token(), idempotency_key="e2e-create", request_id="req_e2e"
-        ),
+        headers=auth_headers(resident_token(), idempotency_key="e2e-create", request_id="req_e2e"),
     )
 
     assert response.status_code == 201, response.text
@@ -216,9 +220,7 @@ def test_create_work_order_through_the_assembled_app(seeded, client) -> None:
 
 def test_retry_with_the_same_key_replays_the_first_response(seeded, client) -> None:
     token = mint_token(seeded, action="CREATE_WORK_ORDER", body=create_body())
-    headers = auth_headers(
-        resident_token(), idempotency_key="e2e-retry", request_id="req_retry"
-    )
+    headers = auth_headers(resident_token(), idempotency_key="e2e-retry", request_id="req_retry")
 
     first = client.post("/api/work-orders", json=create_body(token=token), headers=headers)
     second = client.post("/api/work-orders", json=create_body(token=token), headers=headers)
@@ -231,9 +233,7 @@ def test_retry_with_the_same_key_replays_the_first_response(seeded, client) -> N
         assert len(session.execute(select(WorkOrderModel)).scalars().all()) == 1
 
 
-def test_high_risk_returns_handover_ticket_instead_of_a_work_order(
-    seeded, client
-) -> None:
+def test_high_risk_returns_handover_ticket_instead_of_a_work_order(seeded, client) -> None:
     body = create_body(urgency="HIGH_RISK")
     token = mint_token(seeded, action="CREATE_WORK_ORDER_HANDOVER", body=body)
 

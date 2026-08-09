@@ -4,6 +4,7 @@ Platform API routes — auth and shared platform endpoints.
 PRD 5.2 (PF-01, PF-02).
 Health check routes moved to health_routes.py (PRD 5.4).
 """
+
 from __future__ import annotations
 
 from uuid import UUID
@@ -43,6 +44,7 @@ router = APIRouter(tags=["platform"])
 # Auth routes (PF-01, PF-02)
 # ═══════════════════════════════════════════════════════════════
 
+
 @router.post("/api/auth/login", response_model=LoginResponse)
 def login(
     body: LoginRequest,
@@ -56,11 +58,7 @@ def login(
     server-side and includes actor_id, community_id, roles, and
     bound_house_ids. The frontend must not submit or override these claims.
     """
-    user = (
-        db.query(UserModel)
-        .filter_by(username=body.username, status="ACTIVE")
-        .first()
-    )
+    user = db.query(UserModel).filter_by(username=body.username, status="ACTIVE").first()
 
     if user is None:
         AuditService(db).log(
@@ -92,11 +90,7 @@ def login(
     role_names = [r.role for r in roles] if roles else ["RESIDENT"]
 
     # Get active house bindings
-    bindings = (
-        db.query(UserHouseBindingModel)
-        .filter_by(user_id=user.id, status="ACTIVE")
-        .all()
-    )
+    bindings = db.query(UserHouseBindingModel).filter_by(user_id=user.id, status="ACTIVE").all()
     house_ids = [b.house_id for b in bindings]
 
     # Auto-select for single-house users
@@ -172,6 +166,7 @@ def select_house(
 # ═══════════════════════════════════════════════════════════════
 # Confirmation & Idempotency helpers (PF-04)
 # ═══════════════════════════════════════════════════════════════
+
 
 @router.post("/api/confirmations", response_model=ConfirmationGenerateResponse)
 def generate_confirmation(

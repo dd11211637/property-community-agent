@@ -55,7 +55,7 @@ def _uow_factory(engine, state, security_workers, duty_users):
     session_factory = create_session_factory(POSTGRES_URL)
 
     def factory():
-            return SqlAlchemyInspectionUnitOfWork(
+        return SqlAlchemyInspectionUnitOfWork(
             session_factory,
             lambda session: SharedPorts(
                 idempotency=FakeIdempotencyPort(state),

@@ -6,28 +6,56 @@ infrastructure/repositories.py     Repository 实现
 
 每个方法标注了等价 SQL 语句。
 """
+
 from __future__ import annotations
-from typing import Optional
-from datetime import date as date_type, datetime as _dt
+
+from datetime import date as date_type
+from datetime import datetime as _dt
+
 from sqlalchemy.orm import Session, joinedload
 
-from .orm_models import (
-    BillModel, BillingUserModel, PaymentModel, ReceiptModel,
-    BuildingModel, RoomModel, BillingRuleModel, ConsultationModel,
+from ..application.ports import (
+    BillRepository,
+    BuildingRepository,
+    PaymentRepository,
+    ReceiptRepository,
+    RoomRepository,
+    UnitOfWork,
+    UserRepository,
 )
 from ..domain.entities import (
-    Bill, User, Payment, Receipt, Building, Room, BillingRule, ConsultationTicket,
+    Bill,
+    BillingRule,
+    Building,
+    ConsultationTicket,
+    Payment,
+    Receipt,
+    Room,
+    User,
 )
 from ..domain.enums import (
-    BillStatus, UserRole, PayMethod, PayStatus, BuildingType, RoomStatus,
-    BuildingStatus, ConsultationStatus,
+    BillStatus,
+    BuildingStatus,
+    BuildingType,
+    ConsultationStatus,
+    PayMethod,
+    PayStatus,
+    RoomStatus,
+    UserRole,
 )
-from ..application.ports import (
-    BillRepository, UserRepository, PaymentRepository, ReceiptRepository,
-    BuildingRepository, RoomRepository, UnitOfWork,
+from .orm_models import (
+    BillingRuleModel,
+    BillingUserModel,
+    BillModel,
+    BuildingModel,
+    ConsultationModel,
+    PaymentModel,
+    ReceiptModel,
+    RoomModel,
 )
 
 # ── 映射函数 ──────────────────────────────────────────
+
 
 def _bill_from_model(m: BillModel) -> Bill:
     """ORM 模型 → 领域实体"""
@@ -53,7 +81,9 @@ def _bill_from_model(m: BillModel) -> Bill:
         rule_version=m.rule_version,
         rule_name=m.rule_name,
         user_name=m.user_ref.user_name if m.user_ref else "",
-        building_name=m.room_ref.building.building_name if m.room_ref and m.room_ref.building else "",
+        building_name=m.room_ref.building.building_name
+        if m.room_ref and m.room_ref.building
+        else "",
         room_number=m.room_ref.room_number if m.room_ref else "",
     )
 
@@ -100,13 +130,18 @@ def _receipt_from_model(m: ReceiptModel) -> Receipt:
         issue_time=m.issue_time.strftime("%Y-%m-%d %H:%M:%S") if m.issue_time else "",
         is_valid=m.is_valid,
         user_name=m.user_ref.user_name if m.user_ref else "",
-        building_name=m.user_ref.building_ref.building_name if m.user_ref and m.user_ref.building_ref else "",
+        building_name=m.user_ref.building_ref.building_name
+        if m.user_ref and m.user_ref.building_ref
+        else "",
         room_number=m.user_ref.room_ref.room_number if m.user_ref and m.user_ref.room_ref else "",
-        payment_time=m.payment_ref.paid_at.strftime("%Y-%m-%d %H:%M:%S") if m.payment_ref and m.payment_ref.paid_at else "",
+        payment_time=m.payment_ref.paid_at.strftime("%Y-%m-%d %H:%M:%S")
+        if m.payment_ref and m.payment_ref.paid_at
+        else "",
     )
 
 
 # ── BillRepository 实现 ──────────────────────────────
+
 
 class SqlAlchemyBillRepository(BillRepository):
     """
@@ -122,12 +157,9 @@ class SqlAlchemyBillRepository(BillRepository):
         self._db = db
 
     def _query(self):
-        return (
-            self._db.query(BillModel)
-            .options(
-                joinedload(BillModel.user_ref),
-                joinedload(BillModel.room_ref).joinedload(RoomModel.building),
-            )
+        return self._db.query(BillModel).options(
+            joinedload(BillModel.user_ref),
+            joinedload(BillModel.room_ref).joinedload(RoomModel.building),
         )
 
     def find_by_user(self, user_id: str) -> list[Bill]:
@@ -149,7 +181,7 @@ class SqlAlchemyBillRepository(BillRepository):
         )
         return [_bill_from_model(r) for r in rows]
 
-    def find_by_id(self, bill_id: str) -> Optional[Bill]:
+    def find_by_id(self, bill_id: str) -> Bill | None:
         """
         SQL:
             SELECT * FROM fee_bills WHERE bill_id = :bill_id;
@@ -223,7 +255,7 @@ class SqlAlchemyBillRepository(BillRepository):
         row = self._db.query(BillModel).filter(BillModel.bill_id == bill.bill_id).first()
         if not row:
             raise ValueError(f"账单 {bill.bill_id} 不存在")
-        row.status = bill.status.value if hasattr(bill.status, 'value') else bill.status
+        row.status = bill.status.value if hasattr(bill.status, "value") else bill.status
         row.payment_time = bill.payment_time
         row.receipt_no = bill.receipt_no
         row.late_fee = bill.late_fee
@@ -291,7 +323,8 @@ class SqlAlchemyBillRepository(BillRepository):
                 (:bill_id, :user_id, :room_id, :period, :property_fee, :utility_fee,
                  :parking_fee, 0, :total, :due_date, 'UNPAID', NOW(), NOW());
         """
-        from datetime import datetime, date
+        from datetime import date
+
         model = BillModel(
             bill_id=bill.bill_id,
             user_id=bill.user_id,
@@ -303,7 +336,7 @@ class SqlAlchemyBillRepository(BillRepository):
             late_fee=bill.late_fee,
             total_amount=bill.total_amount,
             due_date=date.fromisoformat(bill.due_date),
-            status=bill.status.value if hasattr(bill.status, 'value') else bill.status,
+            status=bill.status.value if hasattr(bill.status, "value") else bill.status,
         )
         self._db.add(model)
         self._db.flush()
@@ -333,6 +366,7 @@ class SqlAlchemyBillRepository(BillRepository):
 
 # ── UserRepository 实现 ──────────────────────────────
 
+
 class SqlAlchemyUserRepository(UserRepository):
     """
     用户仓储实现
@@ -344,7 +378,7 @@ class SqlAlchemyUserRepository(UserRepository):
     def __init__(self, db: Session):
         self._db = db
 
-    def find_by_id(self, user_id: str) -> Optional[User]:
+    def find_by_id(self, user_id: str) -> User | None:
         """
         SQL:
             SELECT u.*, b.building_name, r.room_number
@@ -370,7 +404,7 @@ class SqlAlchemyUserRepository(UserRepository):
         user.room_number = row.room_ref.room_number if row.room_ref else ""
         return user
 
-    def find_owner_by_room(self, room_id: str) -> Optional[User]:
+    def find_owner_by_room(self, room_id: str) -> User | None:
         """
         SQL:
             SELECT * FROM sys_users
@@ -395,6 +429,7 @@ class SqlAlchemyUserRepository(UserRepository):
 
 # ── PaymentRepository 实现 ───────────────────────────
 
+
 class SqlAlchemyPaymentRepository(PaymentRepository):
     """
     支付记录仓储实现
@@ -415,9 +450,7 @@ class SqlAlchemyPaymentRepository(PaymentRepository):
             SELECT payment_id FROM fee_payments ORDER BY payment_id DESC LIMIT 1;
         """
         row = (
-            self._db.query(PaymentModel.payment_id)
-            .order_by(PaymentModel.payment_id.desc())
-            .first()
+            self._db.query(PaymentModel.payment_id).order_by(PaymentModel.payment_id.desc()).first()
         )
         return row[0] if row else None
 
@@ -436,8 +469,12 @@ class SqlAlchemyPaymentRepository(PaymentRepository):
             bill_id=payment.bill_id,
             user_id=payment.user_id,
             pay_amount=payment.pay_amount,
-            pay_method=payment.pay_method.value if hasattr(payment.pay_method, 'value') else payment.pay_method,
-            pay_status=payment.pay_status.value if hasattr(payment.pay_status, 'value') else payment.pay_status,
+            pay_method=payment.pay_method.value
+            if hasattr(payment.pay_method, "value")
+            else payment.pay_method,
+            pay_status=payment.pay_status.value
+            if hasattr(payment.pay_status, "value")
+            else payment.pay_status,
             transaction_id=payment.transaction_id,
             receipt_no=payment.receipt_no,
             paid_at=payment.paid_at,
@@ -477,7 +514,7 @@ class SqlAlchemyPaymentRepository(PaymentRepository):
         )
         return [_payment_from_model(r) for r in rows]
 
-    def find_by_bill_id(self, bill_id: str) -> Optional[Payment]:
+    def find_by_bill_id(self, bill_id: str) -> Payment | None:
         """
         SQL:
             SELECT p.*, u.user_name
@@ -516,6 +553,7 @@ class SqlAlchemyPaymentRepository(PaymentRepository):
 
 # ── ReceiptRepository 实现 ───────────────────────────
 
+
 class SqlAlchemyReceiptRepository(ReceiptRepository):
     """
     票据仓储实现
@@ -528,7 +566,7 @@ class SqlAlchemyReceiptRepository(ReceiptRepository):
     def __init__(self, db: Session):
         self._db = db
 
-    def find_by_no(self, receipt_no: str) -> Optional[Receipt]:
+    def find_by_no(self, receipt_no: str) -> Receipt | None:
         """
         SQL:
             SELECT r.*, u.user_name, b.building_name, rm.room_number, p.paid_at
@@ -597,6 +635,7 @@ class SqlAlchemyReceiptRepository(ReceiptRepository):
 
 # ── BuildingRepository 实现 ───────────────────────────
 
+
 def _building_from_model(m: BuildingModel) -> Building:
     """ORM 模型 → 领域实体"""
     return Building(
@@ -622,7 +661,7 @@ class SqlAlchemyBuildingRepository(BuildingRepository):
     def __init__(self, db: Session):
         self._db = db
 
-    def find_by_id(self, building_id: str) -> Optional[Building]:
+    def find_by_id(self, building_id: str) -> Building | None:
         """
         SQL:
             SELECT * FROM community_buildings WHERE building_id = :building_id;
@@ -640,6 +679,7 @@ class SqlAlchemyBuildingRepository(BuildingRepository):
 
 
 # ── RoomRepository 实现 ──────────────────────────────
+
 
 def _room_from_model(m: RoomModel) -> Room:
     """ORM 模型 → 领域实体"""
@@ -667,7 +707,7 @@ class SqlAlchemyRoomRepository(RoomRepository):
     def __init__(self, db: Session):
         self._db = db
 
-    def find_by_id(self, room_id: str) -> Optional[Room]:
+    def find_by_id(self, room_id: str) -> Room | None:
         """
         SQL:
             SELECT r.*, b.building_name
@@ -736,6 +776,7 @@ class SqlAlchemyRoomRepository(RoomRepository):
 
 # ── UnitOfWork 实现 ──────────────────────────────────
 
+
 class SqlAlchemyUnitOfWork(UnitOfWork):
     """
     工作单元实现
@@ -783,6 +824,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
 
 # ── BillingRuleRepository 实现 ──────────────────────────
 
+
 class SqlAlchemyBillingRuleRepository:
     """计费规则仓储实现（PRD 6.3）。"""
 
@@ -790,8 +832,8 @@ class SqlAlchemyBillingRuleRepository:
         self._db = db
 
     def find_effective(
-        self, community_id: str, fee_type: str, as_of: Optional[str] = None
-    ) -> Optional[BillingRule]:
+        self, community_id: str, fee_type: str, as_of: str | None = None
+    ) -> BillingRule | None:
         from datetime import datetime as _dt
 
         now = _dt.fromisoformat(as_of) if as_of else _dt.now()
@@ -830,12 +872,8 @@ class SqlAlchemyBillingRuleRepository:
             version=rule.version,
             name=rule.name,
             parameters=rule.parameters,
-            valid_from=(
-                _dt.fromisoformat(rule.valid_from) if rule.valid_from else _dt.now()
-            ),
-            valid_until=(
-                _dt.fromisoformat(rule.valid_until) if rule.valid_until else None
-            ),
+            valid_from=(_dt.fromisoformat(rule.valid_from) if rule.valid_from else _dt.now()),
+            valid_until=(_dt.fromisoformat(rule.valid_until) if rule.valid_until else None),
         )
         self._db.add(model)
         self._db.flush()
@@ -843,6 +881,7 @@ class SqlAlchemyBillingRuleRepository:
 
 
 # ── ConsultationRepository 实现 ────────────────────────
+
 
 class SqlAlchemyConsultationRepository:
     """财务咨询单仓储实现（PRD 6.3）。"""
@@ -868,10 +907,12 @@ class SqlAlchemyConsultationRepository:
         self._db.flush()
         return ticket
 
-    def get(self, consultation_id: str) -> Optional[ConsultationTicket]:
-        m = self._db.query(ConsultationModel).filter(
-            ConsultationModel.id == consultation_id
-        ).first()
+    def get(self, consultation_id: str) -> ConsultationTicket | None:
+        m = (
+            self._db.query(ConsultationModel)
+            .filter(ConsultationModel.id == consultation_id)
+            .first()
+        )
         return _consultation_from_model(m) if m else None
 
     def list_by_actor(self, actor_id: str, community_id: str) -> list[ConsultationTicket]:
@@ -887,9 +928,7 @@ class SqlAlchemyConsultationRepository:
         return [_consultation_from_model(r) for r in rows]
 
     def update(self, ticket: ConsultationTicket) -> ConsultationTicket:
-        m = self._db.query(ConsultationModel).filter(
-            ConsultationModel.id == ticket.id
-        ).first()
+        m = self._db.query(ConsultationModel).filter(ConsultationModel.id == ticket.id).first()
         if not m:
             raise ValueError(f"咨询单 {ticket.id} 不存在")
         m.status = ticket.status.value

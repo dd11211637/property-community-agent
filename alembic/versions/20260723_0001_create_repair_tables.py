@@ -38,9 +38,7 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("closed_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "community_id", "business_no", name="uq_work_orders_business_no"
-        ),
+        sa.UniqueConstraint("community_id", "business_no", name="uq_work_orders_business_no"),
         sa.UniqueConstraint(
             "reporter_id",
             "create_idempotency_key",
@@ -118,9 +116,7 @@ def upgrade() -> None:
         sa.Column("rating", sa.Integer(), nullable=False),
         sa.Column("comment", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.CheckConstraint(
-            "rating >= 1 AND rating <= 5", name="ck_work_order_reviews_rating"
-        ),
+        sa.CheckConstraint("rating >= 1 AND rating <= 5", name="ck_work_order_reviews_rating"),
         sa.ForeignKeyConstraint(["work_order_id"], ["work_orders.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("work_order_id", name="uq_work_order_reviews_order"),
@@ -134,9 +130,7 @@ def downgrade() -> None:
         table_name="work_order_process_records",
     )
     op.drop_table("work_order_process_records")
-    op.drop_index(
-        "ix_work_order_status_logs_order_created", table_name="work_order_status_logs"
-    )
+    op.drop_index("ix_work_order_status_logs_order_created", table_name="work_order_status_logs")
     op.drop_table("work_order_status_logs")
     op.drop_index("ix_work_orders_assignee_status_updated", table_name="work_orders")
     op.drop_index("ix_work_orders_house_category_status", table_name="work_orders")

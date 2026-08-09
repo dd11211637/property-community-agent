@@ -27,22 +27,29 @@ domain/entities.py     实体
       → Receipt(...)                                  -- 创建 Receipt 实体
         → SQL: INSERT INTO fee_receipts (...) VALUES (...);
 """
+
 from __future__ import annotations
-from dataclasses import dataclass, field
-from datetime import date, datetime
-from decimal import Decimal
-from typing import Optional
+
+from dataclasses import dataclass
+from datetime import date
 
 from .enums import (
-    BillStatus, UserRole, PayMethod, PayStatus, BuildingType, RoomStatus,
-    UserStatus, BuildingStatus, FeeType, ConsultationStatus,
+    BillStatus,
+    BuildingStatus,
+    BuildingType,
+    ConsultationStatus,
+    PayMethod,
+    PayStatus,
+    RoomStatus,
+    UserRole,
+    UserStatus,
 )
-from .value_objects import Money, FeeDetail, BillPeriod, Address
-
+from .value_objects import FeeDetail, Money
 
 # ═══════════════════════════════════════════════════════════════
 # Building · 楼栋实体
 # ═══════════════════════════════════════════════════════════════
+
 
 @dataclass
 class Building:
@@ -70,6 +77,7 @@ class Building:
 
         SELECT * FROM community_buildings WHERE building_id = :building_id;
     """
+
     building_id: str
     building_name: str
     building_type: BuildingType = BuildingType.RESIDENTIAL
@@ -82,6 +90,7 @@ class Building:
 # ═══════════════════════════════════════════════════════════════
 # Room · 房号实体
 # ═══════════════════════════════════════════════════════════════
+
 
 @dataclass
 class Room:
@@ -112,19 +121,21 @@ class Room:
 
         SELECT * FROM community_rooms WHERE room_id = :room_id;
     """
+
     room_id: str
     building_id: str
     room_number: str
     room_area: float = 0.0
-    property_fee_rate: float = 0.0            # 物业费单价（元/㎡·月）
+    property_fee_rate: float = 0.0  # 物业费单价（元/㎡·月）
     parking_spots: int = 0
-    parking_fee_rate: float = 0.0             # 车位费单价（元/个·月）
+    parking_fee_rate: float = 0.0  # 车位费单价（元/个·月）
     status: RoomStatus = RoomStatus.OCCUPIED
 
 
 # ═══════════════════════════════════════════════════════════════
 # User · 用户实体
 # ═══════════════════════════════════════════════════════════════
+
 
 @dataclass
 class User:
@@ -151,11 +162,12 @@ class User:
 
         SELECT * FROM sys_users WHERE user_id = :user_id;
     """
+
     user_id: str
     user_name: str
     role: UserRole = UserRole.OWNER
-    building_id: Optional[str] = None
-    room_id: Optional[str] = None
+    building_id: str | None = None
+    room_id: str | None = None
     phone: str = ""
     email: str = ""
     status: UserStatus = UserStatus.ACTIVE
@@ -199,6 +211,7 @@ class User:
 # Bill · 账单实体（聚合根）
 # ═══════════════════════════════════════════════════════════════
 
+
 @dataclass
 class Bill:
     """
@@ -233,6 +246,7 @@ class Bill:
             UNIQUE (user_id, bill_period)
         );
     """
+
     bill_id: str
     user_id: str
     room_id: str
@@ -244,17 +258,17 @@ class Bill:
     total_amount: float = 0.0
     due_date: str = ""
     status: BillStatus = BillStatus.UNPAID
-    payment_time: Optional[str] = None
-    receipt_no: Optional[str] = None
+    payment_time: str | None = None
+    receipt_no: str | None = None
 
     # ── PRD 6.3 生产化字段 ─────────────────────────────────
-    community_id: Optional[str] = None
-    house_id: Optional[str] = None
+    community_id: str | None = None
+    house_id: str | None = None
     version: int = 1
-    fee_type: Optional[str] = None
-    source_time: Optional[str] = None
-    rule_version: Optional[str] = None
-    rule_name: Optional[str] = None
+    fee_type: str | None = None
+    source_time: str | None = None
+    rule_version: str | None = None
+    rule_name: str | None = None
 
     # 关联（懒加载，由 Repository 填充）
     user_name: str = ""
@@ -321,6 +335,7 @@ class Bill:
 # Payment · 缴费记录实体
 # ═══════════════════════════════════════════════════════════════
 
+
 @dataclass
 class Payment:
     """
@@ -348,6 +363,7 @@ class Payment:
 
         SELECT * FROM fee_payments WHERE payment_id = :payment_id;
     """
+
     payment_id: str
     bill_id: str
     user_id: str
@@ -356,8 +372,8 @@ class Payment:
     pay_status: PayStatus = PayStatus.SUCCESS
     transaction_id: str = ""
     receipt_no: str = ""
-    paid_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    paid_at: str | None = None
+    updated_at: str | None = None
 
     # 关联（懒加载，由 Repository 填充）
     user_name: str = ""
@@ -386,6 +402,7 @@ class Payment:
 # ═══════════════════════════════════════════════════════════════
 # Receipt · 电子票据实体
 # ═══════════════════════════════════════════════════════════════
+
 
 @dataclass
 class Receipt:
@@ -418,6 +435,7 @@ class Receipt:
 
         SELECT * FROM fee_receipts WHERE receipt_no = :receipt_no;
     """
+
     receipt_no: str
     bill_id: str
     user_id: str
@@ -442,6 +460,7 @@ class Receipt:
 # BillingRule · 计费规则实体（PRD 6.3）
 # ═══════════════════════════════════════════════════
 
+
 @dataclass
 class BillingRule:
     """计费规则：按社区 + 费用类型 + 版本配置，带有效期。"""
@@ -451,11 +470,11 @@ class BillingRule:
     fee_type: str
     version: str
     name: str
-    parameters: Optional[dict] = None
-    valid_from: Optional[str] = None
-    valid_until: Optional[str] = None
+    parameters: dict | None = None
+    valid_from: str | None = None
+    valid_until: str | None = None
 
-    def is_effective(self, as_of: Optional[str] = None) -> bool:
+    def is_effective(self, as_of: str | None = None) -> bool:
         """判断规则在给定时间(ISO 字符串)是否生效。"""
         from datetime import datetime as _dt
 
@@ -470,6 +489,7 @@ class BillingRule:
 # ═══════════════════════════════════════════════════
 # ConsultationTicket · 财务咨询单（PRD 6.3）
 # ═══════════════════════════════════════════════════
+
 
 class ConsultationTransitionError(Exception):
     """状态机非法迁移。"""
@@ -492,14 +512,14 @@ class ConsultationTicket:
     actor_id: str
     subject: str
     description: str
-    house_id: Optional[str] = None
-    bill_id: Optional[str] = None
+    house_id: str | None = None
+    bill_id: str | None = None
     status: ConsultationStatus = ConsultationStatus.DRAFT
-    answer: Optional[str] = None
-    handler_id: Optional[str] = None
+    answer: str | None = None
+    handler_id: str | None = None
     version: int = 1
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    created_at: str | None = None
+    updated_at: str | None = None
 
     def transition_to(self, target: ConsultationStatus) -> None:
         allowed = CONSULTATION_ALLOWED_TRANSITIONS.get(self.status, set())

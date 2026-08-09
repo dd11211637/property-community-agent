@@ -1,9 +1,10 @@
-﻿"""
+"""
 Application-layer confirmation token service — PF-04.
 
 Provides ConfirmationService for generating and validating secondary-confirmation
 tokens bound to actor, action, parameter hash, and expiration time.
 """
+
 from __future__ import annotations
 
 import secrets
@@ -68,13 +69,15 @@ class ConfirmationService:
         parameter_hash = _hash_dict(params)
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=CONFIRMATION_TTL_MINUTES)
 
-        self._session.add(ConfirmationTokenModel(
-            token=token,
-            actor_id=actor_id,
-            action=action,
-            parameter_hash=parameter_hash,
-            expires_at=expires_at,
-        ))
+        self._session.add(
+            ConfirmationTokenModel(
+                token=token,
+                actor_id=actor_id,
+                action=action,
+                parameter_hash=parameter_hash,
+                expires_at=expires_at,
+            )
+        )
         return token
 
     def validate_and_consume_token(
@@ -100,11 +103,7 @@ class ConfirmationService:
         """
         parameter_hash = _hash_dict(params)
 
-        record = (
-            self._session.query(ConfirmationTokenModel)
-            .filter_by(token=token)
-            .first()
-        )
+        record = self._session.query(ConfirmationTokenModel).filter_by(token=token).first()
 
         if record is None:
             raise InvalidConfirmationTokenException("Confirmation token not found.")
@@ -153,11 +152,7 @@ class ConfirmationService:
         request_id: str,
     ) -> None:
         """Backward-compatible consume (accepts pre-computed hash)."""
-        record = (
-            self._session.query(ConfirmationTokenModel)
-            .filter_by(token=token)
-            .first()
-        )
+        record = self._session.query(ConfirmationTokenModel).filter_by(token=token).first()
 
         if record is None:
             raise InvalidConfirmationTokenException("Confirmation token not found.")
@@ -178,8 +173,6 @@ class ConfirmationService:
             raise InvalidConfirmationTokenException("Token action mismatch.")
 
         if record.parameter_hash != parameter_hash:
-            raise InvalidConfirmationTokenException(
-                "Parameters have changed; please re-confirm."
-            )
+            raise InvalidConfirmationTokenException("Parameters have changed; please re-confirm.")
 
         record.consumed_at = datetime.now(timezone.utc)

@@ -27,6 +27,7 @@ both the house and the user must belong to the current community, and only
 ACTIVE users with an ACTIVE binding to an ACTIVE house are counted. There is no
 path from a client string to raw SQL.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -83,6 +84,7 @@ def _mask_name(value: str | None) -> str:
 # ═══════════════════════════════════════════════════════════════
 # IdempotencyPort
 # ═══════════════════════════════════════════════════════════════
+
 
 class SqlAlchemyIdempotencyPort:
     """Two-phase idempotency on the shared ``idempotency_records`` table.
@@ -150,6 +152,7 @@ class SqlAlchemyIdempotencyPort:
 # ConfirmationPort
 # ═══════════════════════════════════════════════════════════════
 
+
 class PlatformConfirmationPort:
     """Consume the platform confirmation token required before publishing.
 
@@ -193,6 +196,7 @@ class PlatformConfirmationPort:
 # ═══════════════════════════════════════════════════════════════
 # AudienceResolverPort
 # ═══════════════════════════════════════════════════════════════
+
 
 class SqlAlchemyAudienceResolverPort:
     """Resolve a structured audience condition into concrete recipients.
@@ -280,6 +284,7 @@ class SqlAlchemyAudienceResolverPort:
 # AuditPort
 # ═══════════════════════════════════════════════════════════════
 
+
 class PlatformAuditPort:
     """Write audit rows through the platform service (sensitive data masked)."""
 
@@ -303,6 +308,7 @@ class PlatformAuditPort:
 # ═══════════════════════════════════════════════════════════════
 # MessagePort
 # ═══════════════════════════════════════════════════════════════
+
 
 class PlatformMessagePort:
     """Enqueue station messages into the transactional outbox.
@@ -343,6 +349,7 @@ class PlatformMessagePort:
 # ═══════════════════════════════════════════════════════════════
 # Assembly
 # ═══════════════════════════════════════════════════════════════
+
 
 @dataclass(frozen=True, slots=True)
 class AnnouncementSharedPorts:

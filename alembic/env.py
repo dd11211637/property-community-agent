@@ -4,6 +4,7 @@ Alembic environment configuration — uses the unified Platform Base.
 All domain modules (repair, inspection, billing, platform) share
 the same Base metadata from platform.infrastructure.orm_models.
 """
+
 import os
 from logging.config import fileConfig
 

@@ -45,9 +45,7 @@ def make_state(ids, **slots) -> GraphState:
 
 def test_repair_create_requires_confirmation(service, ids, resident_context):
     tools = build_repair_tools(service, lambda _s: resident_context)
-    state = make_state(
-        ids, category="WATER_PLUMBING", location="厨房", description="水管漏水"
-    )
+    state = make_state(ids, category="WATER_PLUMBING", location="厨房", description="水管漏水")
     # 未确认 -> 工具直接拒绝，业务侧不会收到任何调用
     with pytest.raises(ToolPreconditionError):
         tools["repair_create"](state)
@@ -58,13 +56,9 @@ def test_repair_create_requires_confirmation(service, ids, resident_context):
     assert result["data"]["work_order"]["location"] == "厨房"
 
 
-def test_repair_create_is_idempotent_within_conversation(
-    service, harness, ids, resident_context
-):
+def test_repair_create_is_idempotent_within_conversation(service, harness, ids, resident_context):
     tools = build_repair_tools(service, lambda _s: resident_context)
-    state = make_state(
-        ids, category="ELECTRICAL", location="客厅", description="插座没电"
-    )
+    state = make_state(ids, category="ELECTRICAL", location="客厅", description="插座没电")
     state.confirmation_token = "confirmed"
 
     first = tools["repair_create"](state)
@@ -74,9 +68,7 @@ def test_repair_create_is_idempotent_within_conversation(
     assert len(harness.state.orders) == 1
 
 
-def test_repair_high_risk_returns_handover_not_work_order(
-    service, harness, ids, resident_context
-):
+def test_repair_high_risk_returns_handover_not_work_order(service, harness, ids, resident_context):
     tools = build_repair_tools(service, lambda _s: resident_context)
     state = make_state(
         ids,
@@ -118,9 +110,7 @@ class _ExplodingAnnouncementService:
 
 
 def test_announce_publish_never_executes(ids):
-    tools = build_announcement_tools(
-        _ExplodingAnnouncementService(), lambda _s: object()
-    )
+    tools = build_announcement_tools(_ExplodingAnnouncementService(), lambda _s: object())
     state = make_state(ids, title="停水通知", category="SAFETY")
 
     result = tools["announce_publish"](state)
@@ -228,9 +218,7 @@ def inspection_env():
 
 
 def _inspection_state(community: UUID, actor: UUID, **slots) -> GraphState:
-    state = GraphState(
-        conversation_id="conv-inspection-1", actor_id=actor, community_id=community
-    )
+    state = GraphState(conversation_id="conv-inspection-1", actor_id=actor, community_id=community)
     state.slots.update(slots)
     return state
 
@@ -264,9 +252,7 @@ def test_inspection_create_and_ai_suggest_stay_pending(inspection_env):
 
 def test_close_high_risk_event_never_executes(inspection_env):
     _harness, tools, community, manager = inspection_env
-    state = _inspection_state(
-        community, manager, event_id=str(uuid4()), risk_level="HIGH_RISK"
-    )
+    state = _inspection_state(community, manager, event_id=str(uuid4()), risk_level="HIGH_RISK")
 
     result = tools["close_high_risk_event"](state)
 

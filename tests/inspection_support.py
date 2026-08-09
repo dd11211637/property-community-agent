@@ -137,8 +137,7 @@ class FakeInspectionRepository:
             t
             for t in self.state.tasks.values()
             if t.community_id == community_id
-            and t.status
-            in (TaskStatus.PLANNED, TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)
+            and t.status in (TaskStatus.PLANNED, TaskStatus.ASSIGNED, TaskStatus.IN_PROGRESS)
         ]
 
     def task_timeline(self, task_id: UUID, community_id: UUID) -> list[TimelineEntry]:

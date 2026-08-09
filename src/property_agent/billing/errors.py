@@ -3,6 +3,7 @@ billing/errors.py     业务错误定义（PRD 6.3）
 
 所有错误继承 platform.errors.BusinessError，统一经 error_envelope 渲染。
 """
+
 from __future__ import annotations
 
 from property_agent.platform.errors import BusinessError

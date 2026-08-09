@@ -10,10 +10,11 @@ application/service.py     账单与财务咨询应用服务（PRD 6.3）
 ``BillingSourcePort`` 隔离本地演示源与真实财务接口（R-02：源不可用时仍可保存
 咨询草稿，绝不猜测金额）。
 """
+
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Callable, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
@@ -43,9 +44,7 @@ from property_agent.platform.infrastructure.orm_models import CommunityModel
 
 def _community_code(ctx: RequestContext, platform_db: Session) -> str:
     """用平台 CommunityModel.name 作为账单社区码（轻量接入的社区标识）。"""
-    community = (
-        platform_db.query(CommunityModel).filter_by(id=ctx.community_id).first()
-    )
+    community = platform_db.query(CommunityModel).filter_by(id=ctx.community_id).first()
     if community is None:
         raise BillingError("COMMUNITY_NOT_FOUND", "社区不存在", 404)
     return community.name
@@ -58,7 +57,7 @@ def _default_source_factory(bdb: Session):
 class BillingService:
     """住户账单查询 + 规则查询（PRD 6.3）。"""
 
-    def __init__(self, source_port_factory: Optional[Callable[[Session], object]] = None):
+    def __init__(self, source_port_factory: Callable[[Session], object] | None = None):
         self._source_factory = source_port_factory or _default_source_factory
 
     def list_bills(
@@ -66,8 +65,8 @@ class BillingService:
         ctx: RequestContext,
         platform_db: Session,
         *,
-        fee_type: Optional[str] = None,
-        period: Optional[str] = None,
+        fee_type: str | None = None,
+        period: str | None = None,
     ):
         """住户账单列表：社区 + 当前房屋范围过滤，查询审计。"""
         community_code = _community_code(ctx, platform_db)
@@ -88,7 +87,9 @@ class BillingService:
                     period=period,
                 )
             except BillingSourceUnavailable:
-                raise BillingError("BILLING_SOURCE_UNAVAILABLE", "账单服务暂时不可用", 503) from None
+                raise BillingError(
+                    "BILLING_SOURCE_UNAVAILABLE", "账单服务暂时不可用", 503
+                ) from None
         PlatformBillingAuditPort(platform_db).add(
             actor_id=ctx.actor_id,
             community_id=ctx.community_id,
@@ -109,7 +110,9 @@ class BillingService:
             try:
                 bill = source.get_bill(bill_id=bill_id)
             except BillingSourceUnavailable:
-                raise BillingError("BILLING_SOURCE_UNAVAILABLE", "账单服务暂时不可用", 503) from None
+                raise BillingError(
+                    "BILLING_SOURCE_UNAVAILABLE", "账单服务暂时不可用", 503
+                ) from None
             if bill is None or bill.community_id != community_code:
                 raise BillingError("BILL_NOT_FOUND", "账单不存在或无权访问", 404)
             rule = None
@@ -138,9 +141,7 @@ class BillingService:
         """查询当前生效规则；无有效规则返回 (None, unknown=True)。"""
         community_code = _community_code(ctx, platform_db)
         with SessionLocal() as bdb:
-            rule = SqlAlchemyBillingRuleRepository(bdb).find_effective(
-                community_code, fee_type
-            )
+            rule = SqlAlchemyBillingRuleRepository(bdb).find_effective(community_code, fee_type)
         PlatformBillingAuditPort(platform_db).add(
             actor_id=ctx.actor_id,
             community_id=ctx.community_id,
@@ -166,7 +167,7 @@ class ConsultationService:
         *,
         subject: str,
         description: str,
-        bill_id: Optional[str] = None,
+        bill_id: str | None = None,
         idempotency_key: str,
     ) -> ConsultationTicket:
         """提交财务咨询草稿（幂等）。源不可用也不影响草稿保存（R-02）。"""
@@ -218,34 +219,59 @@ class ConsultationService:
 
     # ── 状态推进 ──────────────────────────────────────
 
-    def submit(self, ctx: RequestContext, platform_db: Session, consultation_id: str) -> ConsultationTicket:
-        return self._transition(ctx, platform_db, consultation_id, ConsultationStatus.SUBMITTED, owner_only=True)
+    def submit(
+        self, ctx: RequestContext, platform_db: Session, consultation_id: str
+    ) -> ConsultationTicket:
+        return self._transition(
+            ctx, platform_db, consultation_id, ConsultationStatus.SUBMITTED, owner_only=True
+        )
 
-    def start_processing(self, ctx: RequestContext, platform_db: Session, consultation_id: str) -> ConsultationTicket:
-        return self._transition(ctx, platform_db, consultation_id, ConsultationStatus.PROCESSING, staff_only=True)
+    def start_processing(
+        self, ctx: RequestContext, platform_db: Session, consultation_id: str
+    ) -> ConsultationTicket:
+        return self._transition(
+            ctx, platform_db, consultation_id, ConsultationStatus.PROCESSING, staff_only=True
+        )
 
-    def answer(self, ctx: RequestContext, platform_db: Session, consultation_id: str, answer: str) -> ConsultationTicket:
-        ticket = self._transition(ctx, platform_db, consultation_id, ConsultationStatus.ANSWERED, staff_only=True)
+    def answer(
+        self, ctx: RequestContext, platform_db: Session, consultation_id: str, answer: str
+    ) -> ConsultationTicket:
+        ticket = self._transition(
+            ctx, platform_db, consultation_id, ConsultationStatus.ANSWERED, staff_only=True
+        )
         ticket.apply_answer(answer, handler_id=str(ctx.actor_id))
         with SessionLocal() as bdb:
             SqlAlchemyConsultationRepository(bdb).update(ticket)
             bdb.commit()
         PlatformBillingAuditPort(platform_db).add(
-            actor_id=ctx.actor_id, community_id=ctx.community_id,
-            action="CONSULTATION_ANSWER", resource_type="CONSULTATION",
-            resource_id=ticket.id, parameter_summary={"answered": True},
+            actor_id=ctx.actor_id,
+            community_id=ctx.community_id,
+            action="CONSULTATION_ANSWER",
+            resource_type="CONSULTATION",
+            resource_id=ticket.id,
+            parameter_summary={"answered": True},
             request_id=ctx.request_id,
         )
         platform_db.commit()
         return ticket
 
-    def resolve(self, ctx: RequestContext, platform_db: Session, consultation_id: str) -> ConsultationTicket:
-        return self._transition(ctx, platform_db, consultation_id, ConsultationStatus.RESOLVED, staff_only=True)
+    def resolve(
+        self, ctx: RequestContext, platform_db: Session, consultation_id: str
+    ) -> ConsultationTicket:
+        return self._transition(
+            ctx, platform_db, consultation_id, ConsultationStatus.RESOLVED, staff_only=True
+        )
 
-    def appeal(self, ctx: RequestContext, platform_db: Session, consultation_id: str) -> ConsultationTicket:
-        return self._transition(ctx, platform_db, consultation_id, ConsultationStatus.APPEALED, owner_only=True)
+    def appeal(
+        self, ctx: RequestContext, platform_db: Session, consultation_id: str
+    ) -> ConsultationTicket:
+        return self._transition(
+            ctx, platform_db, consultation_id, ConsultationStatus.APPEALED, owner_only=True
+        )
 
-    def get(self, ctx: RequestContext, platform_db: Session, consultation_id: str) -> ConsultationTicket:
+    def get(
+        self, ctx: RequestContext, platform_db: Session, consultation_id: str
+    ) -> ConsultationTicket:
         with SessionLocal() as bdb:
             ticket = SqlAlchemyConsultationRepository(bdb).get(consultation_id)
         if ticket is None:
@@ -274,7 +300,9 @@ class ConsultationService:
         owner_only: bool = False,
         staff_only: bool = False,
     ) -> ConsultationTicket:
-        if staff_only and not ctx.has_any_role("FINANCE", "MANAGER", "CUSTOMER_SERVICE", "SYSTEM_ADMIN"):
+        if staff_only and not ctx.has_any_role(
+            "FINANCE", "MANAGER", "CUSTOMER_SERVICE", "SYSTEM_ADMIN"
+        ):
             raise ConsultationError("CONSULTATION_FORBIDDEN", "仅财务人员/管理员可处理咨询单", 403)
         with SessionLocal() as bdb:
             repo = SqlAlchemyConsultationRepository(bdb)
@@ -292,9 +320,13 @@ class ConsultationService:
             repo.update(ticket)
             bdb.commit()
         PlatformBillingAuditPort(platform_db).add(
-            actor_id=ctx.actor_id, community_id=ctx.community_id,
-            action=f"CONSULTATION_{target.value}", resource_type="CONSULTATION",
-            resource_id=ticket.id, parameter_summary={}, request_id=ctx.request_id,
+            actor_id=ctx.actor_id,
+            community_id=ctx.community_id,
+            action=f"CONSULTATION_{target.value}",
+            resource_type="CONSULTATION",
+            resource_id=ticket.id,
+            parameter_summary={},
+            request_id=ctx.request_id,
         )
         platform_db.commit()
         return ticket
