@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -8,7 +9,6 @@ from property_agent.inspection.domain.enums import (
     EventType,
     TaskRecordType,
 )
-from property_agent.platform.schemas import Envelope as Envelope
 
 
 class StrictModel(BaseModel):
@@ -39,6 +39,7 @@ class SubmitTaskRecordsRequest(VersionedActionRequest):
     note: str = Field(min_length=1)
     confirmation_token: str | None = None
     attachment_ids: list[UUID] = Field(default_factory=list)
+    supplement_reason: str | None = None
 
 
 class AddTaskRecordRequest(VersionedActionRequest):
@@ -48,6 +49,18 @@ class AddTaskRecordRequest(VersionedActionRequest):
     attachment_ids: list[UUID] = Field(default_factory=list)
     is_supplement: bool = False
     actual_time: datetime | None = None
+    supplement_reason: str | None = None
+
+
+class AddAiSuggestionRequest(StrictModel):
+    point: str = Field(min_length=1)
+    finding: str = Field(min_length=1)
+    severity: str = "MEDIUM"
+    model: str = "inspection-ai"
+
+
+class ConfirmAiSuggestionsRequest(VersionedActionRequest):
+    pass
 
 
 # ----------------------------- 安防事件 -----------------------------
@@ -58,6 +71,7 @@ class CreateSecurityEventRequest(StrictModel):
     location: str = Field(min_length=1, max_length=128)
     description: str = Field(min_length=1)
     confirmation_token: str | None = None
+    report_source: str = "MANUAL"
     attachment_ids: list[UUID] = Field(default_factory=list)
 
 
@@ -72,3 +86,17 @@ class SubmitDisposalRequest(VersionedActionRequest):
 
 class ReturnEventRequest(VersionedActionRequest):
     note: str = Field(min_length=1)
+
+
+# ----------------------------- 统一信封 -----------------------------
+class ErrorBody(BaseModel):
+    code: str
+    message: str
+    details: dict[str, Any] | None = None
+
+
+class Envelope(BaseModel):
+    success: bool
+    data: Any = None
+    error: ErrorBody | None = None
+    request_id: str

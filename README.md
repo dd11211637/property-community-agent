@@ -18,13 +18,9 @@ AI 负责意图识别、信息补全、只读查询、内容生成和操作建�
 | 范围 | 状态 |
 |---|---|
 | 项目级目录与架构文档 | 已建立 |
-| 报修 P0 后端闭环 | 已合并，等待生产 Port 装配 |
-| 巡检与安防后端 | 已合并，等待生产 Port 装配 |
-| 公共请求上下文、角色和 HTTP 错误协议 | 已建立 |
-| 公共身份认证、基础数据和生产服务装配 | 待实现 |
-| 费用只读查询与规则解释 | 已重构并接入统一应用 |
-| 财务咨询状态机 | 待实现 |
-| 公告后端 | 待开发 |
+| 报修 P0 后端闭环 | 在 `repair` 分支开发 |
+| 公共身份、权限和基础数据 | 待集成 |
+| 公告、费用、巡检后端 | 待开发 |
 | Web 前端 | 已建立目录，待初始化 |
 | Agent 编排 | 待开发 |
 | 演示部署环境 | 待开发 |
@@ -79,18 +75,9 @@ $env:DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost/property_a
 .\.venv\Scripts\alembic.exe upgrade head
 ```
 
-项目级入口为 `property_agent.main:create_app`，当前统一注册报修、巡检和安防 Router。各业务
-Service 仍须由生产组合根装配数据库、身份、权限、确认、幂等、审计和消息 Port；未装配时
-业务接口会明确返回 `503 ADAPTER_NOT_CONFIGURED`，不会回退到 fake backend。费用模块只公开
-查询、详情和规则解释，不提供支付、退款、减免或账单状态修改入口。
-
-验证统一应用入口：
-
-```powershell
-.\.venv\Scripts\uvicorn.exe property_agent.main:create_app --factory
-```
-
-启动后可访问 `/health` 和 `/docs`；业务接口需要完成生产 Service 装配后才能使用。
+报修模块以 `create_app(service)` 工厂提供 FastAPI 适配器。完整应用必须先由公共平台模块装配
+数据库、身份、权限、确认、幂等、审计和消息 Port；当前分支不提供使用 fake backend 的生产
+启动入口。
 
 运行质量检查：
 

@@ -16,7 +16,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from property_agent.platform.database import Base
+from property_agent.platform.infrastructure.orm_models import Base
 
 
 # ----------------------------- 巡检任务 -----------------------------
@@ -49,6 +49,10 @@ class InspectionTaskModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ai_suggestions: Mapped[list[dict] | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=True, default=list
+    )
+    ai_pending_confirm: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     status_logs: Mapped[list["InspectionTaskStatusLogModel"]] = relationship(
         back_populates="task", cascade="all, delete-orphan"
@@ -76,6 +80,7 @@ class InspectionTaskRecordModel(Base):
     )
     is_supplement: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     actual_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    supplement_reason: Mapped[str | None] = mapped_column(Text, comment="补交原因（PRD 6.4）")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     task: Mapped[InspectionTaskModel] = relationship(back_populates="records")
@@ -129,6 +134,9 @@ class SecurityEventModel(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="REPORTED")
     assignee_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     grade_confirmed_by: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    report_source: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="MANUAL", comment="上报来源 MANUAL/AI（PRD 6.4）"
+    )
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

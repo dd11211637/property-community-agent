@@ -1,42 +1,167 @@
-from fastapi import FastAPI
+"""
+物业社区管理智能体 — 统一生产入口 (FastAPI)
 
+板块一：公共基础与生产运行 (PRD 5.4)
+────────────────────────────────────────────────────────
+装配链路:
+  Configuration → Database Engine / SessionFactory
+    → Application Services → FastAPI dependency_overrides
+
+挂载模块:
+  - platform  (auth, health, shared services)
+  - repair    (报修)
+  - announcement (公告)
+  - inspection (巡检与安防)
+  - billing   (费用查询与智能缴费)
+  - agent     (统一智能体会话)
+────────────────────────────────────────────────────────
+"""
+from __future__ import annotations
+
+from uuid import uuid4
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+from property_agent.agent.adapters.api.router import router as agent_router
+from property_agent.agent.application.errors import AgentSessionError
+from property_agent.announcement.adapters.api.router import router as announcement_router
 from property_agent.billing.adapters.api.router import router as billing_router
-from property_agent.billing.application.service import BillingService
-from property_agent.inspection.adapters.api.router import event_router, task_router
-from property_agent.inspection.application.service import (
-    InspectionTaskService,
-    SecurityEventService,
+from property_agent.inspection.adapters.api.router import (
+    event_router as inspection_event_router,
 )
-from property_agent.platform.http import install_http_foundation
+from property_agent.inspection.adapters.api.router import (
+    task_router as inspection_task_router,
+)
+from property_agent.inspection.domain.errors import BusinessError as InspectionBusinessError
+from property_agent.platform.adapters.api.envelope import (
+    error_envelope,
+    register_common_error_handlers,
+)
+from property_agent.platform.adapters.api.health_routes import router as health_router
+from property_agent.platform.adapters.api.routes import router as platform_router
+from property_agent.platform.container import lifespan
+from property_agent.platform.dependencies import bind_request_context_to_jwt
+from property_agent.platform.errors import BusinessError as PlatformBusinessError
 from property_agent.repair.adapters.api.router import router as repair_router
-from property_agent.repair.application.service import WorkOrderService
+from property_agent.repair.domain.errors import BusinessError as RepairBusinessError
+
+MAX_REQUEST_ID_LENGTH = 64
 
 
-def create_app(
-    *,
-    repair_service: WorkOrderService | None = None,
-    inspection_task_service: InspectionTaskService | None = None,
-    security_event_service: SecurityEventService | None = None,
-    billing_service: BillingService | None = None,
-) -> FastAPI:
-    """Create the project-level API and attach configured business services."""
+def _request_id(header_value: str | None) -> str:
+    if header_value is not None:
+        candidate = header_value.strip()
+        if 1 <= len(candidate) <= MAX_REQUEST_ID_LENGTH:
+            return candidate
+    return f"req_{uuid4().hex}"
 
-    app = FastAPI(title="Property Community Agent API", version="0.1.0")
-    app.state.work_order_service = repair_service
-    app.state.task_service = inspection_task_service
-    app.state.event_service = security_event_service
-    app.state.billing_service = billing_service
 
-    install_http_foundation(app)
+def create_app() -> FastAPI:
+    """Create the unified FastAPI application with all modules assembled.
 
-    @app.get("/health", tags=["platform"])
-    def health() -> dict[str, str]:
-        return {"status": "ok"}
+    Uses the lifespan context manager (PRD 5.4) to manage:
+    - Async SQLAlchemy engine and session pool
+    - Application service container assembly
+    - Graceful shutdown of database connections
 
+    Production services are configured via app.state.container and
+    dependency_overrides. Until real services are injected, repair/
+    inspection endpoints return 503 ADAPTER_NOT_CONFIGURED.
+    """
+    app = FastAPI(
+        title="Property Community Management Agent",
+        version="0.1.0",
+        description="物业社区管理智能体 — 统一后端服务",
+        lifespan=lifespan,
+    )
+
+    # ── Middleware ──────────────────────────────────────────────
+    @app.middleware("http")
+    async def request_id_middleware(request: Request, call_next):
+        request.state.request_id = _request_id(request.headers.get("X-Request-ID"))
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request.state.request_id
+        return response
+
+    # ── Error Handlers ─────────────────────────────────────────
+    @app.exception_handler(RepairBusinessError)
+    async def repair_error_handler(request: Request, exc: RepairBusinessError) -> JSONResponse:
+        return error_envelope(
+            request,
+            status_code=exc.status_code,
+            code=exc.code,
+            message=exc.message,
+            details=exc.details,
+        )
+
+    @app.exception_handler(InspectionBusinessError)
+    async def inspection_error_handler(
+        request: Request, exc: InspectionBusinessError
+    ) -> JSONResponse:
+        return error_envelope(
+            request,
+            status_code=exc.status_code,
+            code=exc.code,
+            message=exc.message,
+            details=exc.details,
+        )
+
+    @app.exception_handler(PlatformBusinessError)
+    async def business_error_handler(
+        request: Request, exc: PlatformBusinessError
+    ) -> JSONResponse:
+        # Raised by the announcement module and the shared validation helpers.
+        return error_envelope(
+            request,
+            status_code=exc.status_code,
+            code=exc.code,
+            message=exc.message,
+            details=exc.details,
+        )
+
+    @app.exception_handler(AgentSessionError)
+    async def agent_session_error_handler(
+        request: Request, exc: AgentSessionError
+    ) -> JSONResponse:
+        # 会话归属 / 生命周期 / 恢复守卫失败（PRD §6.5.8）
+        return error_envelope(
+            request,
+            status_code=exc.status_code,
+            code=exc.code,
+            message=exc.message,
+        )
+
+    # PlatformError / HTTPException / RequestValidationError
+    register_common_error_handlers(app)
+
+    # ── Mount Routers ──────────────────────────────────────────
+    # Health probes (PRD 5.4) — always mounted first
+    app.include_router(health_router)
+
+    # Platform (auth, house selection, confirmations) — always mounted
+    app.include_router(platform_router)
+
+    # Business modules — mounted unconditionally; endpoints return 503
+    # if services are not yet injected (per PRD: "未装配返回 503 ADAPTER_NOT_CONFIGURED")
     app.include_router(repair_router)
-    app.include_router(task_router)
-    app.include_router(event_router)
+    app.include_router(announcement_router)
+    app.include_router(inspection_task_router)
+    app.include_router(inspection_event_router)
     app.include_router(billing_router)
+
+    # 统一智能体：运行时未装配时同样返回 503 ADAPTER_NOT_CONFIGURED，
+    # 因此模型/编排不可用绝不影响上面的结构化业务接口（PRD §6.5.11）
+    app.include_router(agent_router)
+
+    # The announcement router depends on the auth *seam*
+    # (``platform.dependencies.get_request_context``) so it can also run as a
+    # standalone app. In the unified application the seam is bound to the real
+    # JWT dependency — no endpoint is reachable without a valid token.
+    bind_request_context_to_jwt(app)
+
     return app
 
-__all__ = ["create_app"]
+
+# ── Module-level app instance for uvicorn ──────────────────────
+app = create_app()

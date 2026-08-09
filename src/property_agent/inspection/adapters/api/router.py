@@ -9,9 +9,11 @@ from property_agent.inspection.adapters.api.dependencies import (
     get_task_service,
 )
 from property_agent.inspection.adapters.api.schemas import (
+    AddAiSuggestionRequest,
     AddTaskRecordRequest,
     AssignEventRequest,
     AssignTaskRequest,
+    ConfirmAiSuggestionsRequest,
     CreateInspectionTaskRequest,
     CreateSecurityEventRequest,
     Envelope,
@@ -26,6 +28,7 @@ from property_agent.inspection.adapters.presentation import (
     timeline_entry_data,
 )
 from property_agent.inspection.application.commands import (
+    AddAiSuggestionCommand,
     CreateInspectionTaskCommand,
     CreateSecurityEventCommand,
     ExecuteEventActionCommand,
@@ -39,7 +42,6 @@ from property_agent.inspection.application.service import (
     SecurityEventService,
 )
 from property_agent.inspection.domain.enums import EventAction, TaskAction
-from property_agent.platform.responses import success_envelope as _success
 
 task_router = APIRouter(prefix="/api/inspection-tasks", tags=["inspection-task"])
 event_router = APIRouter(prefix="/api/security-events", tags=["security-event"])
@@ -48,6 +50,10 @@ TaskServiceDep = Annotated[InspectionTaskService, Depends(get_task_service)]
 EventServiceDep = Annotated[SecurityEventService, Depends(get_event_service)]
 ContextDep = Annotated[RequestContext, Depends(get_request_context)]
 IdempotencyHeader = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)]
+
+
+def _success(data, context: RequestContext) -> Envelope:
+    return Envelope(success=True, data=data, error=None, request_id=context.request_id)
 
 
 # ============================== 巡检任务 ==============================
@@ -167,6 +173,7 @@ def submit_records(
             point=payload.point,
             note=payload.note,
             confirmation_token=payload.confirmation_token,
+            supplement_reason=payload.supplement_reason,
             attachment_ids=tuple(payload.attachment_ids),
         ),
         idempotency_key,
@@ -194,6 +201,7 @@ def add_record(
             attachment_ids=tuple(payload.attachment_ids),
             is_supplement=payload.is_supplement,
             actual_time=payload.actual_time,
+            supplement_reason=payload.supplement_reason,
         ),
         idempotency_key,
         service,
@@ -218,6 +226,42 @@ def complete_task(
         service,
         context,
     )
+
+
+@task_router.post("/{task_id}/ai-suggestions", response_model=Envelope, status_code=201)
+def add_ai_suggestion(
+    task_id: UUID,
+    payload: AddAiSuggestionRequest,
+    idempotency_key: IdempotencyHeader,
+    service: TaskServiceDep,
+    context: ContextDep,
+) -> Envelope:
+    task = service.add_ai_suggestion(
+        task_id,
+        AddAiSuggestionCommand(
+            point=payload.point,
+            finding=payload.finding,
+            severity=payload.severity,
+            model=payload.model,
+        ),
+        context,
+        idempotency_key=idempotency_key,
+    )
+    return _success(task_data(task, service, context), context)
+
+
+@task_router.post("/{task_id}/actions/confirm-ai", response_model=Envelope)
+def confirm_ai_suggestions(
+    task_id: UUID,
+    payload: ConfirmAiSuggestionsRequest,
+    idempotency_key: IdempotencyHeader,
+    service: TaskServiceDep,
+    context: ContextDep,
+) -> Envelope:
+    task = service.confirm_ai_suggestions(
+        task_id, context, idempotency_key=idempotency_key
+    )
+    return _success(task_data(task, service, context), context)
 
 
 def _execute_task(
@@ -247,6 +291,7 @@ def create_event(
             location=payload.location,
             description=payload.description,
             confirmation_token=payload.confirmation_token,
+            report_source=payload.report_source,
             attachment_ids=tuple(payload.attachment_ids),
         ),
         context,
@@ -352,6 +397,25 @@ def review_pass(
         event_id,
         ExecuteEventActionCommand(
             action=EventAction.REVIEW_PASS, expected_version=payload.expected_version
+        ),
+        idempotency_key,
+        service,
+        context,
+    )
+
+
+@event_router.post("/{event_id}/actions/grade-confirm", response_model=Envelope)
+def grade_confirm(
+    event_id: UUID,
+    payload: VersionedActionRequest,
+    idempotency_key: IdempotencyHeader,
+    service: EventServiceDep,
+    context: ContextDep,
+) -> Envelope:
+    return _execute_event(
+        event_id,
+        ExecuteEventActionCommand(
+            action=EventAction.GRADE_CONFIRM, expected_version=payload.expected_version
         ),
         idempotency_key,
         service,

@@ -16,7 +16,7 @@ from property_agent.inspection.application.service import (
     SecurityEventService,
 )
 from property_agent.inspection.domain.enums import Role
-from tests.inspection.support import Harness
+from tests.inspection_support import Harness
 
 
 @dataclass(frozen=True)

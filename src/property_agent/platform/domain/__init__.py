@@ -1,0 +1,1 @@
+"""Platform domain layer — exceptions and core domain types."""

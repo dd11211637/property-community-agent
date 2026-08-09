@@ -16,7 +16,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from property_agent.platform.database import Base
+from property_agent.platform.infrastructure.orm_models import Base
 
 
 class WorkOrderModel(Base):

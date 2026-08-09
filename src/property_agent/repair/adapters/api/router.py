@@ -3,7 +3,6 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Query
 
-from property_agent.platform.responses import success_envelope as _success
 from property_agent.repair.adapters.api.dependencies import get_request_context, get_service
 from property_agent.repair.adapters.api.schemas import (
     AssignRequest,
@@ -31,6 +30,10 @@ router = APIRouter(prefix="/api/work-orders", tags=["repair"])
 ServiceDependency = Annotated[WorkOrderService, Depends(get_service)]
 ContextDependency = Annotated[RequestContext, Depends(get_request_context)]
 IdempotencyHeader = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)]
+
+
+def _success(data, context: RequestContext) -> Envelope:
+    return Envelope(success=True, data=data, error=None, request_id=context.request_id)
 
 
 @router.post("", response_model=Envelope, status_code=201)

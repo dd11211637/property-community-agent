@@ -24,10 +24,11 @@ from property_agent.inspection.domain.enums import (
 from property_agent.inspection.infrastructure.database import create_session_factory
 from property_agent.inspection.infrastructure.models import Base
 from property_agent.inspection.infrastructure.uow import SqlAlchemyInspectionUnitOfWork
-from tests.inspection.support import (
+from tests.inspection_support import (
     FakeAttachmentPort,
     FakeAuditPort,
     FakeConfirmationPort,
+    FakeEscalationPort,
     FakeIdempotencyPort,
     FakeMessagePort,
     FakeStaffDirectoryPort,
@@ -54,7 +55,7 @@ def _uow_factory(engine, state, security_workers, duty_users):
     session_factory = create_session_factory(POSTGRES_URL)
 
     def factory():
-        return SqlAlchemyInspectionUnitOfWork(
+            return SqlAlchemyInspectionUnitOfWork(
             session_factory,
             lambda session: SharedPorts(
                 idempotency=FakeIdempotencyPort(state),
@@ -63,6 +64,7 @@ def _uow_factory(engine, state, security_workers, duty_users):
                 attachments=FakeAttachmentPort(),
                 audit=FakeAuditPort(state),
                 messages=FakeMessagePort(state),
+                escalation=FakeEscalationPort(state),
             ),
         )
 

@@ -1,0 +1,11 @@
+import { ClipboardCheck, ShieldAlert } from "lucide-react";
+import { apiRequest } from "../api/client";
+import type { InspectionTask, ListResult, SecurityEvent } from "../api/contracts";
+import { Empty, ErrorState, Loading } from "../components/AsyncState";
+import { useApi } from "../hooks/useApi";
+
+export function InspectionPage() {
+  const tasks = useApi(() => apiRequest<ListResult<InspectionTask>>("/api/inspection-tasks"));
+  const events = useApi(() => apiRequest<ListResult<SecurityEvent>>("/api/security-events"));
+  return <><header className="page-heading"><div><span className="eyebrow">SAFETY OPERATIONS</span><h1>巡检与安防事件</h1><p>巡检任务、异常记录和风险事件分开追踪。</p></div></header><div className="two-column"><section className="content-panel"><div className="panel-heading"><h2>巡检任务</h2><span className="entity-icon compact"><ClipboardCheck /></span></div>{tasks.loading ? <Loading /> : tasks.error ? <ErrorState error={tasks.error} retry={() => void tasks.reload()} /> : !tasks.data?.items.length ? <Empty title="暂无巡检任务" /> : <div className="entity-list">{tasks.data.items.map((task) => <article className="entity-card compact-card" key={task.id}><div className="entity-main"><span className={`status ${task.status.toLowerCase()}`}>{task.status}</span><h3>{task.title}</h3><p>{task.description}</p><small>版本 {task.version}</small></div></article>)}</div>}</section><section className="content-panel"><div className="panel-heading"><h2>安防事件</h2><span className="entity-icon compact danger"><ShieldAlert /></span></div>{events.loading ? <Loading /> : events.error ? <ErrorState error={events.error} retry={() => void events.reload()} /> : !events.data?.items.length ? <Empty title="暂无安防事件" detail="模型不可用时也可通过结构化流程人工上报。" /> : <div className="entity-list">{events.data.items.map((event) => <article className="entity-card compact-card" key={event.id}><div className="entity-main"><div><span className={`status ${event.status.toLowerCase()}`}>{event.status}</span><span className={`risk ${event.risk_level.toLowerCase()}`}>{event.risk_level}</span></div><h3>{event.location}</h3><p>{event.description}</p><small>{event.event_type} · 版本 {event.version}</small></div></article>)}</div>}</section></div></>;
+}

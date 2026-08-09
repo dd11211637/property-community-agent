@@ -40,16 +40,10 @@ def upgrade() -> None:
         sa.Column("closed_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("community_id", "business_no", name="uq_inspection_tasks_business_no"),
-        sa.UniqueConstraint(
-            "created_by", "create_idempotency_key", name="uq_inspection_tasks_creator_idem"
-        ),
+        sa.UniqueConstraint("created_by", "create_idempotency_key", name="uq_inspection_tasks_creator_idem"),
     )
-    op.create_index(
-        "ix_inspection_tasks_community_status", "inspection_tasks", ["community_id", "status"]
-    )
-    op.create_index(
-        "ix_inspection_tasks_assignee_status", "inspection_tasks", ["assignee_id", "status"]
-    )
+    op.create_index("ix_inspection_tasks_community_status", "inspection_tasks", ["community_id", "status"])
+    op.create_index("ix_inspection_tasks_assignee_status", "inspection_tasks", ["assignee_id", "status"])
 
     op.create_table(
         "inspection_task_records",
@@ -67,11 +61,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["task_id"], ["inspection_tasks.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        "ix_inspection_task_records_task_created",
-        "inspection_task_records",
-        ["task_id", "created_at"],
-    )
+    op.create_index("ix_inspection_task_records_task_created", "inspection_task_records", ["task_id", "created_at"])
 
     op.create_table(
         "inspection_task_status_logs",
@@ -116,16 +106,10 @@ def upgrade() -> None:
         sa.Column("closed_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("community_id", "business_no", name="uq_security_events_business_no"),
-        sa.UniqueConstraint(
-            "reporter_id", "create_idempotency_key", name="uq_security_events_reporter_idem"
-        ),
+        sa.UniqueConstraint("reporter_id", "create_idempotency_key", name="uq_security_events_reporter_idem"),
     )
-    op.create_index(
-        "ix_security_events_community_status", "security_events", ["community_id", "status"]
-    )
-    op.create_index(
-        "ix_security_events_assignee_status", "security_events", ["assignee_id", "status"]
-    )
+    op.create_index("ix_security_events_community_status", "security_events", ["community_id", "status"])
+    op.create_index("ix_security_events_assignee_status", "security_events", ["assignee_id", "status"])
 
     op.create_table(
         "security_event_disposals",
@@ -169,20 +153,14 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "ix_security_event_status_logs_event_created", table_name="security_event_status_logs"
-    )
+    op.drop_index("ix_security_event_status_logs_event_created", table_name="security_event_status_logs")
     op.drop_table("security_event_status_logs")
-    op.drop_index(
-        "ix_security_event_disposals_event_created", table_name="security_event_disposals"
-    )
+    op.drop_index("ix_security_event_disposals_event_created", table_name="security_event_disposals")
     op.drop_table("security_event_disposals")
     op.drop_index("ix_security_events_assignee_status", table_name="security_events")
     op.drop_index("ix_security_events_community_status", table_name="security_events")
     op.drop_table("security_events")
-    op.drop_index(
-        "ix_inspection_task_status_logs_task_created", table_name="inspection_task_status_logs"
-    )
+    op.drop_index("ix_inspection_task_status_logs_task_created", table_name="inspection_task_status_logs")
     op.drop_table("inspection_task_status_logs")
     op.drop_index("ix_inspection_task_records_task_created", table_name="inspection_task_records")
     op.drop_table("inspection_task_records")

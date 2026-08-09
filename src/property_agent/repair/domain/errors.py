@@ -1,6 +1,16 @@
+from dataclasses import dataclass
 from typing import Any
 
-from property_agent.platform.errors import BusinessError
+
+@dataclass(slots=True)
+class BusinessError(Exception):
+    code: str
+    message: str
+    status_code: int
+    details: dict[str, Any] | None = None
+
+    def __str__(self) -> str:
+        return self.message
 
 
 def validation_error(message: str, **details: Any) -> BusinessError:
@@ -43,9 +53,23 @@ def idempotency_conflict() -> BusinessError:
     )
 
 
-def handover_required() -> BusinessError:
+def handover_required(
+    handover_ticket_id: Any = None, notified_staff: int | None = None
+) -> BusinessError:
+    """High-risk case routed to a human.
+
+    When a handover ticket was actually created, its ID is returned in
+    ``details`` so the caller can track the manual follow-up instead of
+    receiving a bare rejection.
+    """
+    details: dict[str, Any] = {}
+    if handover_ticket_id is not None:
+        details["handover_ticket_id"] = str(handover_ticket_id)
+    if notified_staff is not None:
+        details["notified_staff"] = notified_staff
     return BusinessError(
         "HANDOVER_REQUIRED",
         "High-risk reports must be handed over to authorized personnel.",
         422,
+        details or None,
     )
