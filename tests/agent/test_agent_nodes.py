@@ -27,7 +27,7 @@ def test_classify_intent_sets_intent():
 
 def test_classify_intent_low_confidence_becomes_uncertain():
     node = classify_intent_node(DeterministicModelGateway())
-    s = _state(slots={"user_text": "你好呀"})
+    s = _state(slots={"user_text": "随便聊聊"})
     node(s)
     assert s.intent == Intent.UNCERTAIN.value
 

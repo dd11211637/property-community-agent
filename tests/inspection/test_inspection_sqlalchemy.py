@@ -2,6 +2,7 @@ import os
 import uuid
 
 import pytest
+from sqlalchemy import create_engine
 
 from property_agent.inspection.adapters.api.dependencies import get_request_context  # noqa: F401
 from property_agent.inspection.application.commands import (
@@ -22,7 +23,15 @@ from property_agent.inspection.domain.enums import (
     TaskStatus,
 )
 from property_agent.inspection.infrastructure.database import create_session_factory
-from property_agent.inspection.infrastructure.models import Base
+from property_agent.inspection.infrastructure.models import (
+    Base,
+    InspectionTaskModel,
+    InspectionTaskRecordModel,
+    InspectionTaskStatusLogModel,
+    SecurityEventDisposalModel,
+    SecurityEventModel,
+    SecurityEventStatusLogModel,
+)
 from property_agent.inspection.infrastructure.uow import SqlAlchemyInspectionUnitOfWork
 from tests.inspection_support import (
     FakeAttachmentPort,
@@ -37,17 +46,29 @@ from tests.inspection_support import (
 )
 
 POSTGRES_URL = os.getenv("TEST_POSTGRES_URL")
-pytestmark = pytest.mark.skipif(
-    not POSTGRES_URL, reason="requires TEST_POSTGRES_URL and a dedicated PostgreSQL database"
-)
+pytestmark = [
+    pytest.mark.postgres,
+    pytest.mark.skipif(
+        not POSTGRES_URL, reason="requires TEST_POSTGRES_URL and a dedicated PostgreSQL database"
+    ),
+]
+
+INSPECTION_TABLES = [
+    InspectionTaskModel.__table__,
+    InspectionTaskRecordModel.__table__,
+    InspectionTaskStatusLogModel.__table__,
+    SecurityEventModel.__table__,
+    SecurityEventDisposalModel.__table__,
+    SecurityEventStatusLogModel.__table__,
+]
 
 
 @pytest.fixture
 def env():
-    engine = create_session_factory(POSTGRES_URL, echo=False)()
-    Base.metadata.create_all(engine)
+    engine = create_engine(POSTGRES_URL, pool_pre_ping=True)
+    Base.metadata.create_all(engine, tables=INSPECTION_TABLES)
     yield engine
-    Base.metadata.drop_all(engine)
+    Base.metadata.drop_all(engine, tables=INSPECTION_TABLES)
     engine.dispose()
 
 

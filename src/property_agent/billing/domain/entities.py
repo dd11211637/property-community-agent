@@ -243,7 +243,7 @@ class Bill:
             receipt_no    VARCHAR(32),
             created_at    TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at    TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE (user_id, bill_period)
+            UNIQUE (user_id, room_id, bill_period)
         );
     """
 

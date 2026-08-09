@@ -32,7 +32,8 @@ from property_agent.agent.subgraphs import (
 )
 
 GENERAL_HELP_TEXT = (
-    "我可以帮您办理：报修、公告查询、账单查询与财务咨询、巡检与安防。请说明具体需求。"
+    "我可以帮您办理：报修、公告查询、账单查询与财务咨询、巡检与安防。"
+    "如果想了解社区服务守则，请说明具体主题；正式规定以物业发布的公告为准。"
 )
 
 ContextLoader = Callable[[GraphState], GraphState]

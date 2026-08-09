@@ -11,7 +11,12 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
+from property_agent.agent.infrastructure import models as agent_models  # noqa: F401
+from property_agent.announcement.infrastructure import models as announcement_models  # noqa: F401
+from property_agent.billing.infrastructure import orm_models as billing_models  # noqa: F401
+from property_agent.inspection.infrastructure import models as inspection_models  # noqa: F401
 from property_agent.platform.infrastructure.orm_models import Base
+from property_agent.repair.infrastructure import models as repair_models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:

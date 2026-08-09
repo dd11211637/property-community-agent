@@ -17,15 +17,29 @@ AI 负责意图识别、信息补全、只读查询、内容生成和操作建�
 
 | 范围 | 状态 |
 |---|---|
-| 项目级目录与架构文档 | 已建立 |
-| 报修 P0 后端闭环 | 在 `repair` 分支开发 |
-| 公共身份、权限和基础数据 | 待集成 |
-| 公告、费用、巡检后端 | 待开发 |
-| Web 前端 | 已建立目录，待初始化 |
-| Agent 编排 | 待开发 |
-| 演示部署环境 | 待开发 |
+| 统一身份、JWT、房屋选择和 RBAC | 已实现，待真实浏览器验收 |
+| 报修、公告、Billing、巡检安防后端 | 已合并，待全流程联调 |
+| 统一 FastAPI 组合根与 Alembic 迁移 | 已实现，Billing 正在纳入统一 PostgreSQL |
+| Web 前端基础页面与 API 客户端 | 已实现，四类业务闭环待补齐 |
+| Agent 编排、持久化确认与关键词路由 | 已实现，DeepSeek 真实网关待接入 |
+| 消息中心与管理工作台 API | 待实现（M2） |
+| Docker Compose 真实 PostgreSQL 环境 | 正在实现与验收（M1） |
 
-“待开发”仅表示已纳入 MVP，不代表当前代码已经实现。
+“已实现”表示已有生产调用链和自动化测试，不等同于已通过真实 PostgreSQL
+和浏览器端到端联调。
+
+## Docker Compose 联调
+
+启动 PostgreSQL、迁移、种子、后端和构建后前端：
+
+```powershell
+.\scripts\compose.ps1 Up
+```
+
+前端访问 `http://localhost:5173`，后端健康检查为 `http://localhost:8000/ready`。
+演示账号、重置和故障注入见 [`testing/DEMO_ACCOUNTS.md`](testing/DEMO_ACCOUNTS.md)。
+该脚本会使用指向当前仓库的 ASCII 目录联接，规避 Windows BuildKit 对中文检出路径的
+gRPC 会话头兼容问题；不会复制或移动仓库。
 
 ## 仓库结构
 
@@ -75,9 +89,8 @@ $env:DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost/property_a
 .\.venv\Scripts\alembic.exe upgrade head
 ```
 
-报修模块以 `create_app(service)` 工厂提供 FastAPI 适配器。完整应用必须先由公共平台模块装配
-数据库、身份、权限、确认、幂等、审计和消息 Port；当前分支不提供使用 fake backend 的生产
-启动入口。
+统一应用由 `property_agent.main:app` 启动，生产组合根负责装配数据库、身份、权限、
+确认、幂等、审计和消息 Port。故障注入只存在于 `testing.demo_app`，不会被生产入口导入。
 
 运行质量检查：
 

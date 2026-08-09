@@ -53,7 +53,9 @@ def test_deterministic_gateway_classifies():
     assert gw.classify_intent("这个月物业费怎么缴")[0] == Intent.BILLING.value
     assert gw.classify_intent("小区要发停水公告")[0] == Intent.ANNOUNCEMENT.value
     assert gw.classify_intent("今晚安保巡逻有隐患")[0] == Intent.INSPECTION.value
-    assert gw.classify_intent("你好")[0] == Intent.UNCERTAIN.value
+    assert gw.classify_intent("帮助")[0] == Intent.GENERAL_HELP.value
+    assert gw.classify_intent("现在社区服务守则是怎么样")[0] == Intent.GENERAL_HELP.value
+    assert gw.classify_intent("随便聊聊")[0] == Intent.UNCERTAIN.value
 
 
 def test_unavailable_gateway_degrades():

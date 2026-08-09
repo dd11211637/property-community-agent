@@ -1,0 +1,129 @@
+name: property-community-agent
+
+x-backend-environment: &backend-environment
+  ENV: demo
+  DEBUG: "false"
+  DATABASE_URL: postgresql+psycopg://property_agent:demo-password@postgres:5432/property_agent_demo
+  JWT_SECRET: demo-only-secret-change-before-production-32chars
+  JWT_ALGORITHM: HS256
+  JWT_EXPIRE_HOURS: "8"
+  DEEPSEEK_BASE_URL: https://api.deepseek.com
+  DEEPSEEK_MODEL: deepseek-v4-flash
+  DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+  DEEPSEEK_CONNECT_TIMEOUT_SECONDS: "3"
+  DEEPSEEK_READ_TIMEOUT_SECONDS: "12"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: property_agent_demo
+      POSTGRES_USER: property_agent
+      POSTGRES_PASSWORD: demo-password
+    ports:
+      - "5432:5432"
+    volumes:
+      - property_agent_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U property_agent -d property_agent_demo"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build:
+      context: .
+      dockerfile: infra/backend.Dockerfile
+    environment: *backend-environment
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  seed:
+    build:
+      context: .
+      dockerfile: infra/backend.Dockerfile
+    environment: *backend-environment
+    command: ["python", "-m", "testing.seeds.seed_demo"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  backend:
+    build:
+      context: .
+      dockerfile: infra/backend.Dockerfile
+    environment: *backend-environment
+    ports:
+      - "8000:8000"
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  frontend:
+    build:
+      context: .
+      dockerfile: infra/frontend.Dockerfile
+    ports:
+      - "5173:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  reset:
+    profiles: ["tools"]
+    build:
+      context: .
+      dockerfile: infra/backend.Dockerfile
+    environment: *backend-environment
+    command: ["python", "-m", "testing.reset.reset_demo", "--yes"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  postgres-test:
+    profiles: ["testing"]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: property_agent_test
+      POSTGRES_USER: property_agent
+      POSTGRES_PASSWORD: test-password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U property_agent -d property_agent_test"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  postgres-tests:
+    profiles: ["testing"]
+    build:
+      context: .
+      dockerfile: infra/backend.Dockerfile
+      target: test
+    environment:
+      TEST_POSTGRES_URL: postgresql+psycopg://property_agent:test-password@postgres-test:5432/property_agent_test
+    command: ["python", "-m", "pytest", "-rs"]
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  property_agent_postgres:

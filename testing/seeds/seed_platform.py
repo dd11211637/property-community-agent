@@ -18,16 +18,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
 
+from sqlalchemy.orm import sessionmaker
+
 # Ensure the project root is on sys.path
 _project_root = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_project_root / "src"))
 
-from property_agent.platform.infrastructure.database import (  # noqa: E402
-    get_engine,
-    get_session_factory,
-)
+from property_agent.platform.infrastructure.database import get_engine  # noqa: E402
 from property_agent.platform.infrastructure.orm_models import (  # noqa: E402
-    Base,
     CommunityModel,
     HouseModel,
     UserHouseBindingModel,
@@ -68,14 +66,23 @@ SYSADMIN_A = UUID("a2000000-0000-0000-0000-000000000070")  # 系统管理员
 RESIDENT_B = UUID("b2000000-0000-0000-0000-000000000001")  # 钱七 - Community B
 
 
-def seed(engine) -> None:
-    """Create all tables and insert demo data."""
-    Base.metadata.create_all(bind=engine)
+def seed(engine) -> bool:
+    """Insert deterministic platform data after Alembic migrations.
 
-    factory = get_session_factory()
+    Returns ``True`` when rows were inserted and ``False`` when the complete
+    demo dataset was already present. Schema ownership belongs to Alembic, so
+    this function deliberately never calls ``metadata.create_all``.
+    """
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
     session = factory()
 
     try:
+        existing = session.get(CommunityModel, COMMUNITY_A)
+        if existing is not None:
+            if session.get(CommunityModel, COMMUNITY_B) is None:
+                raise RuntimeError("Partial demo seed detected; run the guarded reset command.")
+            print("Platform demo data already present; skipping.")
+            return False
         _seed_communities(session)
         _seed_houses(session)
         _seed_users(session)
@@ -83,6 +90,7 @@ def seed(engine) -> None:
         _seed_bindings(session)
         session.commit()
         print("Demo data seeded successfully.")
+        return True
     except Exception:
         session.rollback()
         raise
@@ -273,7 +281,7 @@ def _seed_users(session) -> None:
             ),
         ]
     )
-    print("  [+] 12 users seeded")
+    print("  [+] 11 users seeded")
 
 
 def _seed_roles(session) -> None:

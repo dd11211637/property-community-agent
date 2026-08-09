@@ -181,7 +181,7 @@ class BillingUserModel(Base):
 
     __tablename__ = "sys_users"
 
-    user_id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="用户唯一标识")
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True, comment="用户唯一标识")
     user_name: Mapped[str] = mapped_column(String(64), nullable=False, comment="用户姓名")
     role: Mapped[str] = mapped_column(String(16), nullable=False, default="owner", comment="角色")
     building_id: Mapped[str | None] = mapped_column(
@@ -240,7 +240,7 @@ class BillModel(Base):
             receipt_no    VARCHAR(32),
             created_at    TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at    TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE (user_id, bill_period)
+            UNIQUE (user_id, room_id, bill_period)
         ) PARTITION BY RANGE (due_date);
     """
 
@@ -248,7 +248,7 @@ class BillModel(Base):
 
     bill_id: Mapped[str] = mapped_column(String(32), primary_key=True, comment="账单唯一标识")
     user_id: Mapped[str] = mapped_column(
-        String(32), ForeignKey("sys_users.user_id"), nullable=False, comment="业主ID"
+        String(64), ForeignKey("sys_users.user_id"), nullable=False, comment="业主ID"
     )
     room_id: Mapped[str] = mapped_column(
         String(32), ForeignKey("community_rooms.room_id"), nullable=False, comment="房号ID"
@@ -308,7 +308,7 @@ class BillModel(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("user_id", "bill_period", name="uq_bill_period"),
+        UniqueConstraint("user_id", "room_id", "bill_period", name="uq_bill_user_room_period"),
         Index("idx_bills_user_id", "user_id"),
         Index("idx_bills_status", "status"),
         Index("idx_bills_due_date", "due_date"),
@@ -352,7 +352,7 @@ class PaymentModel(Base):
         String(32), ForeignKey("fee_bills.bill_id"), nullable=False, comment="关联账单ID"
     )
     user_id: Mapped[str] = mapped_column(
-        String(32), ForeignKey("sys_users.user_id"), nullable=False, comment="缴费用户ID"
+        String(64), ForeignKey("sys_users.user_id"), nullable=False, comment="缴费用户ID"
     )
     pay_amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, comment="支付金额")
     pay_method: Mapped[str] = mapped_column(
@@ -413,7 +413,7 @@ class ReceiptModel(Base):
         String(32), ForeignKey("fee_bills.bill_id"), nullable=False, comment="关联账单ID"
     )
     user_id: Mapped[str] = mapped_column(
-        String(32), ForeignKey("sys_users.user_id"), nullable=False, comment="业主ID"
+        String(64), ForeignKey("sys_users.user_id"), nullable=False, comment="业主ID"
     )
     payment_id: Mapped[str] = mapped_column(
         String(32), ForeignKey("fee_payments.payment_id"), nullable=False, comment="关联支付记录ID"

@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import create_engine
 
 from property_agent.announcement.application.commands import (
     AnnouncementSearch,
@@ -10,21 +11,39 @@ from property_agent.announcement.application.commands import (
 )
 from property_agent.announcement.application.service import AnnouncementService
 from property_agent.announcement.infrastructure.database import create_session_factory
-from property_agent.announcement.infrastructure.models import Base
+from property_agent.announcement.infrastructure.models import (
+    AnnouncementAudienceSnapshotModel,
+    AnnouncementModel,
+    AnnouncementReviewModel,
+    AnnouncementVersionModel,
+    AnnouncementWithdrawalModel,
+    Base,
+)
 from property_agent.announcement.infrastructure.uow import SqlAlchemyAnnouncementUnitOfWork
 from property_agent.platform.context import RequestContext
 from property_agent.platform.roles import Role
 from tests.announcement.support import FakeAudienceResolver, FakeAudit, FakeIdempotency, FakeState
 
 POSTGRES_URL = os.getenv("TEST_POSTGRES_URL")
-pytestmark = pytest.mark.skipif(
-    not POSTGRES_URL, reason="requires TEST_POSTGRES_URL and a dedicated PostgreSQL database"
-)
+pytestmark = [
+    pytest.mark.postgres,
+    pytest.mark.skipif(
+        not POSTGRES_URL, reason="requires TEST_POSTGRES_URL and a dedicated PostgreSQL database"
+    ),
+]
+
+ANNOUNCEMENT_TABLES = [
+    AnnouncementModel.__table__,
+    AnnouncementVersionModel.__table__,
+    AnnouncementReviewModel.__table__,
+    AnnouncementAudienceSnapshotModel.__table__,
+    AnnouncementWithdrawalModel.__table__,
+]
 
 
 def test_repository_persists_and_scopes_announcements() -> None:
-    engine = create_session_factory(POSTGRES_URL)().get_bind()
-    Base.metadata.create_all(engine)
+    engine = create_engine(POSTGRES_URL, pool_pre_ping=True)
+    Base.metadata.create_all(engine, tables=ANNOUNCEMENT_TABLES)
     state = FakeState()
     members = (uuid4(),)
     sessions = create_session_factory(POSTGRES_URL)
@@ -54,5 +73,5 @@ def test_repository_persists_and_scopes_announcements() -> None:
         stranger = RequestContext(uuid4(), uuid4(), frozenset({Role.MANAGER}), "other")
         assert service.search(AnnouncementSearch(), stranger) == []
     finally:
-        Base.metadata.drop_all(engine)
+        Base.metadata.drop_all(engine, tables=ANNOUNCEMENT_TABLES)
         engine.dispose()

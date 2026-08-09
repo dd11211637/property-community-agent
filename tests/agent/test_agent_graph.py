@@ -244,3 +244,13 @@ def test_read_path_needs_no_confirmation():
     assert result["done"] is True
     assert rec.names == ["billing_query"]
     assert result["state"].confirmation_token is None
+
+
+def test_general_help_routes_without_repeated_clarification():
+    graph, rec = build_env()
+    result = graph.invoke(_state("c9", "帮助"))
+
+    assert result["done"] is True
+    assert result["state"].intent == Intent.GENERAL_HELP.value
+    assert rec.calls == []
+    assert any("正式规定以物业发布的公告为准" in m["content"] for m in result["state"].messages)
