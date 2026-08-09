@@ -1,15 +1,24 @@
 import { ArrowUp, Bot, ChevronRight, Headphones, ReceiptText, ShieldAlert, Sparkles, Wrench } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
-import { apiRequest, createIdempotencyKey } from "../api/client";
+import { apiRequest } from "../api/client";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 
 type AgentReply = {
-  message: string;
+  reply: string;
   operation_level?: "read" | "write-low-risk" | "write-high-risk";
-  pending_action?: { title: string; summary: Record<string, string>; confirmation_token: string };
+  pending_confirmation?: { summary: string; params: Record<string, unknown>; action_hash: string };
   handover_required?: boolean;
 };
+
+function conversationId(): string {
+  const key = "property_agent_conversation_id";
+  const existing = sessionStorage.getItem(key);
+  if (existing) return existing;
+  const created = crypto.randomUUID();
+  sessionStorage.setItem(key, created);
+  return created;
+}
 
 export function HomePage() {
   const [input, setInput] = useState("");
@@ -25,9 +34,9 @@ export function HomePage() {
     setMessages((items) => [...items, { role: "user", text }]);
     setInput(""); setPending(true);
     try {
-      const reply = await apiRequest<AgentReply>("/api/agent/messages", { method: "POST", body: { message: text } });
-      setMessages((items) => [...items, { role: "assistant", text: reply.message }]);
-      setAction(reply.pending_action);
+      const reply = await apiRequest<AgentReply>(`/api/agent/conversations/${conversationId()}/messages`, { method: "POST", body: { text } });
+      setMessages((items) => [...items, { role: "assistant", text: reply.reply }]);
+      setAction(reply.pending_confirmation);
     } catch (reason) {
       setMessages((items) => [...items, { role: "assistant", text: reason instanceof Error ? reason.message : "服务暂时不可用。" }]);
     } finally { setPending(false); }
@@ -49,7 +58,7 @@ export function HomePage() {
         <form className="chat-input" onSubmit={send}><input value={input} onChange={(e) => setInput(e.target.value)} placeholder="例如：我家厨房水管漏水，想报修" aria-label="发送给社区智能体" /><button aria-label="发送" disabled={pending}><ArrowUp /></button></form>
         <small className="agent-disclaimer">AI 可能出错；费用、状态和操作结果以后端业务记录为准。</small>
       </section>
-      {action && <ConfirmDialog title={action.title} summary={<dl className="summary-list">{Object.entries(action.summary).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}</dl>} onClose={() => setAction(undefined)} onConfirm={async () => { await apiRequest("/api/agent/actions/confirm", { method: "POST", idempotencyKey: createIdempotencyKey("agent-confirm"), body: { confirmation_token: action.confirmation_token } }); }} />}
+      {action && <ConfirmDialog title={action.summary} summary={<dl className="summary-list">{Object.entries(action.params).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>)}</dl>} onClose={() => setAction(undefined)} onConfirm={async () => { await apiRequest(`/api/agent/conversations/${conversationId()}/confirmations`, { method: "POST", body: { confirmed: true, action_hash: action.action_hash } }); }} />}
     </>
   );
 }

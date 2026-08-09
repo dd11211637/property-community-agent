@@ -61,13 +61,17 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     throw new ApiError(0, "NETWORK_ERROR", "无法连接服务，请检查网络或稍后重试。");
   }
 
-  let envelope: Envelope<T>;
+  let payload: unknown;
   try {
-    envelope = (await response.json()) as Envelope<T>;
+    payload = await response.json();
   } catch {
     throw new ApiError(response.status, "INVALID_RESPONSE", "服务返回了无法识别的响应。");
   }
-  if (!response.ok || !envelope.success || envelope.data === null) {
+  const isEnvelope = typeof payload === "object" && payload !== null &&
+    typeof (payload as Partial<Envelope<T>>).success === "boolean";
+  if (isEnvelope) {
+    const envelope = payload as Envelope<T>;
+    if (response.ok && envelope.success && envelope.data !== null) return envelope.data;
     throw new ApiError(
       response.status,
       envelope.error?.code ?? `HTTP_${response.status}`,
@@ -76,7 +80,14 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
       envelope.error?.details ?? null,
     );
   }
-  return envelope.data;
+  if (!response.ok) {
+    const detail = typeof payload === "object" && payload !== null
+      ? (payload as { detail?: unknown }).detail
+      : null;
+    const message = typeof detail === "string" ? detail : "请求未成功。";
+    throw new ApiError(response.status, `HTTP_${response.status}`, message);
+  }
+  return payload as T;
 }
 
 export function queryString(params: Record<string, string | number | boolean | undefined>): string {

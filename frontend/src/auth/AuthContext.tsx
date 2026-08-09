@@ -1,7 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
 import { apiRequest } from "../api/client";
-import type { House, Session } from "../api/contracts";
+import type { House, LoginResponse, Session } from "../api/contracts";
 
 type AuthValue = {
   session: Session | null;
@@ -42,20 +42,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       session,
       login: async (account, password) => {
-        const next = await apiRequest<Session>("/api/auth/login", {
+        const response = await apiRequest<LoginResponse>("/api/auth/login", {
           method: "POST",
-          body: { account, password },
+          body: { username: account, password },
         });
+        const houses = response.house_ids.map((id, index) => ({
+          id,
+          label: `房屋 ${index + 1} · ${id.slice(0, 8)}`,
+        }));
+        const next: Session = {
+          access_token: response.access_token,
+          actor: {
+            id: response.actor_id,
+            display_name: response.display_name,
+            roles: response.roles,
+            community_name: response.community_name,
+          },
+          houses,
+          current_house_id: response.current_house_id,
+        };
         persist(next);
       },
       logout: () => persist(null),
       selectHouse: async (house) => {
         if (!session) return;
-        await apiRequest("/api/session/current-house", {
-          method: "PUT",
+        const selected = await apiRequest<{ house_id: string; building: string; unit: string; room_no: string }>("/api/auth/house", {
+          method: "POST",
           body: { house_id: house.id },
         });
-        persist({ ...session, current_house_id: house.id });
+        const houses = session.houses.map((item) => item.id === selected.house_id
+          ? { ...item, label: `${selected.building} ${selected.unit}单元 ${selected.room_no}` }
+          : item);
+        persist({ ...session, houses, current_house_id: selected.house_id });
       },
     }),
     [session],

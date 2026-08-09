@@ -16,6 +16,17 @@ export type Session = {
   current_house_id?: string | null;
 };
 
+export type LoginResponse = {
+  access_token: string;
+  actor_id: string;
+  display_name: string;
+  community_id: string;
+  community_name: string;
+  roles: Role[];
+  house_ids: string[];
+  current_house_id?: string | null;
+};
+
 export type ListResult<T> = { items: T[]; total?: number; limit: number; offset: number };
 export type WorkOrder = {
   id: string;
@@ -29,16 +40,14 @@ export type WorkOrder = {
   available_actions?: string[];
 };
 export type Bill = {
-  id: string;
-  external_bill_no: string;
-  fee_type: string;
-  period_start: string;
-  period_end: string;
-  amount: string;
-  payment_status: string;
-  source_system: string;
-  source_updated_at: string;
-  version?: number;
+  bill_id: string;
+  bill_period: string;
+  total_amount: string | number;
+  status: string;
+  fee_type?: string | null;
+  version: number;
+  source_time?: string | null;
+  rule_version?: string | null;
 };
 export type InspectionTask = {
   id: string;
