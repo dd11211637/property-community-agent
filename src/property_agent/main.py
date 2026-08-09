@@ -10,20 +10,24 @@
 挂载模块:
   - platform  (auth, health, shared services)
   - repair    (报修)
+  - announcement (公告)
   - inspection (巡检与安防)
-  - billing   (费用查询与智能缴费)
+  - billing   (账单查询、规则解释与财务咨询)
+  - agent     (统一智能体会话)
 ────────────────────────────────────────────────────────
 """
+
 from __future__ import annotations
 
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
-from fastapi.encoders import jsonable_encoder
-from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from property_agent.billing.adapters.api.routes import router as billing_router
+from property_agent.agent.adapters.api.router import router as agent_router
+from property_agent.agent.application.errors import AgentSessionError
+from property_agent.announcement.adapters.api.router import router as announcement_router
+from property_agent.billing.adapters.api.router import router as billing_router
 from property_agent.inspection.adapters.api.router import (
     event_router as inspection_event_router,
 )
@@ -31,9 +35,15 @@ from property_agent.inspection.adapters.api.router import (
     task_router as inspection_task_router,
 )
 from property_agent.inspection.domain.errors import BusinessError as InspectionBusinessError
+from property_agent.platform.adapters.api.envelope import (
+    error_envelope,
+    register_common_error_handlers,
+)
 from property_agent.platform.adapters.api.health_routes import router as health_router
 from property_agent.platform.adapters.api.routes import router as platform_router
 from property_agent.platform.container import lifespan
+from property_agent.platform.dependencies import bind_request_context_to_jwt
+from property_agent.platform.errors import BusinessError as PlatformBusinessError
 from property_agent.repair.adapters.api.router import router as repair_router
 from property_agent.repair.domain.errors import BusinessError as RepairBusinessError
 
@@ -78,55 +88,49 @@ def create_app() -> FastAPI:
     # ── Error Handlers ─────────────────────────────────────────
     @app.exception_handler(RepairBusinessError)
     async def repair_error_handler(request: Request, exc: RepairBusinessError) -> JSONResponse:
-        return JSONResponse(
+        return error_envelope(
+            request,
             status_code=exc.status_code,
-            content={
-                "success": False,
-                "data": None,
-                "error": {
-                    "code": exc.code,
-                    "message": exc.message,
-                    "details": exc.details,
-                },
-                "request_id": getattr(request.state, "request_id", ""),
-            },
+            code=exc.code,
+            message=exc.message,
+            details=exc.details,
         )
 
     @app.exception_handler(InspectionBusinessError)
     async def inspection_error_handler(
         request: Request, exc: InspectionBusinessError
     ) -> JSONResponse:
-        return JSONResponse(
+        return error_envelope(
+            request,
             status_code=exc.status_code,
-            content={
-                "success": False,
-                "data": None,
-                "error": {
-                    "code": exc.code,
-                    "message": exc.message,
-                    "details": exc.details,
-                },
-                "request_id": getattr(request.state, "request_id", ""),
-            },
+            code=exc.code,
+            message=exc.message,
+            details=exc.details,
         )
 
-    @app.exception_handler(RequestValidationError)
-    async def validation_error_handler(
-        request: Request, exc: RequestValidationError
-    ) -> JSONResponse:
-        return JSONResponse(
-            status_code=422,
-            content={
-                "success": False,
-                "data": None,
-                "error": {
-                    "code": "VALIDATION_ERROR",
-                    "message": "The request payload is invalid.",
-                    "details": {"errors": jsonable_encoder(exc.errors())},
-                },
-                "request_id": getattr(request.state, "request_id", ""),
-            },
+    @app.exception_handler(PlatformBusinessError)
+    async def business_error_handler(request: Request, exc: PlatformBusinessError) -> JSONResponse:
+        # Raised by the announcement module and the shared validation helpers.
+        return error_envelope(
+            request,
+            status_code=exc.status_code,
+            code=exc.code,
+            message=exc.message,
+            details=exc.details,
         )
+
+    @app.exception_handler(AgentSessionError)
+    async def agent_session_error_handler(request: Request, exc: AgentSessionError) -> JSONResponse:
+        # 会话归属 / 生命周期 / 恢复守卫失败（PRD §6.5.8）
+        return error_envelope(
+            request,
+            status_code=exc.status_code,
+            code=exc.code,
+            message=exc.message,
+        )
+
+    # PlatformError / HTTPException / RequestValidationError
+    register_common_error_handlers(app)
 
     # ── Mount Routers ──────────────────────────────────────────
     # Health probes (PRD 5.4) — always mounted first
@@ -138,9 +142,20 @@ def create_app() -> FastAPI:
     # Business modules — mounted unconditionally; endpoints return 503
     # if services are not yet injected (per PRD: "未装配返回 503 ADAPTER_NOT_CONFIGURED")
     app.include_router(repair_router)
+    app.include_router(announcement_router)
     app.include_router(inspection_task_router)
     app.include_router(inspection_event_router)
     app.include_router(billing_router)
+
+    # 统一智能体：运行时未装配时同样返回 503 ADAPTER_NOT_CONFIGURED，
+    # 因此模型/编排不可用绝不影响上面的结构化业务接口（PRD §6.5.11）
+    app.include_router(agent_router)
+
+    # The announcement router depends on the auth *seam*
+    # (``platform.dependencies.get_request_context``) so it can also run as a
+    # standalone app. In the unified application the seam is bound to the real
+    # JWT dependency — no endpoint is reachable without a valid token.
+    bind_request_context_to_jwt(app)
 
     return app
 

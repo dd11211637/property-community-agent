@@ -1,17 +1,10 @@
-import hashlib
-import json
 import secrets
 from dataclasses import asdict
 from datetime import UTC, datetime
-from enum import Enum
 from typing import Any
 from uuid import UUID, uuid4
 
-from property_agent.platform.validation import (
-    require_idempotency_key,
-    require_role,
-    required_text,
-)
+from property_agent.platform.application.hashing import canonical_hash
 from property_agent.repair.application.commands import (
     CreateReviewCommand,
     CreateWorkOrderCommand,
@@ -50,33 +43,10 @@ ASSIGN_ROLES = (Role.CUSTOMER_SERVICE, Role.MANAGER)
 READ_ROLES = (Role.RESIDENT, Role.CUSTOMER_SERVICE, Role.REPAIR_WORKER, Role.MANAGER)
 
 
-def canonical_hash(value: Any) -> str:
-    def normalize(item: Any) -> Any:
-        if isinstance(item, Enum):
-            return item.value
-        if isinstance(item, UUID):
-            return str(item)
-        if isinstance(item, datetime):
-            return item.isoformat()
-        if isinstance(item, tuple | frozenset):
-            return [normalize(element) for element in item]
-        if isinstance(item, dict):
-            return {key: normalize(element) for key, element in sorted(item.items())}
-        if isinstance(item, list):
-            return [normalize(element) for element in item]
-        return item
-
-    payload = json.dumps(
-        normalize(value), ensure_ascii=False, separators=(",", ":"), sort_keys=True
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+__all__ = ["ASSIGN_ROLES", "CREATE_ROLES", "READ_ROLES", "WorkOrderService", "canonical_hash"]
 
 
 class WorkOrderService:
-    _require_role = staticmethod(require_role)
-    _require_idempotency_key = staticmethod(require_idempotency_key)
-    _required_text = staticmethod(required_text)
-
     def __init__(self, unit_of_work_factory: UnitOfWorkFactory) -> None:
         self._unit_of_work_factory = unit_of_work_factory
 
@@ -90,17 +60,26 @@ class WorkOrderService:
         self._require_role(context, *CREATE_ROLES)
         self._require_idempotency_key(idempotency_key)
         self._validate_create(command)
-        if command.urgency == Urgency.HIGH_RISK:
-            raise handover_required()
 
         confirmed_parameters = asdict(command)
         confirmed_parameters.pop("confirmation_token")
         request_hash = canonical_hash(confirmed_parameters)
+
+        if command.urgency == Urgency.HIGH_RISK:
+            # PRD 6.1: a high-risk report never becomes an ordinary work order.
+            # It creates a manual-handover ticket and notifies duty staff, and
+            # the caller receives HANDOVER_REQUIRED carrying the ticket ID.
+            ticket_id, notified = self._hand_over_high_risk(
+                command,
+                context,
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+            )
+            raise handover_required(handover_ticket_id=ticket_id, notified_staff=notified)
+
         operation = "CREATE_WORK_ORDER"
         with self._unit_of_work_factory() as uow:
-            replay = self._idempotent_replay(
-                uow, context, operation, idempotency_key, request_hash
-            )
+            replay = self._idempotent_replay(uow, context, operation, idempotency_key, request_hash)
             if replay is not None:
                 return replay
 
@@ -207,13 +186,9 @@ class WorkOrderService:
     ) -> WorkOrder:
         self._require_idempotency_key(idempotency_key)
         operation = f"WORK_ORDER_{command.action.value}"
-        request_hash = canonical_hash(
-            {"work_order_id": work_order_id, **asdict(command)}
-        )
+        request_hash = canonical_hash({"work_order_id": work_order_id, **asdict(command)})
         with self._unit_of_work_factory() as uow:
-            replay = self._idempotent_replay(
-                uow, context, operation, idempotency_key, request_hash
-            )
+            replay = self._idempotent_replay(uow, context, operation, idempotency_key, request_hash)
             if replay is not None:
                 return replay
 
@@ -268,13 +243,9 @@ class WorkOrderService:
         if command.rating < 1 or command.rating > 5:
             raise validation_error("Rating must be between 1 and 5.")
         operation = "WORK_ORDER_CREATE_REVIEW"
-        request_hash = canonical_hash(
-            {"work_order_id": work_order_id, **asdict(command)}
-        )
+        request_hash = canonical_hash({"work_order_id": work_order_id, **asdict(command)})
         with self._unit_of_work_factory() as uow:
-            replay = self._idempotent_replay(
-                uow, context, operation, idempotency_key, request_hash
-            )
+            replay = self._idempotent_replay(uow, context, operation, idempotency_key, request_hash)
             if replay is not None:
                 return replay
             work_order = self._get_authorized(uow, work_order_id, context)
@@ -322,9 +293,7 @@ class WorkOrderService:
             uow.commit()
             return work_order
 
-    def available_actions(
-        self, work_order: WorkOrder, context: RequestContext
-    ) -> list[ActionCode]:
+    def available_actions(self, work_order: WorkOrder, context: RequestContext) -> list[ActionCode]:
         status = work_order.status
         if status == WorkOrderStatus.PENDING_ASSIGNMENT and context.has_any_role(*ASSIGN_ROLES):
             return [ActionCode.ASSIGN]
@@ -347,10 +316,7 @@ class WorkOrderService:
             return [ActionCode.RECORD_PROGRESS, completion]
         if status == WorkOrderStatus.PENDING_VERIFICATION and (
             context.has_any_role(Role.MANAGER)
-            or (
-                context.has_any_role(Role.RESIDENT)
-                and work_order.house_id in context.house_ids
-            )
+            or (context.has_any_role(Role.RESIDENT) and work_order.house_id in context.house_ids)
         ):
             return [ActionCode.VERIFY_PASS, ActionCode.REQUEST_REWORK]
         if (
@@ -522,6 +488,120 @@ class WorkOrderService:
             raise not_found()
         return work_order
 
+    # ── High-risk manual handover (PRD 6.1) ────────────────────────
+
+    def _hand_over_high_risk(
+        self,
+        command: CreateWorkOrderCommand,
+        context: RequestContext,
+        *,
+        idempotency_key: str,
+        request_hash: str,
+    ) -> tuple[UUID, int]:
+        """Create a manual-handover ticket for a high-risk report.
+
+        Performs the same authorisation, attachment and confirmation checks as
+        a normal creation, then persists the ticket, notifies every duty staff
+        member and writes the audit trail — all in one transaction. Nothing is
+        returned to the caller until the commit succeeds, so a failure never
+        produces a fake ticket number (PRD 6.1 "接口失败不生成虚假单号").
+
+        Returns the ticket ID and the number of notified staff members.
+        """
+        operation = "CREATE_WORK_ORDER_HANDOVER"
+        with self._unit_of_work_factory() as uow:
+            existing = uow.idempotency.get(context.actor_id, operation, idempotency_key)
+            if existing is not None:
+                if existing.request_hash != request_hash:
+                    raise idempotency_conflict()
+                snapshot = existing.response_snapshot
+                return existing.resource_id, int(snapshot.get("notified_staff", 0))
+
+            uow.house_access.ensure_access(
+                actor_id=context.actor_id,
+                community_id=context.community_id,
+                house_id=command.house_id,
+                request_id=context.request_id,
+            )
+            uow.attachments.ensure_usable(
+                attachment_ids=command.attachment_ids,
+                actor_id=context.actor_id,
+                community_id=context.community_id,
+                request_id=context.request_id,
+            )
+            uow.confirmations.consume(
+                token=command.confirmation_token,
+                actor_id=context.actor_id,
+                action=operation,
+                parameter_hash=request_hash,
+                request_id=context.request_id,
+            )
+
+            now = datetime.now(UTC)
+            summary = f"高风险报修待人工核实：{command.category.value} / {command.location.strip()}"
+            ticket_id = uow.handover.create(
+                community_id=context.community_id,
+                requester_id=context.actor_id,
+                queue="CUSTOMER_SERVICE",
+                reason="HIGH_RISK",
+                summary=summary,
+                payload={
+                    "house_id": str(command.house_id),
+                    "category": command.category.value,
+                    "urgency": command.urgency.value,
+                    "location": command.location.strip(),
+                    "description": command.description.strip(),
+                    "attachment_ids": [str(item) for item in command.attachment_ids],
+                },
+                request_id=context.request_id,
+                created_at=now,
+            )
+
+            duty_staff = uow.staff_directory.list_duty_staff(
+                community_id=context.community_id,
+                request_id=context.request_id,
+            )
+            for receiver_id in duty_staff:
+                uow.messages.enqueue(
+                    community_id=context.community_id,
+                    receiver_id=receiver_id,
+                    event_type="HIGH_RISK_HANDOVER",
+                    resource_id=ticket_id,
+                    request_id=context.request_id,
+                    created_at=now,
+                )
+
+            uow.idempotency.add(
+                IdempotencyRecord(
+                    actor_id=context.actor_id,
+                    operation=operation,
+                    key=idempotency_key,
+                    request_hash=request_hash,
+                    resource_id=ticket_id,
+                    response_snapshot={
+                        "handover_ticket_id": str(ticket_id),
+                        "notified_staff": len(duty_staff),
+                    },
+                )
+            )
+            uow.audit.add(
+                community_id=context.community_id,
+                actor_id=context.actor_id,
+                action="HIGH_RISK_HANDOVER",
+                resource_type="HANDOVER_TICKET",
+                resource_id=ticket_id,
+                parameter_summary={
+                    "house_id": str(command.house_id),
+                    "category": command.category.value,
+                    "urgency": command.urgency.value,
+                    "notified_staff": len(duty_staff),
+                },
+                request_id=context.request_id,
+                created_at=now,
+            )
+            uow.commit()
+            return ticket_id, len(duty_staff)
+
     def _idempotent_replay(
         self,
         uow: RepairUnitOfWork,
@@ -553,6 +633,11 @@ class WorkOrderService:
             )
 
     @staticmethod
+    def _require_role(context: RequestContext, *roles: Role) -> None:
+        if not context.has_any_role(*roles):
+            raise forbidden()
+
+    @staticmethod
     def _require_assignee(work_order: WorkOrder, context: RequestContext) -> None:
         if (
             not context.has_any_role(Role.REPAIR_WORKER)
@@ -569,6 +654,13 @@ class WorkOrderService:
         raise forbidden()
 
     @staticmethod
+    def _require_idempotency_key(key: str) -> None:
+        if not key or not key.strip() or len(key) > 128:
+            raise validation_error(
+                "Idempotency-Key is required and must not exceed 128 characters."
+            )
+
+    @staticmethod
     def _require_state_action(work_order: WorkOrder, action: ActionCode) -> None:
         if action not in work_order.state_actions():
             raise invalid_transition(
@@ -576,6 +668,12 @@ class WorkOrderService:
                 action.value,
                 [item.value for item in work_order.state_actions()],
             )
+
+    @staticmethod
+    def _required_text(value: str | None, message: str) -> str:
+        if value is None or not value.strip():
+            raise validation_error(message)
+        return value.strip()
 
     @staticmethod
     def _optional_text(value: str | None) -> str | None:
@@ -626,9 +724,7 @@ class WorkOrderService:
             created_at=datetime.fromisoformat(snapshot["created_at"]),
             updated_at=datetime.fromisoformat(snapshot["updated_at"]),
             closed_at=(
-                datetime.fromisoformat(snapshot["closed_at"])
-                if snapshot["closed_at"]
-                else None
+                datetime.fromisoformat(snapshot["closed_at"]) if snapshot["closed_at"] else None
             ),
             has_review=snapshot["has_review"],
         )

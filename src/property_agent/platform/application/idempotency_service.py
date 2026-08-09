@@ -4,23 +4,22 @@ Application-layer idempotency service — PF-04.
 Provides IdempotencyService with request hash computation, idempotency record
 lookup, snapshot storage, and conflict detection.
 """
+
 from __future__ import annotations
 
-import hashlib
-import json
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from property_agent.platform.application.hashing import canonical_hash
 from property_agent.platform.domain.exceptions import IdempotencyConflictException
 from property_agent.platform.infrastructure.orm_models import IdempotencyRecordModel
 
 
 def _hash_dict(data: dict[str, Any]) -> str:
-    """Compute a deterministic SHA-256 hash of a dictionary."""
-    canonical = json.dumps(data, sort_keys=True, ensure_ascii=False, default=str)
-    return hashlib.sha256(canonical.encode()).hexdigest()
+    """Deterministic SHA-256 of a request body — see ``platform.application.hashing``."""
+    return canonical_hash(data)
 
 
 class IdempotencyService:
@@ -67,12 +66,14 @@ class IdempotencyService:
 
         if record is None:
             # New request — record the hash, proceed
-            self._session.add(IdempotencyRecordModel(
-                actor_id=actor_id,
-                operation=operation,
-                key=key,
-                request_hash=request_hash,
-            ))
+            self._session.add(
+                IdempotencyRecordModel(
+                    actor_id=actor_id,
+                    operation=operation,
+                    key=key,
+                    request_hash=request_hash,
+                )
+            )
             return None
 
         if record.request_hash != request_hash:

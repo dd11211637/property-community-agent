@@ -9,6 +9,7 @@ Response format follows Kubernetes probe conventions:
 - /health:  200 {"status": "UP"}
 - /ready:   200 {"status": "READY", "components": {...}}
             503 {"status": "NOT_READY", "components": {...}}"""
+
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
@@ -25,6 +26,7 @@ router = APIRouter(tags=["health"])
 # GET /health — Liveness Probe
 # ═══════════════════════════════════════════════════════════════
 
+
 @router.get("/health")
 async def health() -> dict[str, str]:
     """Liveness probe — reports process status only.
@@ -38,6 +40,7 @@ async def health() -> dict[str, str]:
 # ═══════════════════════════════════════════════════════════════
 # GET /ready — Readiness Probe
 # ═══════════════════════════════════════════════════════════════
+
 
 @router.get("/ready")
 async def ready(request: Request) -> dict:

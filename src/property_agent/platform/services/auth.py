@@ -3,6 +3,7 @@ Platform auth service — JWT token issuance/verification and bcrypt password ha
 
 PRD 5.2: PF-01 (Login). Token payload: actor_id, community_id, roles, bound_house_ids.
 """
+
 from __future__ import annotations
 
 import os
@@ -30,6 +31,7 @@ BCRYPT_ROUNDS: int = int(os.getenv("BCRYPT_ROUNDS", "12"))
 # Password hashing
 # ---------------------------------------------------------------------------
 
+
 def hash_password(plain_password: str) -> str:
     """Hash a plain-text password using bcrypt."""
     password_bytes = plain_password.encode("utf-8")
@@ -48,6 +50,7 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
 # ---------------------------------------------------------------------------
 # JWT
 # ---------------------------------------------------------------------------
+
 
 def create_jwt_token(
     *,

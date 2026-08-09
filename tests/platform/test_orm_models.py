@@ -1,13 +1,14 @@
 """
 Platform ORM model tests — verify table creation, constraints, and CRUD operations.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from property_agent.platform.infrastructure.orm_models import (
     AuditLogModel,
@@ -42,9 +43,12 @@ class TestPlatformModels:
         session.add(CommunityModel(id=community_a_id, name="Test", status="ACTIVE"))
         user_id = uuid4()
         u = UserModel(
-            id=user_id, community_id=community_a_id,
-            username="testuser", display_name="Test User",
-            password_hash="hash123", status="ACTIVE",
+            id=user_id,
+            community_id=community_a_id,
+            username="testuser",
+            display_name="Test User",
+            password_hash="hash123",
+            status="ACTIVE",
         )
         session.add(u)
         session.commit()
@@ -57,8 +61,12 @@ class TestPlatformModels:
         session.add(CommunityModel(id=community_a_id, name="Test", status="ACTIVE"))
         house_id = uuid4()
         h = HouseModel(
-            id=house_id, community_id=community_a_id,
-            building="1", unit="1", room_no="101", status="ACTIVE",
+            id=house_id,
+            community_id=community_a_id,
+            building="1",
+            unit="1",
+            room_no="101",
+            status="ACTIVE",
         )
         session.add(h)
         session.commit()
@@ -116,7 +124,7 @@ class TestPlatformModels:
             request_hash="hash2",
         )
         session.add(dup)
-        with pytest.raises(Exception):
+        with pytest.raises(IntegrityError):
             session.commit()
 
     def test_message_record(self, session):
@@ -176,7 +184,14 @@ class TestPlatformModels:
         session.add(c)
         session.flush()
 
-        h = HouseModel(id=uuid4(), community_id=community_a_id, building="1", unit="1", room_no="101", status="ACTIVE")
+        h = HouseModel(
+            id=uuid4(),
+            community_id=community_a_id,
+            building="1",
+            unit="1",
+            room_no="101",
+            status="ACTIVE",
+        )
         session.add(h)
         session.commit()
 

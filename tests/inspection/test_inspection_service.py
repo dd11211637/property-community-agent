@@ -273,7 +273,15 @@ def test_event_full_lifecycle_and_high_risk_close(
         idempotency_key="ev-life-disp",
     )
     assert event.status == EventStatus.PENDING_REVIEW
-    # 管理者复核通过（高风险需人工确认等级）
+    # 高风险事件须先由授权管理者完成等级/处置方案人工确认（GRADE_CONFIRM）
+    event = event_service.execute_event_action(
+        event.id,
+        ExecuteEventActionCommand(action=EventAction.GRADE_CONFIRM, expected_version=event.version),
+        manager_context,
+        idempotency_key="ev-life-grade",
+    )
+    assert event.grade_confirmed_by == ids.manager
+    # 管理者复核通过
     event = event_service.execute_event_action(
         event.id,
         ExecuteEventActionCommand(action=EventAction.REVIEW_PASS, expected_version=event.version),

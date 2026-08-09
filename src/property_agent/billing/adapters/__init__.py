@@ -1,1 +1,1 @@
-"""Primary adapters for billing queries."""
+"""Billing HTTP adapters."""

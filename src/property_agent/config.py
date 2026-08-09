@@ -5,6 +5,7 @@ Uses pydantic-settings to load configuration from environment variables and .env
 All production settings have sensible defaults for development; override via .env or
 environment variables in production.
 """
+
 from __future__ import annotations
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -30,9 +31,7 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # ── Database ─────────────────────────────────────────────────
-    database_url: str = (
-        "postgresql+psycopg://postgres:postgres@localhost/property_agent"
-    )
+    database_url: str = "postgresql+psycopg://postgres:postgres@localhost/property_agent"
 
     # ── JWT / Auth ───────────────────────────────────────────────
     jwt_secret: str = "dev-secret-change-in-production-32chars-min"
@@ -42,6 +41,13 @@ class Settings(BaseSettings):
     # ── Server ───────────────────────────────────────────────────
     host: str = "0.0.0.0"
     port: int = 8000
+
+    # ── DeepSeek model gateway ───────────────────────────────────
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-v4-flash"
+    deepseek_api_key: str = ""
+    deepseek_connect_timeout_seconds: float = 3.0
+    deepseek_read_timeout_seconds: float = 12.0
 
 
 # Singleton instance — import this throughout the application

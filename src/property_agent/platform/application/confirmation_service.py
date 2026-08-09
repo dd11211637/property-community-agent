@@ -1,13 +1,12 @@
-﻿"""
+"""
 Application-layer confirmation token service — PF-04.
 
 Provides ConfirmationService for generating and validating secondary-confirmation
 tokens bound to actor, action, parameter hash, and expiration time.
 """
+
 from __future__ import annotations
 
-import hashlib
-import json
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -15,6 +14,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from property_agent.platform.application.hashing import canonical_hash
 from property_agent.platform.domain.exceptions import InvalidConfirmationTokenException
 from property_agent.platform.infrastructure.orm_models import ConfirmationTokenModel
 
@@ -22,9 +22,13 @@ CONFIRMATION_TTL_MINUTES = 5
 
 
 def _hash_dict(data: dict[str, Any]) -> str:
-    """Compute a deterministic SHA-256 hash of a dictionary."""
-    canonical = json.dumps(data, sort_keys=True, ensure_ascii=False, default=str)
-    return hashlib.sha256(canonical.encode()).hexdigest()
+    """Deterministic SHA-256 of a parameter dictionary.
+
+    Delegates to the single canonical algorithm so that tokens generated via
+    ``POST /api/confirmations`` (raw JSON parameters) match the hash computed
+    by a business service from its parsed command object.
+    """
+    return canonical_hash(data)
 
 
 class ConfirmationService:
@@ -65,13 +69,15 @@ class ConfirmationService:
         parameter_hash = _hash_dict(params)
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=CONFIRMATION_TTL_MINUTES)
 
-        self._session.add(ConfirmationTokenModel(
-            token=token,
-            actor_id=actor_id,
-            action=action,
-            parameter_hash=parameter_hash,
-            expires_at=expires_at,
-        ))
+        self._session.add(
+            ConfirmationTokenModel(
+                token=token,
+                actor_id=actor_id,
+                action=action,
+                parameter_hash=parameter_hash,
+                expires_at=expires_at,
+            )
+        )
         return token
 
     def validate_and_consume_token(
@@ -97,11 +103,7 @@ class ConfirmationService:
         """
         parameter_hash = _hash_dict(params)
 
-        record = (
-            self._session.query(ConfirmationTokenModel)
-            .filter_by(token=token)
-            .first()
-        )
+        record = self._session.query(ConfirmationTokenModel).filter_by(token=token).first()
 
         if record is None:
             raise InvalidConfirmationTokenException("Confirmation token not found.")
@@ -150,11 +152,7 @@ class ConfirmationService:
         request_id: str,
     ) -> None:
         """Backward-compatible consume (accepts pre-computed hash)."""
-        record = (
-            self._session.query(ConfirmationTokenModel)
-            .filter_by(token=token)
-            .first()
-        )
+        record = self._session.query(ConfirmationTokenModel).filter_by(token=token).first()
 
         if record is None:
             raise InvalidConfirmationTokenException("Confirmation token not found.")
@@ -175,8 +173,6 @@ class ConfirmationService:
             raise InvalidConfirmationTokenException("Token action mismatch.")
 
         if record.parameter_hash != parameter_hash:
-            raise InvalidConfirmationTokenException(
-                "Parameters have changed; please re-confirm."
-            )
+            raise InvalidConfirmationTokenException("Parameters have changed; please re-confirm.")
 
         record.consumed_at = datetime.now(timezone.utc)

@@ -7,6 +7,7 @@ from property_agent.inspection.application.ports import (
     AttachmentPort,
     AuditPort,
     ConfirmationPort,
+    EscalationPort,
     IdempotencyPort,
     MessagePort,
     SharedPorts,
@@ -34,6 +35,7 @@ class SqlAlchemyInspectionUnitOfWork:
         self.attachments: AttachmentPort = ports.attachments
         self.audit: AuditPort = ports.audit
         self.messages: MessagePort = ports.messages
+        self.escalation: EscalationPort = ports.escalation
         return self
 
     def __exit__(

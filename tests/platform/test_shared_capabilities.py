@@ -7,6 +7,7 @@ Covers:
 - Message Outbox: retry_count increments on failure, status tracks correctly
 - Audit log: correct actor_id/action, phone masking 138****1234
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -54,6 +55,7 @@ from property_agent.platform.infrastructure.outbox_dispatcher import (
 # Fixtures
 # ═══════════════════════════════════════════════════════════════
 
+
 @pytest.fixture
 def engine():
     """In-memory SQLite engine."""
@@ -98,6 +100,7 @@ def request_context(actor_id, community_id):
 # PF-04: Idempotency Tests
 # ═══════════════════════════════════════════════════════════════
 
+
 class TestIdempotencyService:
     """Tests for IdempotencyService.check() and update_snapshot()."""
 
@@ -121,20 +124,29 @@ class TestIdempotencyService:
 
         # First request — proceed
         result1 = svc.check(
-            actor_id=actor_id, operation="CREATE_BILL", key="idem-key-002", request_body=body,
+            actor_id=actor_id,
+            operation="CREATE_BILL",
+            key="idem-key-002",
+            request_body=body,
         )
         assert result1 is None
 
         # Save snapshot
         svc.update_snapshot(
-            actor_id=actor_id, operation="CREATE_BILL", key="idem-key-002",
-            resource_id="bill-001", response_snapshot={"id": "bill-001", "status": "created"},
+            actor_id=actor_id,
+            operation="CREATE_BILL",
+            key="idem-key-002",
+            resource_id="bill-001",
+            response_snapshot={"id": "bill-001", "status": "created"},
         )
         session.commit()
 
         # Second request (replay) — should return cached snapshot
         result2 = svc.check(
-            actor_id=actor_id, operation="CREATE_BILL", key="idem-key-002", request_body=body,
+            actor_id=actor_id,
+            operation="CREATE_BILL",
+            key="idem-key-002",
+            request_body=body,
         )
         assert result2 is not None
         assert result2["id"] == "bill-001"
@@ -146,7 +158,9 @@ class TestIdempotencyService:
 
         # First request
         svc.check(
-            actor_id=actor_id, operation="CREATE_BILL", key="idem-key-003",
+            actor_id=actor_id,
+            operation="CREATE_BILL",
+            key="idem-key-003",
             request_body={"amount": 100},
         )
         session.commit()
@@ -154,7 +168,9 @@ class TestIdempotencyService:
         # Second request with different body
         with pytest.raises(IdempotencyConflictException) as exc:
             svc.check(
-                actor_id=actor_id, operation="CREATE_BILL", key="idem-key-003",
+                actor_id=actor_id,
+                operation="CREATE_BILL",
+                key="idem-key-003",
                 request_body={"amount": 200},
             )
 
@@ -167,13 +183,19 @@ class TestIdempotencyService:
         body = {"amount": 100}
 
         result1 = svc.check(
-            actor_id=actor_id, operation="CREATE_BILL", key="key-001", request_body=body,
+            actor_id=actor_id,
+            operation="CREATE_BILL",
+            key="key-001",
+            request_body=body,
         )
         session.commit()
         assert result1 is None
 
         result2 = svc.check(
-            actor_id=actor_id, operation="DELETE_BILL", key="key-001", request_body=body,
+            actor_id=actor_id,
+            operation="DELETE_BILL",
+            key="key-001",
+            request_body=body,
         )
         session.commit()
         assert result2 is None  # Different operation, should be treated as new
@@ -185,13 +207,19 @@ class TestIdempotencyService:
         other_actor = UUID("e0000000-0000-0000-0000-000000000099")
 
         result1 = svc.check(
-            actor_id=actor_id, operation="CREATE_BILL", key="key-001", request_body=body,
+            actor_id=actor_id,
+            operation="CREATE_BILL",
+            key="key-001",
+            request_body=body,
         )
         session.commit()
         assert result1 is None
 
         result2 = svc.check(
-            actor_id=other_actor, operation="CREATE_BILL", key="key-001", request_body=body,
+            actor_id=other_actor,
+            operation="CREATE_BILL",
+            key="key-001",
+            request_body=body,
         )
         session.commit()
         assert result2 is None  # Different actor, should be treated as new
@@ -200,6 +228,7 @@ class TestIdempotencyService:
 # ═══════════════════════════════════════════════════════════════
 # PF-04: require_idempotency_key dependency test
 # ═══════════════════════════════════════════════════════════════
+
 
 class TestRequireIdempotencyKey:
     """Tests for the require_idempotency_key FastAPI dependency."""
@@ -234,7 +263,8 @@ class TestRequireIdempotencyKey:
     def test_empty_idempotency_key_returns_400(self, client):
         """Empty Idempotency-Key header should return 400."""
         response = client.post(
-            "/write", json={"data": "test"},
+            "/write",
+            json={"data": "test"},
             headers={"Idempotency-Key": "   "},
         )
         assert response.status_code == 400
@@ -243,7 +273,8 @@ class TestRequireIdempotencyKey:
     def test_valid_idempotency_key_passes(self, client):
         """Valid Idempotency-Key header should pass through."""
         response = client.post(
-            "/write", json={"data": "test"},
+            "/write",
+            json={"data": "test"},
             headers={"Idempotency-Key": "valid-key-123"},
         )
         assert response.status_code == 200
@@ -259,6 +290,7 @@ class TestRequireIdempotencyKey:
 # PF-04: ConfirmationToken Tests
 # ═══════════════════════════════════════════════════════════════
 
+
 class TestConfirmationService:
     """Tests for ConfirmationService.generate_token() and validate_and_consume_token()."""
 
@@ -272,7 +304,10 @@ class TestConfirmationService:
 
         # Should not raise
         svc.validate_and_consume_token(
-            token=token, actor_id=actor_id, action="DELETE_BILL", params=params,
+            token=token,
+            actor_id=actor_id,
+            action="DELETE_BILL",
+            params=params,
         )
         session.commit()
 
@@ -288,7 +323,10 @@ class TestConfirmationService:
 
         with pytest.raises(InvalidConfirmationTokenException) as exc:
             svc.validate_and_consume_token(
-                token=token, actor_id=actor_id, action="DELETE_BILL", params=modified_params,
+                token=token,
+                actor_id=actor_id,
+                action="DELETE_BILL",
+                params=modified_params,
             )
 
         assert exc.value.code == "INVALID_CONFIRMATION_TOKEN"
@@ -305,13 +343,17 @@ class TestConfirmationService:
 
         # Manually expire the token
         from property_agent.platform.infrastructure.orm_models import ConfirmationTokenModel
+
         record = session.query(ConfirmationTokenModel).filter_by(token=token).first()
         record.expires_at = datetime.now(timezone.utc) - timedelta(minutes=10)
         session.commit()
 
         with pytest.raises(InvalidConfirmationTokenException) as exc:
             svc.validate_and_consume_token(
-                token=token, actor_id=actor_id, action="DELETE_BILL", params=params,
+                token=token,
+                actor_id=actor_id,
+                action="DELETE_BILL",
+                params=params,
             )
 
         assert "expired" in exc.value.message.lower()
@@ -326,14 +368,20 @@ class TestConfirmationService:
 
         # First consume — succeeds
         svc.validate_and_consume_token(
-            token=token, actor_id=actor_id, action="DELETE_BILL", params=params,
+            token=token,
+            actor_id=actor_id,
+            action="DELETE_BILL",
+            params=params,
         )
         session.commit()
 
         # Second consume — should fail
         with pytest.raises(InvalidConfirmationTokenException) as exc:
             svc.validate_and_consume_token(
-                token=token, actor_id=actor_id, action="DELETE_BILL", params=params,
+                token=token,
+                actor_id=actor_id,
+                action="DELETE_BILL",
+                params=params,
             )
 
         assert "already been used" in exc.value.message.lower()
@@ -349,7 +397,10 @@ class TestConfirmationService:
 
         with pytest.raises(InvalidConfirmationTokenException) as exc:
             svc.validate_and_consume_token(
-                token=token, actor_id=other_actor, action="DELETE_BILL", params=params,
+                token=token,
+                actor_id=other_actor,
+                action="DELETE_BILL",
+                params=params,
             )
 
         assert "actor" in exc.value.message.lower()
@@ -364,7 +415,10 @@ class TestConfirmationService:
 
         with pytest.raises(InvalidConfirmationTokenException) as exc:
             svc.validate_and_consume_token(
-                token=token, actor_id=actor_id, action="ARCHIVE_BILL", params=params,
+                token=token,
+                actor_id=actor_id,
+                action="ARCHIVE_BILL",
+                params=params,
             )
 
         assert "action" in exc.value.message.lower()
@@ -376,8 +430,10 @@ class TestConfirmationService:
 
         with pytest.raises(InvalidConfirmationTokenException) as exc:
             svc.validate_and_consume_token(
-                token="nonexistent-token", actor_id=actor_id,
-                action="DELETE_BILL", params=params,
+                token="nonexistent-token",
+                actor_id=actor_id,
+                action="DELETE_BILL",
+                params=params,
             )
 
         assert "not found" in exc.value.message.lower()
@@ -386,6 +442,7 @@ class TestConfirmationService:
 # ═══════════════════════════════════════════════════════════════
 # PF-05: Message Outbox Tests
 # ═══════════════════════════════════════════════════════════════
+
 
 class TestMessageOutboxService:
     """Tests for MessageOutboxService enqueue and status management."""
@@ -417,14 +474,22 @@ class TestMessageOutboxService:
         svc = MessageOutboxService(session)
 
         msg_id1 = svc.enqueue(
-            receiver_id=actor_id, business_type="REPAIR", resource_id="repair-001",
-            title="First", body="Body 1", idempotency_key="dup-key",
+            receiver_id=actor_id,
+            business_type="REPAIR",
+            resource_id="repair-001",
+            title="First",
+            body="Body 1",
+            idempotency_key="dup-key",
         )
         session.commit()
 
         msg_id2 = svc.enqueue(
-            receiver_id=actor_id, business_type="REPAIR", resource_id="repair-001",
-            title="Second", body="Body 2", idempotency_key="dup-key",
+            receiver_id=actor_id,
+            business_type="REPAIR",
+            resource_id="repair-001",
+            title="Second",
+            body="Body 2",
+            idempotency_key="dup-key",
         )
         session.commit()
 
@@ -438,8 +503,12 @@ class TestMessageOutboxService:
         """mark_sent should update status to SENT."""
         svc = MessageOutboxService(session)
         msg_id = svc.enqueue(
-            receiver_id=actor_id, business_type="REPAIR", resource_id="r1",
-            title="T", body="B", idempotency_key="k1",
+            receiver_id=actor_id,
+            business_type="REPAIR",
+            resource_id="r1",
+            title="T",
+            body="B",
+            idempotency_key="k1",
         )
         session.commit()
 
@@ -453,8 +522,12 @@ class TestMessageOutboxService:
         """mark_failed should increment retry_count and save error."""
         svc = MessageOutboxService(session)
         msg_id = svc.enqueue(
-            receiver_id=actor_id, business_type="REPAIR", resource_id="r1",
-            title="T", body="B", idempotency_key="k2",
+            receiver_id=actor_id,
+            business_type="REPAIR",
+            resource_id="r1",
+            title="T",
+            body="B",
+            idempotency_key="k2",
         )
         session.commit()
 
@@ -470,8 +543,12 @@ class TestMessageOutboxService:
         """When retry_count reaches MAX_RETRY_COUNT, status should become FAILED."""
         svc = MessageOutboxService(session)
         msg_id = svc.enqueue(
-            receiver_id=actor_id, business_type="REPAIR", resource_id="r1",
-            title="T", body="B", idempotency_key="k3",
+            receiver_id=actor_id,
+            business_type="REPAIR",
+            resource_id="r1",
+            title="T",
+            body="B",
+            idempotency_key="k3",
         )
         session.commit()
 
@@ -489,8 +566,12 @@ class TestMessageOutboxService:
         """mark_read should update status to READ."""
         svc = MessageOutboxService(session)
         msg_id = svc.enqueue(
-            receiver_id=actor_id, business_type="REPAIR", resource_id="r1",
-            title="T", body="B", idempotency_key="k4",
+            receiver_id=actor_id,
+            business_type="REPAIR",
+            resource_id="r1",
+            title="T",
+            body="B",
+            idempotency_key="k4",
         )
         session.commit()
 
@@ -505,12 +586,20 @@ class TestMessageOutboxService:
         svc = MessageOutboxService(session)
 
         id1 = svc.enqueue(
-            receiver_id=actor_id, business_type="R", resource_id="r1",
-            title="T1", body="B1", idempotency_key="p1",
+            receiver_id=actor_id,
+            business_type="R",
+            resource_id="r1",
+            title="T1",
+            body="B1",
+            idempotency_key="p1",
         )
         id2 = svc.enqueue(
-            receiver_id=actor_id, business_type="R", resource_id="r2",
-            title="T2", body="B2", idempotency_key="p2",
+            receiver_id=actor_id,
+            business_type="R",
+            resource_id="r2",
+            title="T2",
+            body="B2",
+            idempotency_key="p2",
         )
         session.commit()
 
@@ -526,8 +615,12 @@ class TestMessageOutboxService:
         svc = MessageOutboxService(session)
 
         msg_id = svc.enqueue(
-            receiver_id=actor_id, business_type="R", resource_id="r1",
-            title="T", body="B", idempotency_key="f1",
+            receiver_id=actor_id,
+            business_type="R",
+            resource_id="r1",
+            title="T",
+            body="B",
+            idempotency_key="f1",
         )
         session.commit()
 
@@ -545,6 +638,7 @@ class TestMessageOutboxService:
 # PF-05: OutboxDispatcher Tests
 # ═══════════════════════════════════════════════════════════════
 
+
 class TestOutboxDispatcher:
     """Tests for OutboxDispatcher async polling and exponential backoff."""
 
@@ -554,12 +648,12 @@ class TestOutboxDispatcher:
 
     def test_backoff_delay_calculation(self):
         """Verify exponential backoff formula: 2^retry_count * 2."""
-        assert OutboxDispatcher.get_backoff_delay(0) == 2    # 2^0 * 2
-        assert OutboxDispatcher.get_backoff_delay(1) == 4    # 2^1 * 2
-        assert OutboxDispatcher.get_backoff_delay(2) == 8    # 2^2 * 2
-        assert OutboxDispatcher.get_backoff_delay(3) == 16   # 2^3 * 2
-        assert OutboxDispatcher.get_backoff_delay(4) == 32   # 2^4 * 2
-        assert OutboxDispatcher.get_backoff_delay(5) == 64   # 2^5 * 2
+        assert OutboxDispatcher.get_backoff_delay(0) == 2  # 2^0 * 2
+        assert OutboxDispatcher.get_backoff_delay(1) == 4  # 2^1 * 2
+        assert OutboxDispatcher.get_backoff_delay(2) == 8  # 2^2 * 2
+        assert OutboxDispatcher.get_backoff_delay(3) == 16  # 2^3 * 2
+        assert OutboxDispatcher.get_backoff_delay(4) == 32  # 2^4 * 2
+        assert OutboxDispatcher.get_backoff_delay(5) == 64  # 2^5 * 2
 
     @pytest.mark.asyncio
     async def test_dispatcher_processes_pending_messages(self, session_factory, actor_id):
@@ -568,8 +662,12 @@ class TestOutboxDispatcher:
         session = session_factory()
         svc = MessageOutboxService(session)
         msg_id = svc.enqueue(
-            receiver_id=actor_id, business_type="TEST", resource_id="r1",
-            title="Test", body="Test body", idempotency_key="disp-001",
+            receiver_id=actor_id,
+            business_type="TEST",
+            resource_id="r1",
+            title="Test",
+            body="Test body",
+            idempotency_key="disp-001",
         )
         session.commit()
         session.close()
@@ -601,8 +699,12 @@ class TestOutboxDispatcher:
         session = session_factory()
         svc = MessageOutboxService(session)
         msg_id = svc.enqueue(
-            receiver_id=actor_id, business_type="TEST", resource_id="r1",
-            title="Test", body="Test body", idempotency_key="disp-002",
+            receiver_id=actor_id,
+            business_type="TEST",
+            resource_id="r1",
+            title="Test",
+            body="Test body",
+            idempotency_key="disp-002",
         )
         session.commit()
         session.close()
@@ -635,8 +737,12 @@ class TestOutboxDispatcher:
         session = session_factory()
         svc = MessageOutboxService(session)
         msg_id = svc.enqueue(
-            receiver_id=actor_id, business_type="TEST", resource_id="r1",
-            title="Test", body="Test body", idempotency_key="disp-003",
+            receiver_id=actor_id,
+            business_type="TEST",
+            resource_id="r1",
+            title="Test",
+            body="Test body",
+            idempotency_key="disp-003",
         )
         session.commit()
         session.close()
@@ -667,8 +773,12 @@ class TestOutboxDispatcher:
         session = session_factory()
         svc = MessageOutboxService(session)
         msg_id = svc.enqueue(
-            receiver_id=actor_id, business_type="TEST", resource_id="r1",
-            title="Test", body="Test body", idempotency_key="disp-004",
+            receiver_id=actor_id,
+            business_type="TEST",
+            resource_id="r1",
+            title="Test",
+            body="Test body",
+            idempotency_key="disp-004",
         )
         session.commit()
         session.close()
@@ -695,6 +805,7 @@ class TestOutboxDispatcher:
 # ═══════════════════════════════════════════════════════════════
 # PF-06: DataMasker Tests
 # ═══════════════════════════════════════════════════════════════
+
 
 class TestDataMasker:
     """Tests for DataMasker phone masking, secret masking, and URL masking."""
@@ -795,6 +906,7 @@ class TestDataMasker:
 # ═══════════════════════════════════════════════════════════════
 # PF-06: AuditService Tests
 # ═══════════════════════════════════════════════════════════════
+
 
 class TestAuditService:
     """Tests for AuditService.log() with sensitive data masking."""
@@ -911,6 +1023,7 @@ class TestAuditService:
 # ═══════════════════════════════════════════════════════════════
 # PF-06: @audit_log decorator integration test
 # ═══════════════════════════════════════════════════════════════
+
 
 class TestAuditLogDecorator:
     """Tests for the @audit_log decorator with RequestContext integration."""

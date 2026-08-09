@@ -12,6 +12,7 @@ The canonical implementations now live in:
 This module re-exports for backward compatibility with existing code
 that imports from property_agent.platform.services.shared.
 """
+
 from __future__ import annotations
 
 from property_agent.platform.application.audit_service import (  # noqa: F401

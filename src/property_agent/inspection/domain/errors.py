@@ -1,6 +1,16 @@
+from dataclasses import dataclass
 from typing import Any
 
-from property_agent.platform.errors import BusinessError
+
+@dataclass(slots=True)
+class BusinessError(Exception):
+    code: str
+    message: str
+    status_code: int
+    details: dict[str, Any] | None = None
+
+    def __str__(self) -> str:
+        return self.message
 
 
 def validation_error(message: str, **details: Any) -> BusinessError:
@@ -56,4 +66,32 @@ def handover_required() -> BusinessError:
         "HANDOVER_REQUIRED",
         "High-risk events must be confirmed by authorized personnel.",
         422,
+    )
+
+
+def plan_conflict(overlaps_with: str | None = None) -> BusinessError:
+    """计划时间与路线冲突（PRD 6.4：计划时间与路线冲突校验）。"""
+
+    message = "The plan conflicts with an existing active task on the same route and time window."
+    if overlaps_with:
+        message = f"{message} Conflicting task: {overlaps_with}."
+    return BusinessError("PLAN_CONFLICT", message, 409, {"conflicting_task": overlaps_with})
+
+
+def supplement_reason_required() -> BusinessError:
+    """补交记录必须说明实际原因（PRD 6.4：补交原因）。"""
+    return BusinessError(
+        "SUPPLEMENT_REASON_REQUIRED",
+        "A supplement record must include the reason for the late submission.",
+        422,
+    )
+
+
+def escalation_raised(resource_id: str, ticket_id: str) -> BusinessError:
+    """高风险通知无可用值班人员，已升级到备用联系人（PRD 6.4：备用联系人/升级）。"""
+    return BusinessError(
+        "ESCALATION_RAISED",
+        "No on-duty staff available; the high-risk event was escalated to a backup contact.",
+        202,
+        {"resource_id": resource_id, "ticket_id": ticket_id},
     )

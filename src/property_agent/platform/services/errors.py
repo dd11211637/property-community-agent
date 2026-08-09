@@ -5,13 +5,16 @@ Canonical exception classes now live in:
 
 This module re-exports for backward compatibility.
 """
+
 from __future__ import annotations
 
 from property_agent.platform.domain.exceptions import (  # noqa: F401
     AuthError,
     ConfirmationError,
-    IdempotencyConflictException as IdempotencyConflict,
+    IdempotencyConflictException,
     IdempotencyKeyRequiredException,
     InvalidConfirmationTokenException,
     PlatformError,
 )
+
+IdempotencyConflict = IdempotencyConflictException

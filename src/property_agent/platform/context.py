@@ -1,22 +1,19 @@
-from dataclasses import dataclass
-from uuid import UUID
+"""
+Shared request context — single definition for the whole modular monolith.
 
-from property_agent.platform.roles import Role
+PRD 5.2 (PF-03 RBAC & data isolation): every business module receives identity
+and tenancy through the *same* ``RequestContext`` object produced by the
+platform authentication layer. This module is the stable import path
+(``property_agent.platform.context``) used by business modules; the concrete
+implementation lives with the auth dependencies so that it stays next to the
+JWT decoding that populates it.
 
+Do NOT define a second RequestContext anywhere — a divergent copy silently
+breaks role checks and community isolation across modules.
+"""
 
-@dataclass(frozen=True, slots=True)
-class RequestContext:
-    """Trusted identity and tenancy data injected by the authentication layer."""
+from __future__ import annotations
 
-    actor_id: UUID
-    community_id: UUID
-    roles: frozenset[Role]
-    request_id: str
-    house_ids: frozenset[UUID] = frozenset()
+from property_agent.platform.adapters.api.dependencies import RequestContext
 
-    def __post_init__(self) -> None:
-        if not self.request_id.strip() or len(self.request_id) > 64:
-            raise ValueError("request_id must contain 1 to 64 non-whitespace characters.")
-
-    def has_any_role(self, *roles: Role) -> bool:
-        return bool(self.roles.intersection(roles))
+__all__ = ["RequestContext"]

@@ -1,0 +1,7 @@
+services:
+  backend:
+    command: ["uvicorn", "testing.demo_app:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      DEMO_FAIL_BILLING_SOURCE: ${DEMO_FAIL_BILLING_SOURCE:-false}
+      DEMO_FAIL_MESSAGE_TRANSPORT: ${DEMO_FAIL_MESSAGE_TRANSPORT:-false}
+      DEMO_FAIL_MODEL: ${DEMO_FAIL_MODEL:-false}

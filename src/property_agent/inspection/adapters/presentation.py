@@ -29,6 +29,8 @@ def task_data(
         "due_at": _iso(task.due_at),
         "version": task.version,
         "available_actions": [a.value for a in service.available_task_actions(task, context)],
+        "ai_suggestions": [s.to_dict() for s in task.ai_suggestions],
+        "ai_pending_confirm": task.ai_pending_confirm,
         "created_at": _iso(task.created_at),
         "updated_at": _iso(task.updated_at),
         "closed_at": _iso(task.closed_at),

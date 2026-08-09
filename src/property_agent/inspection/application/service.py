@@ -1,11 +1,10 @@
-import hashlib
-import json
 from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
 from property_agent.inspection.application.commands import (
+    AddAiSuggestionCommand,
     CreateInspectionTaskCommand,
     CreateSecurityEventCommand,
     ExecuteEventActionCommand,
@@ -18,7 +17,7 @@ from property_agent.inspection.application.ports import (
     IdempotencyRecord,
     RequestContext,
 )
-from property_agent.inspection.domain.entities import InspectionTask, SecurityEvent
+from property_agent.inspection.domain.entities import AiSuggestion, InspectionTask, SecurityEvent
 from property_agent.inspection.domain.enums import (
     EventAction,
     EventRiskLevel,
@@ -35,42 +34,42 @@ from property_agent.inspection.domain.errors import (
     idempotency_conflict,
     invalid_transition,
     not_found,
+    plan_conflict,
+    supplement_reason_required,
     validation_error,
     version_conflict,
 )
-from property_agent.inspection.domain.policies import (
-    EVENT_ASSIGN_ROLES,
-    EVENT_CREATE_ROLES,
-    EVENT_HANDLER_ROLES,
-    EVENT_READ_ROLES,
-    EVENT_REVIEW_ROLES,
-    TASK_ASSIGN_ROLES,
-    TASK_ASSIGNEE_ROLES,
-    TASK_COMPLETE_ROLES,
-    TASK_CREATE_ROLES,
-    TASK_READ_ROLES,
-)
-from property_agent.platform.validation import (
-    new_business_no,
-    require_idempotency_key,
-    require_role,
-    required_text,
-    validate_pagination,
-)
+from property_agent.platform.application.hashing import canonical_hash
+
+# 角色分组
+TASK_READ_ROLES = (Role.MANAGER, Role.SECURITY_STAFF)
+TASK_CREATE_ROLES = (Role.MANAGER, Role.SECURITY_STAFF)
+TASK_ASSIGN_ROLES = (Role.MANAGER,)
+TASK_COMPLETE_ROLES = (Role.MANAGER,)
+TASK_ASSIGNEE_ROLES = (Role.SECURITY_STAFF,)
+
+EVENT_READ_ROLES = (Role.MANAGER, Role.SECURITY_STAFF, Role.CUSTOMER_SERVICE, Role.RESIDENT)
+EVENT_CREATE_ROLES = (Role.RESIDENT, Role.CUSTOMER_SERVICE, Role.SECURITY_STAFF, Role.MANAGER)
+EVENT_ASSIGN_ROLES = (Role.MANAGER,)
+EVENT_HANDLER_ROLES = (Role.SECURITY_STAFF,)
+EVENT_REVIEW_ROLES = (Role.MANAGER,)
 
 
-def canonical_hash(obj: Any) -> str:
-    payload = json.dumps(obj, sort_keys=True, default=str)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+def _time_overlaps(
+    a_start: datetime | None,
+    a_end: datetime | None,
+    b_start: datetime | None,
+    b_end: datetime | None,
+) -> bool:
+    """保守的时间窗重叠判断（None 视为无限端）。PRD 6.4 计划时间冲突校验。"""
+    if a_start is not None and b_end is not None and a_start > b_end:
+        return False
+    if b_start is not None and a_end is not None and b_start > a_end:
+        return False
+    return True
 
 
 class InspectionTaskService:
-    _require_role = staticmethod(require_role)
-    _require_idempotency_key = staticmethod(require_idempotency_key)
-    _validate_pagination = staticmethod(validate_pagination)
-    _required_text = staticmethod(required_text)
-    _new_business_no = staticmethod(new_business_no)
-
     def __init__(self, unit_of_work_factory: Any) -> None:
         self._unit_of_work_factory = unit_of_work_factory
 
@@ -91,6 +90,7 @@ class InspectionTaskService:
             if replay is not None:
                 return replay
             self._validate_create(command)
+            self._validate_plan_conflict(command, context, uow)
             now = datetime.now(UTC)
             task = InspectionTask(
                 id=uuid4(),
@@ -301,6 +301,7 @@ class InspectionTaskService:
             attachment_ids=command.attachment_ids,
             is_supplement=False,
             actual_time=None,
+            supplement_reason=None,
             created_at=now,
         )
         task.transition(command.action, now=now)
@@ -317,6 +318,8 @@ class InspectionTaskService:
         }:
             raise validation_error("record_type is invalid for a record.")
         note = self._required_text(command.note, "A record note is required.")
+        if command.is_supplement and not command.supplement_reason:
+            raise supplement_reason_required()
         uow.attachments.ensure_usable(
             attachment_ids=command.attachment_ids,
             actor_id=context.actor_id,
@@ -333,10 +336,113 @@ class InspectionTaskService:
             attachment_ids=command.attachment_ids,
             is_supplement=command.is_supplement,
             actual_time=command.actual_time,
+            supplement_reason=command.supplement_reason,
             created_at=now,
         )
         task.touch(now=now)
         return note
+
+    # ----------------------------- AI 异常建议（PRD 6.4） -----------------------------
+    def add_ai_suggestion(
+        self,
+        task_id: UUID,
+        command: AddAiSuggestionCommand,
+        context: RequestContext,
+        *,
+        idempotency_key: str,
+    ) -> InspectionTask:
+        """追加一条 AI 异常建议（置为待人工确认）。"""
+        self._require_idempotency_key(idempotency_key)
+        self._require_role(context, *TASK_CREATE_ROLES)
+        operation = "INSPECTION_TASK_ADD_AI_SUGGESTION"
+        request_hash = canonical_hash(asdict(command))
+        with self._unit_of_work_factory() as uow:
+            replay = self._idempotent_replay(uow, context, operation, idempotency_key, request_hash)
+            if replay is not None:
+                return replay
+            task = self._get_authorized_task(uow, task_id, context)
+            now = datetime.now(UTC)
+            task.add_ai_suggestion(
+                AiSuggestion(
+                    id=uuid4(),
+                    point=command.point.strip(),
+                    finding=command.finding.strip(),
+                    severity=command.severity,
+                    model=command.model,
+                    generated_at=now,
+                    pending_confirm=True,
+                )
+            )
+            uow.repository.save_task(task)
+            self._add_task_status_log(
+                uow, task, context, action="AI_SUGGESTION", from_status=None, reason=None, now=now
+            )
+            uow.idempotency.add(
+                IdempotencyRecord(
+                    actor_id=context.actor_id,
+                    operation=operation,
+                    key=idempotency_key,
+                    request_hash=request_hash,
+                    resource_id=task.id,
+                    response_snapshot=self._task_snapshot(task),
+                )
+            )
+            self._audit(
+                uow,
+                task,
+                context,
+                action="AI_SUGGESTION",
+                parameters={"point": command.point, "severity": command.severity},
+                now=now,
+            )
+            uow.commit()
+            return task
+
+    def confirm_ai_suggestions(
+        self,
+        task_id: UUID,
+        context: RequestContext,
+        *,
+        idempotency_key: str,
+    ) -> InspectionTask:
+        """授权管理者确认全部待确认建议，清除待确认标识。"""
+        self._require_idempotency_key(idempotency_key)
+        self._require_role(context, *TASK_COMPLETE_ROLES)
+        operation = "INSPECTION_TASK_CONFIRM_AI"
+        request_hash = canonical_hash({"task_id": str(task_id)})
+        with self._unit_of_work_factory() as uow:
+            replay = self._idempotent_replay(uow, context, operation, idempotency_key, request_hash)
+            if replay is not None:
+                return replay
+            task = self._get_authorized_task(uow, task_id, context)
+            if not task.ai_pending_confirm:
+                raise validation_error("No pending AI suggestion to confirm.")
+            now = datetime.now(UTC)
+            task.confirm_ai_suggestions(confirmed_by=context.actor_id, now=now)
+            uow.repository.save_task(task)
+            self._add_task_status_log(
+                uow, task, context, action="AI_CONFIRM", from_status=None, reason=None, now=now
+            )
+            uow.idempotency.add(
+                IdempotencyRecord(
+                    actor_id=context.actor_id,
+                    operation=operation,
+                    key=idempotency_key,
+                    request_hash=request_hash,
+                    resource_id=task.id,
+                    response_snapshot=self._task_snapshot(task),
+                )
+            )
+            self._audit(
+                uow,
+                task,
+                context,
+                action="AI_CONFIRM",
+                parameters={"confirmed": len(task.ai_suggestions)},
+                now=now,
+            )
+            uow.commit()
+            return task
 
     # ----------------------------- 内部：鉴权 -----------------------------
     def _get_authorized_task(self, uow, task_id, context) -> InspectionTask:
@@ -353,6 +459,27 @@ class InspectionTaskService:
         return task
 
     # ----------------------------- 内部：通用 -----------------------------
+    def _validate_plan_conflict(
+        self, command: CreateInspectionTaskCommand, context: RequestContext, uow
+    ) -> None:
+        """计划时间与路线冲突校验（PRD 6.4）。
+
+        仅当新计划给定了计划/截止时间时校验：在与本社区仍在进行中的巡检任务
+        存在时间窗重叠且共享至少一个路线点时，判定冲突。未给定时间的计划不
+        参与时间判断（视为随时可执行），仅做路线点交集判断。
+        """
+        if not command.planned_at and not command.due_at:
+            return
+        new_points = {p.strip() for p in command.route_points if p.strip()}
+        if not new_points:
+            return
+        active = uow.repository.find_active_tasks(context.community_id)
+        for task in active:
+            if not new_points & set(task.route_points):
+                continue
+            if _time_overlaps(command.planned_at, command.due_at, task.planned_at, task.due_at):
+                raise plan_conflict(task.business_no)
+
     def _validate_create(self, command: CreateInspectionTaskCommand) -> None:
         if not command.title.strip():
             raise validation_error("title is required.")
@@ -369,9 +496,33 @@ class InspectionTaskService:
         ):
             raise validation_error("due_at must not be earlier than planned_at.")
 
+    def _require_role(self, context, *roles) -> None:
+        if not context.has_any_role(*roles):
+            raise forbidden()
+
     def _require_task_assignee(self, task, context) -> None:
         if not context.has_any_role(*TASK_ASSIGNEE_ROLES) or task.assignee_id != context.actor_id:
             raise forbidden()
+
+    def _require_idempotency_key(self, key: str) -> None:
+        if not key or not key.strip() or len(key) > 128:
+            raise validation_error(
+                "Idempotency-Key is required and must not exceed 128 characters."
+            )
+
+    def _validate_pagination(self, limit: int, offset: int) -> None:
+        if limit < 1 or limit > 100 or offset < 0:
+            raise validation_error("Pagination must use offset >= 0 and limit between 1 and 100.")
+
+    @staticmethod
+    def _required_text(value, message) -> str:
+        if value is None or not value.strip():
+            raise validation_error(message)
+        return value.strip()
+
+    @staticmethod
+    def _new_business_no(now: datetime, prefix: str) -> str:
+        return f"{prefix}-{now:%Y%m%d}-{uuid4().hex[:8].upper()}"
 
     @staticmethod
     def _task_snapshot(task: InspectionTask) -> dict[str, Any]:
@@ -392,6 +543,8 @@ class InspectionTaskService:
             "created_at": task.created_at.isoformat(),
             "updated_at": task.updated_at.isoformat(),
             "closed_at": task.closed_at.isoformat() if task.closed_at else None,
+            "ai_suggestions": [s.to_dict() for s in task.ai_suggestions],
+            "ai_pending_confirm": task.ai_pending_confirm,
         }
 
     @staticmethod
@@ -417,6 +570,10 @@ class InspectionTaskService:
             closed_at=datetime.fromisoformat(snapshot["closed_at"])
             if snapshot.get("closed_at")
             else None,
+            ai_suggestions=tuple(
+                AiSuggestion.from_dict(s) for s in (snapshot.get("ai_suggestions") or [])
+            ),
+            ai_pending_confirm=snapshot.get("ai_pending_confirm", False),
         )
 
     def _add_task_status_log(self, uow, task, context, *, action, from_status, reason, now) -> None:
@@ -434,10 +591,11 @@ class InspectionTaskService:
         )
 
     def _audit(self, uow, task, context, *, action, parameters, now) -> None:
+        action_value = action.value if hasattr(action, "value") else action
         uow.audit.add(
             community_id=context.community_id,
             actor_id=context.actor_id,
-            action=action.value,
+            action=action_value,
             resource_type="INSPECTION_TASK",
             resource_id=task.id,
             parameter_summary=parameters,
@@ -464,12 +622,6 @@ class InspectionTaskService:
 
 
 class SecurityEventService:
-    _require_role = staticmethod(require_role)
-    _require_idempotency_key = staticmethod(require_idempotency_key)
-    _validate_pagination = staticmethod(validate_pagination)
-    _required_text = staticmethod(required_text)
-    _new_business_no = staticmethod(new_business_no)
-
     def __init__(self, unit_of_work_factory: Any) -> None:
         self._unit_of_work_factory = unit_of_work_factory
 
@@ -518,6 +670,7 @@ class SecurityEventService:
                 description=command.description.strip(),
                 source_task_id=command.source_task_id,
                 create_idempotency_key=idempotency_key,
+                report_source=command.report_source,
                 created_at=now,
                 updated_at=now,
             )
@@ -552,14 +705,29 @@ class SecurityEventService:
                 },
                 now=now,
             )
-            # 高风险：通知值班人员并锁定待人工确认（事件不自动关闭）
+            # 高风险：通知值班人员（PRD 6.4）。无可用值班人员时升级到备用联系人。
             if event.risk_level == EventRiskLevel.HIGH_RISK:
-                for duty in uow.staff_directory.list_duty_users(context.community_id):
-                    uow.messages.enqueue(
+                duty_users = uow.staff_directory.list_duty_users(context.community_id)
+                if duty_users:
+                    for duty in duty_users:
+                        uow.messages.enqueue(
+                            community_id=context.community_id,
+                            receiver_id=duty,
+                            event_type="HIGH_RISK_EVENT",
+                            resource_id=event.id,
+                            request_id=context.request_id,
+                            created_at=now,
+                        )
+                else:
+                    uow.escalation.escalate_high_risk(
                         community_id=context.community_id,
-                        receiver_id=duty,
-                        event_type="HIGH_RISK_EVENT",
-                        resource_id=event.id,
+                        event_id=event.id,
+                        event_business_no=event.business_no,
+                        reason="NO_DUTY_STAFF",
+                        summary=(
+                            f"高风险事件 {event.business_no}（{event.location}）上报后"
+                            f"无可用值班人员，已升级至备用联系人处理。"
+                        ),
                         request_id=context.request_id,
                         created_at=now,
                     )
@@ -657,6 +825,10 @@ class SecurityEventService:
         ):
             return [EventAction.SUBMIT_DISPOSAL]
         if status == EventStatus.PENDING_REVIEW and context.has_any_role(*EVENT_REVIEW_ROLES):
+            # 高风险事件必须先完成等级/处置方案的人工确认（GRADE_CONFIRM），
+            # 之后才允许复核通过或退回（PRD 6.4：高风险只能由授权管理者复核关闭）。
+            if event.risk_level == EventRiskLevel.HIGH_RISK and event.grade_confirmed_by is None:
+                return [EventAction.GRADE_CONFIRM]
             return [EventAction.REVIEW_PASS, EventAction.RETURN]
         return []
 
@@ -667,6 +839,8 @@ class SecurityEventService:
             return self._assign_event(uow, event, command, context, now)
         if action == EventAction.SUBMIT_DISPOSAL:
             return self._submit_disposal(uow, event, command, context, now)
+        if action == EventAction.GRADE_CONFIRM:
+            return self._grade_confirm(event, command, context, now)
         if action == EventAction.REVIEW_PASS:
             return self._review_pass(event, command, context, now)
         if action == EventAction.RETURN:
@@ -714,11 +888,29 @@ class SecurityEventService:
         event.transition(command.action, now=now)
         return note
 
+    def _grade_confirm(self, event, command, context, now) -> None:
+        """高风险事件等级/处置方案的人工确认（PRD 6.4）。
+
+        不改变事件状态，仅记录授权管理者身份。之后 ``REVIEW_PASS`` 才被允许，
+        从而确保高风险事件只能由授权管理者确认并复核关闭。
+        """
+        self._require_role(context, *EVENT_REVIEW_ROLES)
+        if event.status != EventStatus.PENDING_REVIEW:
+            raise invalid_transition(
+                event.status.value,
+                EventAction.GRADE_CONFIRM.value,
+                [a.value for a in event.state_actions()],
+            )
+        if event.risk_level != EventRiskLevel.HIGH_RISK:
+            raise validation_error("Grade confirmation is only required for high-risk events.")
+        event.grade_confirmed_by = context.actor_id
+        event.touch(now=now)
+        return None
+
     def _review_pass(self, event, command, context, now) -> None:
         self._require_role(context, *EVENT_REVIEW_ROLES)
-        # 高风险事件：复核通过即代表等级与处置方案经人工确认
-        if event.risk_level == EventRiskLevel.HIGH_RISK and event.grade_confirmed_by is None:
-            event.grade_confirmed_by = context.actor_id
+        # 高风险事件：实体状态机在 grade_confirmed_by 为空时会拒绝关闭，
+        # 因此必须已由授权管理者完成人工确认（PRD 6.4）。
         event.transition(EventAction.REVIEW_PASS, now=now)
         return None
 
@@ -751,9 +943,33 @@ class SecurityEventService:
         if not command.description.strip():
             raise validation_error("description is required.")
 
+    def _require_role(self, context, *roles) -> None:
+        if not context.has_any_role(*roles):
+            raise forbidden()
+
     def _require_event_handler(self, event, context) -> None:
         if not context.has_any_role(*EVENT_HANDLER_ROLES) or event.assignee_id != context.actor_id:
             raise forbidden()
+
+    def _require_idempotency_key(self, key: str) -> None:
+        if not key or not key.strip() or len(key) > 128:
+            raise validation_error(
+                "Idempotency-Key is required and must not exceed 128 characters."
+            )
+
+    def _validate_pagination(self, limit: int, offset: int) -> None:
+        if limit < 1 or limit > 100 or offset < 0:
+            raise validation_error("Pagination must use offset >= 0 and limit between 1 and 100.")
+
+    @staticmethod
+    def _required_text(value, message) -> str:
+        if value is None or not value.strip():
+            raise validation_error(message)
+        return value.strip()
+
+    @staticmethod
+    def _new_business_no(now: datetime, prefix: str) -> str:
+        return f"{prefix}-{now:%Y%m%d}-{uuid4().hex[:8].upper()}"
 
     @staticmethod
     def _event_snapshot(event: SecurityEvent) -> dict[str, Any]:
@@ -773,6 +989,7 @@ class SecurityEventService:
             "grade_confirmed_by": str(event.grade_confirmed_by)
             if event.grade_confirmed_by
             else None,
+            "report_source": event.report_source,
             "version": event.version,
             "created_at": event.created_at.isoformat(),
             "updated_at": event.updated_at.isoformat(),
@@ -799,6 +1016,7 @@ class SecurityEventService:
             grade_confirmed_by=UUID(snapshot["grade_confirmed_by"])
             if snapshot.get("grade_confirmed_by")
             else None,
+            report_source=snapshot.get("report_source", "MANUAL"),
             version=snapshot["version"],
             created_at=datetime.fromisoformat(snapshot["created_at"]),
             updated_at=datetime.fromisoformat(snapshot["updated_at"]),

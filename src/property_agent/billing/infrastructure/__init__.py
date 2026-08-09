@@ -1,3 +1,1 @@
-from property_agent.billing.infrastructure.repository import SqlAlchemyBillRepository
-
-__all__ = ["SqlAlchemyBillRepository"]
+"""Database, repository, source-port, and shared-port adapters for billing."""

@@ -5,10 +5,25 @@ from types import TracebackType
 from typing import Any, Protocol, Self
 from uuid import UUID
 
-from property_agent.platform.context import RequestContext
 from property_agent.repair.application.commands import TimelineEntry, WorkOrderSearch
 from property_agent.repair.domain.entities import WorkOrder
 from property_agent.repair.domain.enums import ActionCode, ProcessRecordType, Role
+
+
+@dataclass(frozen=True, slots=True)
+class RequestContext:
+    actor_id: UUID
+    community_id: UUID
+    roles: frozenset[Role]
+    request_id: str
+    house_ids: frozenset[UUID] = frozenset()
+
+    def __post_init__(self) -> None:
+        if not self.request_id.strip() or len(self.request_id) > 64:
+            raise ValueError("request_id must contain 1 to 64 non-whitespace characters.")
+
+    def has_any_role(self, *roles: Role) -> bool:
+        return bool(self.roles.intersection(roles))
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +118,10 @@ class StaffDirectoryPort(Protocol):
         self, *, user_id: UUID, community_id: UUID, request_id: str
     ) -> None: ...
 
+    def list_duty_staff(self, *, community_id: UUID, request_id: str) -> tuple[UUID, ...]:
+        """Return on-duty staff who must be notified about high-risk reports."""
+        ...
+
 
 class AttachmentPort(Protocol):
     def ensure_usable(
@@ -143,6 +162,23 @@ class MessagePort(Protocol):
     ) -> None: ...
 
 
+class HandoverPort(Protocol):
+    def create(
+        self,
+        *,
+        community_id: UUID,
+        requester_id: UUID,
+        queue: str,
+        reason: str,
+        summary: str,
+        payload: dict[str, Any],
+        request_id: str,
+        created_at: datetime,
+    ) -> UUID:
+        """Create a manual-handover ticket and return its identifier."""
+        ...
+
+
 class RepairUnitOfWork(Protocol):
     work_orders: WorkOrderRepository
     idempotency: IdempotencyPort
@@ -152,6 +188,7 @@ class RepairUnitOfWork(Protocol):
     attachments: AttachmentPort
     audit: AuditPort
     messages: MessagePort
+    handover: HandoverPort
 
     def __enter__(self) -> Self: ...
 

@@ -29,6 +29,11 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
 
 # Local database and generated artifacts
 *.db
@@ -39,3 +44,4 @@ alembic/versions/__pycache__/
 大致需求.txt
 物业社区管理智能体_MVP_PRD.md
 物业社区管理智能体_PRD.md
+物业社区管理智能体_下一阶段PRD.md

@@ -10,7 +10,23 @@ from property_agent.inspection.application.commands import (
     TimelineEntry,
 )
 from property_agent.inspection.domain.entities import InspectionTask, SecurityEvent
-from property_agent.platform.context import RequestContext
+from property_agent.inspection.domain.enums import Role
+
+
+@dataclass(frozen=True, slots=True)
+class RequestContext:
+    actor_id: UUID
+    community_id: UUID
+    roles: frozenset[Role]
+    request_id: str
+    house_ids: frozenset[UUID] = frozenset()
+
+    def __post_init__(self) -> None:
+        if not self.request_id.strip() or len(self.request_id) > 64:
+            raise ValueError("request_id must contain 1 to 64 non-whitespace characters.")
+
+    def has_any_role(self, *roles: Role) -> bool:
+        return bool(self.roles.intersection(roles))
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +175,14 @@ class MessagePort(Protocol):
     ) -> None: ...
 
 
+class EscalationPort(Protocol):
+    """高风险通知失败/无可用值班人员时的升级与备用联系人（PRD 6.4）。"""
+
+    def escalate_high_risk(
+        self, *, community_id, event_id, event_business_no, reason, summary, request_id, created_at
+    ) -> UUID: ...
+
+
 @dataclass(frozen=True, slots=True)
 class SharedPorts:
     idempotency: IdempotencyPort
@@ -167,6 +191,7 @@ class SharedPorts:
     attachments: AttachmentPort
     audit: AuditPort
     messages: MessagePort
+    escalation: EscalationPort
 
 
 SharedPortFactory = Callable[..., SharedPorts]
@@ -180,6 +205,7 @@ class InspectionUnitOfWork(Protocol):
     attachments: AttachmentPort
     audit: AuditPort
     messages: MessagePort
+    escalation: EscalationPort
 
     def __enter__(self) -> Self: ...
 

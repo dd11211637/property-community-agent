@@ -4,6 +4,7 @@ Application-layer audit service — PF-06.
 Provides AuditService, @audit_log decorator, and DataMasker for sensitive
 field masking (phone, password, keys, attachment URLs).
 """
+
 from __future__ import annotations
 
 import functools
@@ -47,6 +48,7 @@ ATTACHMENT_URL_RE = re.compile(
 # DataMasker — PF-06 desensitization engine
 # ---------------------------------------------------------------------------
 
+
 class DataMasker:
     """Mask sensitive data before writing to AuditLog.parameter_summary.
 
@@ -86,9 +88,7 @@ class DataMasker:
         masked: dict[str, Any] = {}
         for key, value in data.items():
             key_lower = key.lower()
-            if key_lower in FULL_REDACT_FIELDS or any(
-                kw in key_lower for kw in FULL_REDACT_FIELDS
-            ):
+            if key_lower in FULL_REDACT_FIELDS or any(kw in key_lower for kw in FULL_REDACT_FIELDS):
                 masked[key] = "***REDACTED***"
             elif key_lower in PHONE_FIELDS and isinstance(value, str):
                 masked[key] = cls.mask_phone(value)
@@ -98,8 +98,11 @@ class DataMasker:
                 masked[key] = cls._mask_dict(value)
             elif isinstance(value, list):
                 masked[key] = [
-                    cls._mask_dict(v) if isinstance(v, dict) else
-                    cls._mask_string_value(key, v) if isinstance(v, str) else v
+                    cls._mask_dict(v)
+                    if isinstance(v, dict)
+                    else cls._mask_string_value(key, v)
+                    if isinstance(v, str)
+                    else v
                     for v in value
                 ]
             else:
@@ -125,6 +128,7 @@ class DataMasker:
 # ---------------------------------------------------------------------------
 # AuditService — PF-06 audit logging
 # ---------------------------------------------------------------------------
+
 
 class AuditService:
     """Writes audit log entries with sensitive data masking.
@@ -158,21 +162,24 @@ class AuditService:
         """
         masked = DataMasker.mask_sensitive_data(parameter_summary)
 
-        self._session.add(AuditLogModel(
-            actor_id=actor_id,
-            community_id=community_id,
-            action=action,
-            resource_type=resource_type,
-            resource_id=resource_id,
-            parameter_summary=masked,
-            result=result,
-            request_id=request_id,
-        ))
+        self._session.add(
+            AuditLogModel(
+                actor_id=actor_id,
+                community_id=community_id,
+                action=action,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                parameter_summary=masked,
+                result=result,
+                request_id=request_id,
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
 # @audit_log decorator — PF-06
 # ---------------------------------------------------------------------------
+
 
 def audit_log(action: str, resource_type: str) -> Callable:
     """Decorator that automatically writes an audit log entry.
@@ -195,10 +202,12 @@ def audit_log(action: str, resource_type: str) -> Callable:
     - request_id from RequestContext.current()
     - parameter_summary from function kwargs (excluding db, context, ctx)
     """
+
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             from property_agent.platform.adapters.api.dependencies import RequestContext
+
             ctx = RequestContext.current()
             db = _extract_session(kwargs)
 
@@ -238,6 +247,7 @@ def audit_log(action: str, resource_type: str) -> Callable:
         @functools.wraps(func)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
             from property_agent.platform.adapters.api.dependencies import RequestContext
+
             ctx = RequestContext.current()
             db = _extract_session(kwargs)
 
@@ -274,6 +284,7 @@ def audit_log(action: str, resource_type: str) -> Callable:
                 raise
 
         import asyncio
+
         if asyncio.iscoroutinefunction(func):
             return async_wrapper
         return sync_wrapper
@@ -326,8 +337,17 @@ def _build_param_summary(kwargs: dict[str, Any]) -> dict[str, Any] | None:
 def _extract_resource_id(kwargs: dict[str, Any], result: Any) -> str | None:
     """Try to extract a resource_id from function kwargs or result."""
     # Check common resource ID kwargs
-    for key in ("resource_id", "bill_id", "order_id", "repair_id", "event_id",
-                "announcement_id", "inspection_id", "handover_id", "message_id"):
+    for key in (
+        "resource_id",
+        "bill_id",
+        "order_id",
+        "repair_id",
+        "event_id",
+        "announcement_id",
+        "inspection_id",
+        "handover_id",
+        "message_id",
+    ):
         val = kwargs.get(key)
         if val is not None:
             return str(val)

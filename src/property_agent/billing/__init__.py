@@ -1,5 +1,1 @@
-"""Read-only billing queries and rule explanations."""
-
-from property_agent.billing.application.service import BillingService
-
-__all__ = ["BillingService"]
+"""账单只读查询、费用规则解释和财务咨询模块。"""

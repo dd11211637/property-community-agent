@@ -8,6 +8,7 @@ Message state flow: PENDING → SENT / FAILED → READ
 Max retries: 5 (after which status stays FAILED for management visibility)
 Backoff: 2^retry_count * 2 seconds
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -66,8 +67,12 @@ class OutboxDispatcher:
     async def run(self) -> None:
         """Start the polling loop. Runs until stop() is called."""
         self._running = True
-        logger.info("OutboxDispatcher started (poll=%ss, batch=%s, max_retry=%s)",
-                     self._poll_interval, self._batch_size, self._max_retry)
+        logger.info(
+            "OutboxDispatcher started (poll=%ss, batch=%s, max_retry=%s)",
+            self._poll_interval,
+            self._batch_size,
+            self._max_retry,
+        )
 
         while self._running:
             try:
@@ -148,17 +153,22 @@ class OutboxDispatcher:
             msg.status = "FAILED"
             logger.warning(
                 "OutboxDispatcher: message %s exceeded max retries (%s/%s)",
-                msg.id, msg.retry_count, self._max_retry,
+                msg.id,
+                msg.retry_count,
+                self._max_retry,
             )
         else:
             # Exponential backoff is applied by checking retry_count
             # before next dispatch — the dispatcher only picks up PENDING
             # messages, and the backoff delay is calculated in
             # _should_retry_now based on updated_at + backoff_delay
-            backoff_seconds = 2 ** msg.retry_count * 2
+            backoff_seconds = 2**msg.retry_count * 2
             logger.info(
                 "OutboxDispatcher: message %s retry %s/%s, backoff=%ss",
-                msg.id, msg.retry_count, self._max_retry, backoff_seconds,
+                msg.id,
+                msg.retry_count,
+                self._max_retry,
+                backoff_seconds,
             )
 
     @staticmethod
@@ -172,12 +182,13 @@ class OutboxDispatcher:
             retry_count=3 → 2^3 * 2 = 16s
             retry_count=4 → 2^4 * 2 = 32s
         """
-        return 2 ** retry_count * 2
+        return 2**retry_count * 2
 
 
 # ---------------------------------------------------------------------------
 # MessageOutboxService — PF-05 message enqueue and status management
 # ---------------------------------------------------------------------------
+
 
 class MessageOutboxService:
     """Writes messages to the outbox (MessageRecord) for async delivery.
