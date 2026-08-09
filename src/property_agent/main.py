@@ -12,10 +12,11 @@
   - repair    (报修)
   - announcement (公告)
   - inspection (巡检与安防)
-  - billing   (费用查询与智能缴费)
+  - billing   (账单查询、规则解释与财务咨询)
   - agent     (统一智能体会话)
 ────────────────────────────────────────────────────────
 """
+
 from __future__ import annotations
 
 from uuid import uuid4
@@ -108,9 +109,7 @@ def create_app() -> FastAPI:
         )
 
     @app.exception_handler(PlatformBusinessError)
-    async def business_error_handler(
-        request: Request, exc: PlatformBusinessError
-    ) -> JSONResponse:
+    async def business_error_handler(request: Request, exc: PlatformBusinessError) -> JSONResponse:
         # Raised by the announcement module and the shared validation helpers.
         return error_envelope(
             request,
@@ -121,9 +120,7 @@ def create_app() -> FastAPI:
         )
 
     @app.exception_handler(AgentSessionError)
-    async def agent_session_error_handler(
-        request: Request, exc: AgentSessionError
-    ) -> JSONResponse:
+    async def agent_session_error_handler(request: Request, exc: AgentSessionError) -> JSONResponse:
         # 会话归属 / 生命周期 / 恢复守卫失败（PRD §6.5.8）
         return error_envelope(
             request,

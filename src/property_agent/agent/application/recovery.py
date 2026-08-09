@@ -120,9 +120,7 @@ class AgentRecoveryService:
         # 闸 4：参数指纹（确认回执必须对应同一份参数）
         if pending is not None and expected_action_hash is not None:
             if expected_action_hash != pending.get("params_hash"):
-                raise AgentSessionError(
-                    AgentSessionErrorCode.CONFIRMATION_PARAMS_CHANGED
-                )
+                raise AgentSessionError(AgentSessionErrorCode.CONFIRMATION_PARAMS_CHANGED)
 
         return RestoredSession(
             state=state,

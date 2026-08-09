@@ -13,6 +13,7 @@ The handlers registered by :func:`register_common_error_handlers` are shared
 by the unified application (``property_agent.main``) and the standalone
 repair application, so both surfaces behave identically.
 """
+
 from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException, Request

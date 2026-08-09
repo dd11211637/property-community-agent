@@ -258,9 +258,7 @@ def confirm_ai_suggestions(
     service: TaskServiceDep,
     context: ContextDep,
 ) -> Envelope:
-    task = service.confirm_ai_suggestions(
-        task_id, context, idempotency_key=idempotency_key
-    )
+    task = service.confirm_ai_suggestions(task_id, context, idempotency_key=idempotency_key)
     return _success(task_data(task, service, context), context)
 
 

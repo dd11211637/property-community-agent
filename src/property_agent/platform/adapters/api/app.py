@@ -4,6 +4,7 @@ Platform API app factory — creates the FastAPI application with platform route
 Follows the same pattern as repair/adapters/api/app.py and
 inspection/adapters/api/app.py.
 """
+
 from __future__ import annotations
 
 from uuid import uuid4

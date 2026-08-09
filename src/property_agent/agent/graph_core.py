@@ -35,14 +35,11 @@ def interrupt(payload: Any) -> None:
 
 
 class Checkpointer(Protocol):
-    def save(self, thread_id: str, state: GraphState) -> None:
-        ...
+    def save(self, thread_id: str, state: GraphState) -> None: ...
 
-    def load(self, thread_id: str) -> GraphState | None:
-        ...
+    def load(self, thread_id: str) -> GraphState | None: ...
 
-    def list_threads(self) -> list[str]:
-        ...
+    def list_threads(self) -> list[str]: ...
 
 
 class MemoryCheckpointer:
@@ -104,9 +101,7 @@ class CompiledGraph:
         self._g = graph
         self._cp = checkpointer
 
-    def invoke(
-        self, state: GraphState, *, thread_id: str | None = None
-    ) -> dict[str, Any]:
+    def invoke(self, state: GraphState, *, thread_id: str | None = None) -> dict[str, Any]:
         thread_id = thread_id or state.conversation_id or str(uuid4())
         return self._run(self._g._entry, state, thread_id)
 

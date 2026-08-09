@@ -5,6 +5,7 @@ adapters/api/dependencies.py     账单模块 API 依赖（PRD 6.3）
   生产服务；未装配时返回 503 ADAPTER_NOT_CONFIGURED（与 repair/announcement 一致）。
 - 鉴权沿用平台 ``get_request_context`` 接缝（生产环境经 JWT 绑定）。
 """
+
 from __future__ import annotations
 
 from fastapi import Request

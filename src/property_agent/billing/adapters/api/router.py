@@ -16,6 +16,7 @@ adapters/api/router.py     账单与财务咨询安全路由（PRD 6.3）
 - ``POST /api/consultations/{id}/resolve``    解决（仅财务/管理员）
 - ``POST /api/consultations/{id}/appeal``     申诉（仅本人）
 """
+
 from __future__ import annotations
 
 from typing import Annotated
@@ -33,10 +34,10 @@ from property_agent.billing.application.service import (
 )
 from property_agent.billing.domain.entities import Bill, ConsultationTicket
 from property_agent.platform.context import RequestContext
+from property_agent.platform.dependencies import get_request_context
 from property_agent.platform.infrastructure.database import get_db
 from property_agent.platform.responses import success_envelope
 from property_agent.platform.schemas import Envelope
-from property_agent.platform.dependencies import get_request_context
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 
@@ -49,6 +50,7 @@ IdempotencyHeader = Annotated[str, Header(alias="Idempotency-Key", min_length=1,
 
 # ── 请求体 ─────────────────────────────────────────────
 
+
 class CreateConsultationRequest(BaseModel):
     subject: str
     description: str
@@ -60,6 +62,7 @@ class AnswerConsultationRequest(BaseModel):
 
 
 # ── 表现层 ─────────────────────────────────────────────
+
 
 def bill_data(bill: Bill) -> dict:
     return {
@@ -122,6 +125,7 @@ def consultation_data(ticket: ConsultationTicket) -> dict:
 
 # ── 账单查询 ───────────────────────────────────────────
 
+
 @router.get("/bills", response_model=Envelope)
 def list_bills(
     service: BillingServiceDep,
@@ -163,6 +167,7 @@ def get_rule(fee_type: str, service: BillingServiceDep, context: ContextDep, db:
 
 
 # ── 财务咨询单 ─────────────────────────────────────────
+
 
 @router.post("/consultations", response_model=Envelope, status_code=201)
 def create_consultation(

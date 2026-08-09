@@ -57,9 +57,7 @@ def test_api_requires_trusted_context(service, ids) -> None:
     assert response.json()["error"]["code"] == "AUTH_REQUIRED"
 
 
-def test_tool_adapter_exposes_framework_neutral_schemas(
-    service, ids, resident_context
-) -> None:
+def test_tool_adapter_exposes_framework_neutral_schemas(service, ids, resident_context) -> None:
     tools = RepairToolAdapter(service)
 
     result = tools.create_work_order(
@@ -79,9 +77,7 @@ def test_tool_adapter_exposes_framework_neutral_schemas(
     assert "parameters" in TOOL_SCHEMAS["create_work_order"]
 
 
-def test_request_id_header_is_limited_to_database_capacity(
-    service, ids, resident_context
-) -> None:
+def test_request_id_header_is_limited_to_database_capacity(service, ids, resident_context) -> None:
     app = create_app(service)
     app.dependency_overrides[get_request_context] = lambda: resident_context
     client = TestClient(app)

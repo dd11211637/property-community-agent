@@ -24,6 +24,4 @@ def select_repair_tool(state: GraphState) -> str:
 
 
 def attach_repair_subgraph(graph: StateGraph, registry: Mapping) -> str:
-    return attach_subgraph(
-        graph, name=NAME, selector=select_repair_tool, registry=registry
-    )
+    return attach_subgraph(graph, name=NAME, selector=select_repair_tool, registry=registry)

@@ -93,17 +93,12 @@ class ConversationService:
         finally:
             session.close()
 
-    def require_owned_by(
-        self, conversation_id: str, context: AgentContext
-    ) -> ConversationSnapshot:
+    def require_owned_by(self, conversation_id: str, context: AgentContext) -> ConversationSnapshot:
         """会话所有权 + 生命周期校验（恢复前第一道闸）。"""
         snapshot = self.get(conversation_id)
         if snapshot is None:
             raise AgentSessionError(AgentSessionErrorCode.CONVERSATION_NOT_FOUND)
-        if (
-            snapshot.actor_id != context.actor_id
-            or snapshot.community_id != context.community_id
-        ):
+        if snapshot.actor_id != context.actor_id or snapshot.community_id != context.community_id:
             raise AgentSessionError(AgentSessionErrorCode.SESSION_MISMATCH)
         if snapshot.is_closed:
             raise AgentSessionError(AgentSessionErrorCode.CONVERSATION_CLOSED)
@@ -133,10 +128,7 @@ class ConversationService:
                 )
                 session.add(row)
             else:
-                if (
-                    row.actor_id != context.actor_id
-                    or row.community_id != context.community_id
-                ):
+                if row.actor_id != context.actor_id or row.community_id != context.community_id:
                     raise AgentSessionError(AgentSessionErrorCode.SESSION_MISMATCH)
                 if row.status == ConversationStatus.CLOSED.value:
                     raise AgentSessionError(AgentSessionErrorCode.CONVERSATION_CLOSED)
@@ -148,9 +140,7 @@ class ConversationService:
         finally:
             session.close()
 
-    def sync_from_state(
-        self, state: GraphState, *, waiting_confirm: bool
-    ) -> ConversationSnapshot:
+    def sync_from_state(self, state: GraphState, *, waiting_confirm: bool) -> ConversationSnapshot:
         """把一轮执行结果同步回业务表：当前房屋 / 接管状态 / 生命周期。"""
         session = self._session_factory()
         try:
@@ -209,7 +199,5 @@ class ConversationService:
     @staticmethod
     def _find(session: Session, conversation_id: str) -> ConversationModel | None:
         return session.execute(
-            select(ConversationModel).where(
-                ConversationModel.conversation_id == conversation_id
-            )
+            select(ConversationModel).where(ConversationModel.conversation_id == conversation_id)
         ).scalar_one_or_none()

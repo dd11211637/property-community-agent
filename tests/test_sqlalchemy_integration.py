@@ -63,9 +63,7 @@ def test_repair_tables_and_transaction_rollback(ids, resident_context) -> None:
     sessions = session_factory_from_engine(engine)
     state = FakeState()
     service = WorkOrderService(
-        lambda: SqlAlchemyRepairUnitOfWork(
-            sessions, make_shared_ports(state, ids, fail_audit=True)
-        )
+        lambda: SqlAlchemyRepairUnitOfWork(sessions, make_shared_ports(state, ids, fail_audit=True))
     )
 
     with pytest.raises(RuntimeError, match="audit failure"):
@@ -84,10 +82,7 @@ def test_repair_tables_and_transaction_rollback(ids, resident_context) -> None:
 
     with sessions() as session:
         assert session.scalar(select(func.count()).select_from(WorkOrderModel)) == 0
-        assert (
-            session.scalar(select(func.count()).select_from(WorkOrderStatusLogModel))
-            == 0
-        )
+        assert session.scalar(select(func.count()).select_from(WorkOrderStatusLogModel)) == 0
 
 
 def test_repository_uses_atomic_optimistic_lock() -> None:

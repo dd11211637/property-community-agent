@@ -10,6 +10,7 @@ The assembly pipeline is:
   Configuration → Database Engine / SessionFactory
     → Application Services → FastAPI dependency_overrides
 """
+
 from __future__ import annotations
 
 import logging
@@ -75,6 +76,7 @@ class ContainerState:
 
     Set on app.state.container after build_production_container() succeeds.
     """
+
     __slots__ = ("services",)
 
     def __init__(self) -> None:
@@ -84,6 +86,7 @@ class ContainerState:
 # ---------------------------------------------------------------------------
 # Async database helpers
 # ---------------------------------------------------------------------------
+
 
 def _build_async_database_url(sync_url: str) -> str:
     """Convert a sync database URL to its async counterpart.
@@ -138,6 +141,7 @@ async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
 # Async database health check
 # ---------------------------------------------------------------------------
 
+
 async def check_database_health() -> bool:
     """Run SELECT 1 against the async engine to verify connectivity."""
     try:
@@ -154,6 +158,7 @@ async def check_database_health() -> bool:
 # Service container check
 # ---------------------------------------------------------------------------
 
+
 def are_services_configured() -> bool:
     """Return True if the production service container has been assembled."""
     return _services_configured
@@ -162,6 +167,7 @@ def are_services_configured() -> bool:
 # ---------------------------------------------------------------------------
 # Lifespan — FastAPI async context manager
 # ---------------------------------------------------------------------------
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -208,6 +214,7 @@ async def lifespan(app: FastAPI):
 # build_production_container — explicit assembly for testing
 # ---------------------------------------------------------------------------
 
+
 def build_production_container(app: FastAPI) -> None:
     """Explicitly build and inject the production service container.
 
@@ -237,6 +244,7 @@ def build_production_container(app: FastAPI) -> None:
 # ---------------------------------------------------------------------------
 # Internal: service factory
 # ---------------------------------------------------------------------------
+
 
 def build_work_order_service() -> WorkOrderService:
     """Assemble the production repair service.
@@ -277,8 +285,8 @@ def build_announcement_service() -> AnnouncementService:
 def build_billing_service() -> BillingService:
     """Assemble the production billing service (PRD 6.3).
 
-    The billing read path is isolated behind ``BillingSourcePort`` (local demo
-    source by default; a remote/unavailable variant exists for R-02). Bill
+    The billing read path is isolated behind ``BillingSourcePort`` (the local
+    SQLAlchemy source is the default adapter). Bill
     queries are scoped by community + current house and audited via the
     platform ``AuditService``. The billing DB keeps its own engine (轻量接入);
     the platform DB carries audit / idempotency rows.
@@ -312,9 +320,7 @@ def build_inspection_services() -> tuple[InspectionTaskService, SecurityEventSer
     def unit_of_work_factory() -> SqlAlchemyInspectionUnitOfWork:
         return SqlAlchemyInspectionUnitOfWork(session_factory, build_inspection_ports)
 
-    return InspectionTaskService(unit_of_work_factory), SecurityEventService(
-        unit_of_work_factory
-    )
+    return InspectionTaskService(unit_of_work_factory), SecurityEventService(unit_of_work_factory)
 
 
 def build_agent_runner(app: FastAPI) -> AgentSessionRunner:
@@ -353,9 +359,7 @@ def build_agent_runner(app: FastAPI) -> AgentSessionRunner:
         return session_factory()
 
     repair_tools = build_repair_tools(app.state.work_order_service, context_provider)
-    announcement_tools = build_announcement_tools(
-        app.state.announcement_service, context_provider
-    )
+    announcement_tools = build_announcement_tools(app.state.announcement_service, context_provider)
     billing_tools = build_billing_tools(
         app.state.billing_service,
         app.state.consultation_service,
@@ -375,12 +379,8 @@ def build_agent_runner(app: FastAPI) -> AgentSessionRunner:
         checkpointer=checkpointer,
     )
     conversations = ConversationService(session_factory)
-    recovery = AgentRecoveryService(
-        conversations=conversations, checkpointer=checkpointer
-    )
-    return AgentSessionRunner(
-        graph=graph, conversations=conversations, recovery=recovery
-    )
+    recovery = AgentRecoveryService(conversations=conversations, checkpointer=checkpointer)
+    return AgentSessionRunner(graph=graph, conversations=conversations, recovery=recovery)
 
 
 def _build_services(app: FastAPI) -> dict[str, Any]:

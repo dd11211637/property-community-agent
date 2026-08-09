@@ -21,6 +21,7 @@ Coverage:
   * publish writes snapshot + outbox message per recipient + audit in one commit
   * an unauthorised review attempt leaves a DENIED audit row
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -119,34 +120,61 @@ def seed(sessions: sessionmaker[Session]) -> Seed:
                 CommunityModel(id=data.community, name="公告验收社区"),
                 CommunityModel(id=data.other_community, name="另一个社区"),
                 HouseModel(
-                    id=house_a, community_id=data.community,
-                    building="B1", unit="1", room_no="101", house_type="RESIDENTIAL",
+                    id=house_a,
+                    community_id=data.community,
+                    building="B1",
+                    unit="1",
+                    room_no="101",
+                    house_type="RESIDENTIAL",
                 ),
                 HouseModel(
-                    id=house_a2, community_id=data.community,
-                    building="B1", unit="1", room_no="103", house_type="RESIDENTIAL",
+                    id=house_a2,
+                    community_id=data.community,
+                    building="B1",
+                    unit="1",
+                    room_no="103",
+                    house_type="RESIDENTIAL",
                 ),
                 HouseModel(
-                    id=house_b, community_id=data.community,
-                    building="B1", unit="2", room_no="201", house_type="RESIDENTIAL",
+                    id=house_b,
+                    community_id=data.community,
+                    building="B1",
+                    unit="2",
+                    room_no="201",
+                    house_type="RESIDENTIAL",
                 ),
                 HouseModel(
-                    id=shop, community_id=data.community,
-                    building="B2", unit="1", room_no="101", house_type="SHOP",
+                    id=shop,
+                    community_id=data.community,
+                    building="B2",
+                    unit="1",
+                    room_no="101",
+                    house_type="SHOP",
                 ),
                 HouseModel(
-                    id=house_inactive, community_id=data.community,
-                    building="B1", unit="1", room_no="102", house_type="RESIDENTIAL",
+                    id=house_inactive,
+                    community_id=data.community,
+                    building="B1",
+                    unit="1",
+                    room_no="102",
+                    house_type="RESIDENTIAL",
                 ),
                 HouseModel(
-                    id=foreign_house, community_id=data.other_community,
-                    building="B1", unit="1", room_no="101", house_type="RESIDENTIAL",
+                    id=foreign_house,
+                    community_id=data.other_community,
+                    building="B1",
+                    unit="1",
+                    room_no="101",
+                    house_type="RESIDENTIAL",
                 ),
                 _user(data.resident_a, data.community, "resident_a", "张三"),
                 _user(data.resident_b, data.community, "resident_b", "李四"),
                 _user(data.shop_owner, data.community, "shop_owner", "王五"),
                 _user(
-                    data.inactive_resident, data.community, "inactive", "赵六",
+                    data.inactive_resident,
+                    data.community,
+                    "inactive",
+                    "赵六",
                     status="FROZEN",
                 ),
                 _user(data.foreign_resident, data.other_community, "outsider", "外区住户"),
@@ -219,7 +247,9 @@ def publish_to_approved(
 ) -> UUID:
     """Drive a draft all the way to APPROVED and return its id."""
     draft = service.create_draft(
-        create_command(audience_condition=condition if condition is not None else {"building_ids": ["B1"]}),
+        create_command(
+            audience_condition=condition if condition is not None else {"building_ids": ["B1"]}
+        ),
         cs_context(seed),
         idempotency_key="create-1",
     )
@@ -415,10 +445,7 @@ def test_publish_freezes_the_audience_and_fans_out_one_message_per_member(
         assert {message.business_type for message in messages} == {"ANNOUNCEMENT"}
         assert all(message.resource_id == str(announcement_id) for message in messages)
 
-        actions = {
-            row.action
-            for row in session.execute(select(AuditLogModel)).scalars().all()
-        }
+        actions = {row.action for row in session.execute(select(AuditLogModel)).scalars().all()}
         assert "ANNOUNCEMENT_PUBLISH" in actions
 
         consumed = session.execute(select(ConfirmationTokenModel)).scalar_one()

@@ -32,9 +32,7 @@ def _brief(announcement: Any) -> dict[str, Any]:
     }
 
 
-def build_announcement_tools(
-    service: Any, context_provider: ContextProvider
-) -> dict[str, Tool]:
+def build_announcement_tools(service: Any, context_provider: ContextProvider) -> dict[str, Tool]:
     def announcement_list(state: GraphState) -> dict[str, Any]:
         assert_level("announcement_list", OperationLevel.READ)
         context = context_provider(state)
@@ -43,9 +41,7 @@ def build_announcement_tools(
             limit=int(state.slots.get("limit") or 20),
         )
         items = service.search(search, context)
-        return ok(
-            "announcement_list", count=len(items), items=[_brief(i) for i in items]
-        )
+        return ok("announcement_list", count=len(items), items=[_brief(i) for i in items])
 
     def announcement_get(state: GraphState) -> dict[str, Any]:
         assert_level("announcement_get", OperationLevel.READ)

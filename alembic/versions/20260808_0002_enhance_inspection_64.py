@@ -55,9 +55,7 @@ def upgrade() -> None:
     op.execute(
         "UPDATE inspection_tasks SET ai_pending_confirm = false WHERE ai_pending_confirm IS NULL"
     )
-    op.execute(
-        "UPDATE security_events SET report_source = 'MANUAL' WHERE report_source IS NULL"
-    )
+    op.execute("UPDATE security_events SET report_source = 'MANUAL' WHERE report_source IS NULL")
 
 
 def downgrade() -> None:

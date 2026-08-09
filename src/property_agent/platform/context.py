@@ -11,6 +11,7 @@ JWT decoding that populates it.
 Do NOT define a second RequestContext anywhere — a divergent copy silently
 breaks role checks and community isolation across modules.
 """
+
 from __future__ import annotations
 
 from property_agent.platform.adapters.api.dependencies import RequestContext

@@ -6,6 +6,7 @@ The repair module keeps its own ``RequestContext`` (typed with the repair
 adapter converts the authenticated platform context produced by the JWT
 dependency into that domain-specific shape.
 """
+
 from dataclasses import replace
 
 from fastapi import Depends, Request
@@ -42,13 +43,9 @@ def get_service(request: Request) -> WorkOrderService:
     return service
 
 
-def to_repair_context(
-    platform_context: PlatformRequestContext, request_id: str
-) -> RequestContext:
+def to_repair_context(platform_context: PlatformRequestContext, request_id: str) -> RequestContext:
     """Project an authenticated platform context onto the repair domain."""
-    roles = frozenset(
-        ROLE_MAP[role] for role in platform_context.roles if role in ROLE_MAP
-    )
+    roles = frozenset(ROLE_MAP[role] for role in platform_context.roles if role in ROLE_MAP)
     if not roles:
         raise BusinessError(
             "FORBIDDEN",

@@ -44,9 +44,7 @@ class SqlAlchemyCheckpointer:
         session = self._session_factory()
         try:
             record = session.execute(
-                select(AgentCheckpointModel).where(
-                    AgentCheckpointModel.thread_id == thread_id
-                )
+                select(AgentCheckpointModel).where(AgentCheckpointModel.thread_id == thread_id)
             ).scalar_one_or_none()
             if record is None:
                 session.add(
@@ -71,9 +69,7 @@ class SqlAlchemyCheckpointer:
         session = self._session_factory()
         try:
             record = session.execute(
-                select(AgentCheckpointModel).where(
-                    AgentCheckpointModel.thread_id == thread_id
-                )
+                select(AgentCheckpointModel).where(AgentCheckpointModel.thread_id == thread_id)
             ).scalar_one_or_none()
             if record is None:
                 return None
@@ -124,9 +120,7 @@ class SqlAlchemyCheckpointer:
         session = self._session_factory()
         try:
             record = session.execute(
-                select(AgentCheckpointModel).where(
-                    AgentCheckpointModel.thread_id == thread_id
-                )
+                select(AgentCheckpointModel).where(AgentCheckpointModel.thread_id == thread_id)
             ).scalar_one_or_none()
             if record is not None:
                 session.delete(record)

@@ -4,9 +4,10 @@ domain/value_objects.py     值对象（不可变，无标识符）
 值对象由属性值定义相等性，无独立生命周期。
 对应数据库中的列类型和约束。
 """
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
-from datetime import date, datetime
 from decimal import Decimal
 
 
@@ -26,6 +27,7 @@ class Money:
         total_amount  NUMERIC(10,2) NOT NULL DEFAULT 0 CHECK (total_amount >= 0),
         pay_amount    NUMERIC(10,2) NOT NULL        CHECK (pay_amount > 0);
     """
+
     amount: Decimal
 
     def __post_init__(self):
@@ -91,10 +93,11 @@ class FeeDetail:
           FROM fee_bills
          WHERE bill_id = :bill_id;
     """
-    property_fee: Money = field(default_factory=Money.zero)   # 物业费
-    utility_fee: Money = field(default_factory=Money.zero)    # 公摊水电费
-    parking_fee: Money = field(default_factory=Money.zero)    # 车位费
-    late_fee: Money = field(default_factory=Money.zero)       # 滞纳金
+
+    property_fee: Money = field(default_factory=Money.zero)  # 物业费
+    utility_fee: Money = field(default_factory=Money.zero)  # 公摊水电费
+    parking_fee: Money = field(default_factory=Money.zero)  # 车位费
+    late_fee: Money = field(default_factory=Money.zero)  # 滞纳金
 
     def total(self) -> Money:
         """
@@ -122,6 +125,7 @@ class BillPeriod:
         SELECT * FROM fee_bills WHERE bill_period = :period;
         SELECT * FROM fee_bills WHERE bill_period BETWEEN :start AND :end;
     """
+
     value: str
 
     def __post_init__(self):
@@ -169,6 +173,7 @@ class Address:
           JOIN community_buildings b ON r.building_id = b.building_id
          WHERE r.room_id = :room_id;
     """
+
     building_name: str
     room_number: str
     detail: str = ""

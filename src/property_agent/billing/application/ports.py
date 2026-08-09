@@ -5,18 +5,28 @@ application/ports.py     端口接口（Port）
 具体实现放在 infrastructure 层。
 每个接口方法标注了等价 SQL 语句。
 """
+
 from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional, Protocol
 from datetime import date
+from typing import Protocol
 from uuid import UUID
 
-from ..domain.entities import Bill, User, Payment, Receipt, Building, Room, BillingRule, ConsultationTicket
-from ..domain.enums import ReminderLevel, ConsultationStatus
-
+from ..domain.entities import (
+    Bill,
+    BillingRule,
+    Building,
+    ConsultationTicket,
+    Payment,
+    Receipt,
+    Room,
+    User,
+)
 
 # ── 仓储端口 ─────────────────────────────────────────
+
 
 class BillRepository(ABC):
     """
@@ -46,7 +56,7 @@ class BillRepository(ABC):
         ...
 
     @abstractmethod
-    def find_by_id(self, bill_id: str) -> Optional[Bill]:
+    def find_by_id(self, bill_id: str) -> Bill | None:
         """
         按 ID 查询账单
 
@@ -168,7 +178,7 @@ class UserRepository(ABC):
     """
 
     @abstractmethod
-    def find_by_id(self, user_id: str) -> Optional[User]:
+    def find_by_id(self, user_id: str) -> User | None:
         """
         按 ID 查询用户
 
@@ -182,7 +192,7 @@ class UserRepository(ABC):
         ...
 
     @abstractmethod
-    def find_owner_by_room(self, room_id: str) -> Optional[User]:
+    def find_owner_by_room(self, room_id: str) -> User | None:
         """
         按房号查询活跃业主（账单生成用）
 
@@ -256,7 +266,7 @@ class PaymentRepository(ABC):
         ...
 
     @abstractmethod
-    def find_by_bill_id(self, bill_id: str) -> Optional[Payment]:
+    def find_by_bill_id(self, bill_id: str) -> Payment | None:
         """
         按账单ID查询支付记录（退款用）
 
@@ -294,7 +304,7 @@ class ReceiptRepository(ABC):
     """
 
     @abstractmethod
-    def find_by_no(self, receipt_no: str) -> Optional[Receipt]:
+    def find_by_no(self, receipt_no: str) -> Receipt | None:
         """
         按票据号查询
 
@@ -341,6 +351,7 @@ class ReceiptRepository(ABC):
 
 # ── 楼栋/房号仓储端口 ───────────────────────────────
 
+
 class BuildingRepository(ABC):
     """
     楼栋仓储接口
@@ -351,7 +362,7 @@ class BuildingRepository(ABC):
     """
 
     @abstractmethod
-    def find_by_id(self, building_id: str) -> Optional[Building]:
+    def find_by_id(self, building_id: str) -> Building | None:
         """
         按 ID 查询楼栋
 
@@ -381,7 +392,7 @@ class RoomRepository(ABC):
     """
 
     @abstractmethod
-    def find_by_id(self, room_id: str) -> Optional[Room]:
+    def find_by_id(self, room_id: str) -> Room | None:
         """
         按 ID 查询房号
 
@@ -436,6 +447,7 @@ class RoomRepository(ABC):
 
 # ── 事务管理端口 ─────────────────────────────────────
 
+
 class UnitOfWork(ABC):
     """
     工作单元接口
@@ -471,53 +483,10 @@ class UnitOfWork(ABC):
         ...
 
 
-# ── 外部服务端口 ─────────────────────────────────────
-
-class LLMClient(ABC):
-    """
-    LLM 调用接口
-
-    具体实现: infrastructure/llm_client.py
-    """
-
-    @abstractmethod
-    async def interpret_bill(self, bill: Bill, user_name: str) -> tuple[str, ReminderLevel, str]:
-        """
-        调用大模型解读账单，返回 (解读文本, 提醒层级, 提醒文案)。
-
-        无 API Key 时降级为内置模板。
-        """
-        ...
-
-
-class PaymentGateway(ABC):
-    """
-    支付网关接口
-
-    具体实现: infrastructure/payment_gateway.py
-    """
-
-    @abstractmethod
-    def process_payment(self, bill: Bill, user_id: str, method: str = "WECHAT") -> Payment:
-        """
-        处理支付请求，返回支付记录。
-
-        当前为模拟实现，后续对接真实支付网关。
-
-        SQL:
-            INSERT INTO fee_payments
-                (payment_id, bill_id, user_id, pay_amount, pay_method, pay_status,
-                 transaction_id, receipt_no, paid_at, created_at)
-            VALUES
-                (:payment_id, :bill_id, :user_id, :amount, :method, 'SUCCESS',
-                 :txn_id, :receipt_no, :paid_at, NOW());
-        """
-        ...
-
-
 # ═══════════════════════════════════════════════════
 # PRD 6.3 端口：账单来源 / 规则 / 咨询单
 # ═══════════════════════════════════════════════════
+
 
 @dataclass
 class IdempotencyRecord:
@@ -543,15 +512,13 @@ class BillingSourcePort(Protocol):
         self,
         *,
         community_id: str,
-        house_id: Optional[str] = None,
-        fee_type: Optional[str] = None,
-        period: Optional[str] = None,
-        status: Optional[str] = None,
-    ) -> list[Bill]:
-        ...
+        house_id: str | None = None,
+        fee_type: str | None = None,
+        period: str | None = None,
+        status: str | None = None,
+    ) -> list[Bill]: ...
 
-    def get_bill(self, *, bill_id: str) -> Optional[Bill]:
-        ...
+    def get_bill(self, *, bill_id: str) -> Bill | None: ...
 
 
 class RuleRepository(ABC):
@@ -559,31 +526,26 @@ class RuleRepository(ABC):
 
     @abstractmethod
     def find_effective(
-        self, community_id: str, fee_type: str, as_of: Optional[str] = None
-    ) -> Optional[BillingRule]:
+        self, community_id: str, fee_type: str, as_of: str | None = None
+    ) -> BillingRule | None:
         """返回当前生效的规则；无有效规则返回 None（声明未知）。"""
         ...
 
     @abstractmethod
-    def save(self, rule: BillingRule) -> BillingRule:
-        ...
+    def save(self, rule: BillingRule) -> BillingRule: ...
 
 
 class ConsultationRepository(ABC):
     """财务咨询单仓储（PRD 6.3）。"""
 
     @abstractmethod
-    def add(self, ticket: ConsultationTicket) -> ConsultationTicket:
-        ...
+    def add(self, ticket: ConsultationTicket) -> ConsultationTicket: ...
 
     @abstractmethod
-    def get(self, consultation_id: str) -> Optional[ConsultationTicket]:
-        ...
+    def get(self, consultation_id: str) -> ConsultationTicket | None: ...
 
     @abstractmethod
-    def list_by_actor(self, actor_id: str, community_id: str) -> list[ConsultationTicket]:
-        ...
+    def list_by_actor(self, actor_id: str, community_id: str) -> list[ConsultationTicket]: ...
 
     @abstractmethod
-    def update(self, ticket: ConsultationTicket) -> ConsultationTicket:
-        ...
+    def update(self, ticket: ConsultationTicket) -> ConsultationTicket: ...

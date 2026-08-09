@@ -139,9 +139,7 @@ def build_inspection_tools(
                 require_slot(state, "expected_version", "inspection_submit_record")
             ),
             note=state.slots.get("note"),
-            record_type=TaskRecordType.SUPPLEMENT
-            if is_supplement
-            else TaskRecordType.POINT_RECORD,
+            record_type=TaskRecordType.SUPPLEMENT if is_supplement else TaskRecordType.POINT_RECORD,
             point=str(require_slot(state, "point", "inspection_submit_record")),
             is_supplement=is_supplement,
             actual_time=_as_datetime(state.slots.get("actual_time")),
@@ -159,12 +157,8 @@ def build_inspection_tools(
                 "expected_version": command.expected_version,
             },
         )
-        task = task_service.execute_task_action(
-            task_id, command, context, idempotency_key=key
-        )
-        return ok(
-            "inspection_submit_record", task=_task_brief(task), idempotency_key=key
-        )
+        task = task_service.execute_task_action(task_id, command, context, idempotency_key=key)
+        return ok("inspection_submit_record", task=_task_brief(task), idempotency_key=key)
 
     def inspection_ai_suggest(state: GraphState) -> dict[str, Any]:
         assert_level("inspection_ai_suggest", OperationLevel.WRITE_LOW_RISK)
@@ -187,9 +181,7 @@ def build_inspection_tools(
                 "severity": command.severity,
             },
         )
-        task = task_service.add_ai_suggestion(
-            task_id, command, context, idempotency_key=key
-        )
+        task = task_service.add_ai_suggestion(task_id, command, context, idempotency_key=key)
         return ok(
             "inspection_ai_suggest",
             task=_task_brief(task),

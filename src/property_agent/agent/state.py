@@ -73,10 +73,4 @@ class GraphState:
             return v
 
         known = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
-        return cls(
-            **{
-                k: _dec(k, v)
-                for k, v in data.items()
-                if k in known
-            }
-        )
+        return cls(**{k: _dec(k, v) for k, v in data.items() if k in known})

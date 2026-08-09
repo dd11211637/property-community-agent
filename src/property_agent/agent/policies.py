@@ -114,6 +114,5 @@ def classify_operation_level(intent: str, tool_name: str | None = None) -> str:
 
 def is_high_risk(tool_name: str | None) -> bool:
     return tool_name in HIGH_RISK_TOOLS or (
-        tool_name in TOOL_LEVELS
-        and TOOL_LEVELS[tool_name] == OperationLevel.WRITE_HIGH_RISK.value
+        tool_name in TOOL_LEVELS and TOOL_LEVELS[tool_name] == OperationLevel.WRITE_HIGH_RISK.value
     )

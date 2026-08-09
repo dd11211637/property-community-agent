@@ -1,6 +1,7 @@
 """
 Platform API schemas — Pydantic models for request/response validation.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -9,10 +10,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-
 # ═══════════════════════════════════════════════════════════════
 # Auth
 # ═══════════════════════════════════════════════════════════════
+
 
 class LoginRequest(BaseModel):
     username: str = Field(..., min_length=1, max_length=64, description="用户名")
@@ -46,6 +47,7 @@ class HouseSelectionResponse(BaseModel):
 # Generic Envelope (matches repair/inspection pattern)
 # ═══════════════════════════════════════════════════════════════
 
+
 class Envelope(BaseModel):
     success: bool = True
     data: Any = None
@@ -63,6 +65,7 @@ class ErrorDetail(BaseModel):
 # Health
 # ═══════════════════════════════════════════════════════════════
 
+
 class HealthResponse(BaseModel):
     status: str = "ok"
     timestamp: datetime
@@ -79,6 +82,7 @@ class ReadyResponse(BaseModel):
 # Idempotency
 # ═══════════════════════════════════════════════════════════════
 
+
 class IdempotencyCheckResponse(BaseModel):
     is_replay: bool
     cached_response: dict[str, Any] | None = None
@@ -87,6 +91,7 @@ class IdempotencyCheckResponse(BaseModel):
 # ═══════════════════════════════════════════════════════════════
 # Confirmation
 # ═══════════════════════════════════════════════════════════════
+
 
 class ConfirmationGenerateRequest(BaseModel):
     action: str = Field(..., description="操作类型")

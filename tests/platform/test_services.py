@@ -3,6 +3,7 @@ Platform services tests — idempotency, confirmation, audit, and message outbox
 
 PRD 5.3: PF-04, PF-05, PF-06.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -147,6 +148,7 @@ class TestConfirmationService:
 
         # Manually expire the token
         from property_agent.platform.infrastructure.orm_models import ConfirmationTokenModel
+
         rec = session.query(ConfirmationTokenModel).filter_by(token=token).first()
         rec.expires_at = datetime.now(timezone.utc) - timedelta(hours=1)
         session.commit()
@@ -211,6 +213,7 @@ class TestAuditService:
         session.commit()
 
         from property_agent.platform.infrastructure.orm_models import AuditLogModel
+
         logs = session.query(AuditLogModel).all()
         assert len(logs) == 1
         assert logs[0].action == "LOGIN_SUCCESS"
@@ -229,11 +232,10 @@ class TestAuditService:
         session.commit()
 
         from property_agent.platform.infrastructure.orm_models import AuditLogModel
+
         log = session.query(AuditLogModel).first()
         assert log.parameter_summary["password"] == "***REDACTED***"
-        assert (
-            log.parameter_summary["phone"] == "138****8000"
-        )  # PF-06: regex masking
+        assert log.parameter_summary["phone"] == "138****8000"  # PF-06: regex masking
         assert log.parameter_summary["username"] == "test"
 
 
@@ -255,6 +257,7 @@ class TestMessageOutboxService:
         assert msg_id is not None
 
         from property_agent.platform.infrastructure.orm_models import MessageRecordModel
+
         msg = session.get(MessageRecordModel, msg_id)
         assert msg.status == "PENDING"
         assert msg.retry_count == 0
@@ -297,6 +300,7 @@ class TestMessageOutboxService:
         session.commit()
 
         from property_agent.platform.infrastructure.orm_models import MessageRecordModel
+
         msg = session.get(MessageRecordModel, msg_id)
         assert msg.status == "SENT"
 
@@ -316,6 +320,7 @@ class TestMessageOutboxService:
         svc.mark_failed(msg_id, "Network error")
         session.commit()
         from property_agent.platform.infrastructure.orm_models import MessageRecordModel
+
         msg = session.get(MessageRecordModel, msg_id)
         assert msg.retry_count == 1
         assert msg.status == "PENDING"
@@ -358,6 +363,7 @@ class TestMessageOutboxService:
         session.commit()
 
         from property_agent.platform.infrastructure.orm_models import MessageRecordModel
+
         msg = session.get(MessageRecordModel, msg_id)
         assert msg.status == "READ"
 

@@ -32,10 +32,12 @@ def upgrade() -> None:
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("name", sa.String(length=128), nullable=False),
         sa.Column("status", sa.String(length=16), nullable=False, server_default="ACTIVE"),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
-                  server_default=sa.func.now()),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False,
-                  server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("name", name="uq_communities_name"),
     )
@@ -52,10 +54,12 @@ def upgrade() -> None:
         sa.Column("phone", sa.String(length=20), nullable=True),
         sa.Column("email", sa.String(length=128), nullable=True),
         sa.Column("status", sa.String(length=16), nullable=False, server_default="ACTIVE"),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
-                  server_default=sa.func.now()),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False,
-                  server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.ForeignKeyConstraint(["community_id"], ["communities.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("community_id", "username", name="uq_users_community_username"),
@@ -72,14 +76,17 @@ def upgrade() -> None:
         sa.Column("room_no", sa.String(length=16), nullable=False),
         sa.Column("area", sa.Float(), nullable=True),
         sa.Column("status", sa.String(length=16), nullable=False, server_default="ACTIVE"),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
-                  server_default=sa.func.now()),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False,
-                  server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.ForeignKeyConstraint(["community_id"], ["communities.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("community_id", "building", "unit", "room_no",
-                            name="uq_houses_address"),
+        sa.UniqueConstraint(
+            "community_id", "building", "unit", "room_no", name="uq_houses_address"
+        ),
     )
     op.create_index("ix_houses_community_status", "houses", ["community_id", "status"])
 
@@ -90,11 +97,13 @@ def upgrade() -> None:
         sa.Column("user_id", sa.Uuid(), nullable=False),
         sa.Column("role", sa.String(length=32), nullable=False),
         sa.Column("scope", sa.String(length=64), nullable=False, server_default="*"),
-        sa.Column("valid_from", sa.DateTime(timezone=True), nullable=False,
-                  server_default=sa.func.now()),
+        sa.Column(
+            "valid_from", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.Column("valid_until", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
-                  server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("user_id", "role", "scope", name="uq_user_roles"),
@@ -108,11 +117,13 @@ def upgrade() -> None:
         sa.Column("user_id", sa.Uuid(), nullable=False),
         sa.Column("house_id", sa.Uuid(), nullable=False),
         sa.Column("status", sa.String(length=16), nullable=False, server_default="ACTIVE"),
-        sa.Column("valid_from", sa.DateTime(timezone=True), nullable=False,
-                  server_default=sa.func.now()),
+        sa.Column(
+            "valid_from", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.Column("valid_until", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
-                  server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["house_id"], ["houses.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
@@ -131,8 +142,9 @@ def upgrade() -> None:
         sa.Column("parameter_hash", sa.String(length=128), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("consumed_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
-                  server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("token"),
     )
@@ -149,11 +161,11 @@ def upgrade() -> None:
         sa.Column("request_hash", sa.String(length=128), nullable=False),
         sa.Column("resource_id", sa.String(length=64), nullable=True),
         sa.Column("response_snapshot", JSONB_OR_JSON, nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
-                  server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("actor_id", "operation", "key",
-                            name="uq_idempotency_actor_op_key"),
+        sa.UniqueConstraint("actor_id", "operation", "key", name="uq_idempotency_actor_op_key"),
     )
     op.create_index("ix_idempotency_expires", "idempotency_records", ["created_at"])
 
@@ -170,16 +182,20 @@ def upgrade() -> None:
         sa.Column("retry_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("last_error", sa.Text(), nullable=True),
         sa.Column("idempotency_key", sa.String(length=128), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
-                  server_default=sa.func.now()),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False,
-                  server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index("ix_message_records_receiver_status", "message_records",
-                    ["receiver_id", "status"])
-    op.create_index("ix_message_records_business", "message_records",
-                    ["business_type", "resource_id"])
+    op.create_index(
+        "ix_message_records_receiver_status", "message_records", ["receiver_id", "status"]
+    )
+    op.create_index(
+        "ix_message_records_business", "message_records", ["business_type", "resource_id"]
+    )
 
     # ── 9. audit_logs ───────────────────────────────────────────
     op.create_table(
@@ -193,8 +209,9 @@ def upgrade() -> None:
         sa.Column("parameter_summary", JSONB_OR_JSON, nullable=True),
         sa.Column("result", sa.String(length=16), nullable=False, server_default="SUCCESS"),
         sa.Column("request_id", sa.String(length=64), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
-                  server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_audit_logs_actor_created", "audit_logs", ["actor_id", "created_at"])
@@ -218,18 +235,21 @@ def upgrade() -> None:
         sa.Column("status", sa.String(length=16), nullable=False, server_default="PENDING"),
         sa.Column("assignee_id", sa.Uuid(), nullable=True),
         sa.Column("resolution", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
-                  server_default=sa.func.now()),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False,
-                  server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.Column("closed_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_handover_tickets_status", "handover_tickets", ["status"])
     op.create_index("ix_handover_tickets_queue", "handover_tickets", ["queue"])
     op.create_index("ix_handover_tickets_community", "handover_tickets", ["community_id"])
-    op.create_index("ix_handover_tickets_resource", "handover_tickets",
-                    ["resource_type", "resource_id"])
+    op.create_index(
+        "ix_handover_tickets_resource", "handover_tickets", ["resource_type", "resource_id"]
+    )
 
     # ── 11. attachments (PRD 6.1) ───────────────────────────────
     op.create_table(
@@ -243,15 +263,16 @@ def upgrade() -> None:
         sa.Column("status", sa.String(length=16), nullable=False, server_default="UPLOADING"),
         sa.Column("storage_key", sa.String(length=512), nullable=False),
         sa.Column("business_type", sa.String(length=32), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False,
-                  server_default=sa.func.now()),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False,
-                  server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.CheckConstraint("size_bytes >= 0", name="ck_attachments_size_non_negative"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index("ix_attachments_community_status", "attachments",
-                    ["community_id", "status"])
+    op.create_index("ix_attachments_community_status", "attachments", ["community_id", "status"])
     op.create_index("ix_attachments_uploader", "attachments", ["uploader_id"])
 
 

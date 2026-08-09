@@ -72,6 +72,7 @@ class AiSuggestion:
             else None,
         )
 
+
 EVENT_TRANSITIONS: dict[tuple[EventStatus, EventAction], EventStatus] = {
     (EventStatus.REPORTED, EventAction.ASSIGN): EventStatus.ASSIGNED,
     (EventStatus.ASSIGNED, EventAction.SUBMIT_DISPOSAL): EventStatus.PENDING_REVIEW,

@@ -3,11 +3,13 @@
 All exceptions carry a `code` string for machine-readable error handling
 and a `status_code` for HTTP response mapping.
 """
+
 from __future__ import annotations
 
 
 class PlatformError(Exception):
     """Base error for platform services."""
+
     def __init__(self, code: str, message: str, status_code: int = 400) -> None:
         self.code = code
         self.message = message
@@ -17,6 +19,7 @@ class PlatformError(Exception):
 
 class IdempotencyKeyRequiredException(PlatformError):
     """Raised when Idempotency-Key header is missing on a write endpoint."""
+
     def __init__(self) -> None:
         super().__init__(
             code="IDEMPOTENCY_KEY_REQUIRED",
@@ -27,6 +30,7 @@ class IdempotencyKeyRequiredException(PlatformError):
 
 class IdempotencyConflictException(PlatformError):
     """Same idempotency key but different request parameters."""
+
     def __init__(self, actor_id: str, operation: str, key: str) -> None:
         super().__init__(
             code="IDEMPOTENCY_CONFLICT",
@@ -37,11 +41,13 @@ class IdempotencyConflictException(PlatformError):
 
 class ConfirmationError(PlatformError):
     """Confirmation token validation failure (base class for backward compatibility)."""
+
     pass
 
 
 class InvalidConfirmationTokenException(ConfirmationError):
     """Confirmation token validation failure — invalid, expired, consumed, or mismatch."""
+
     def __init__(self, reason: str = "Invalid confirmation token") -> None:
         super().__init__(
             code="INVALID_CONFIRMATION_TOKEN",
@@ -52,4 +58,5 @@ class InvalidConfirmationTokenException(ConfirmationError):
 
 class AuthError(PlatformError):
     """Authentication or authorization failure."""
+
     pass

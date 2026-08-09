@@ -22,6 +22,4 @@ def select_announcement_tool(state: GraphState) -> str:
 
 
 def attach_announcement_subgraph(graph: StateGraph, registry: Mapping) -> str:
-    return attach_subgraph(
-        graph, name=NAME, selector=select_announcement_tool, registry=registry
-    )
+    return attach_subgraph(graph, name=NAME, selector=select_announcement_tool, registry=registry)

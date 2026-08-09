@@ -43,11 +43,14 @@ SQL 连接配置:
       → yield db
       → finally: db.close()
 """
+
 from __future__ import annotations
+
 import os
 from pathlib import Path
+
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from .orm_models import Base
@@ -92,9 +95,8 @@ def init_billing_db() -> None:
     PRD 6.3 added ``billing_rules`` and ``billing_consultations`` plus new
     columns on ``fee_bills``; ``create_all`` provisions them without dropping
     existing data. Production deployments should still run the Alembic chain,
-    but ``create_all`` keeps the demo / test paths self-contained.
+    but ``create_all`` keeps local development and test paths self-contained.
     """
-    from .orm_models import Base
 
     Base.metadata.create_all(bind=engine)
 
@@ -106,6 +108,7 @@ init_billing_db()
 # ═══════════════════════════════════════════════════════════════
 # FastAPI 依赖注入
 # ═══════════════════════════════════════════════════════════════
+
 
 def get_db() -> Session:
     """
@@ -133,6 +136,7 @@ def get_db() -> Session:
 # ═══════════════════════════════════════════════════════════════
 # 直接获取会话
 # ═══════════════════════════════════════════════════════════════
+
 
 def get_db_session() -> Session:
     """

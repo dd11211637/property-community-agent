@@ -5,6 +5,7 @@ infrastructure/shared_ports.py     账单模块生产端口（PRD 6.3）
 AuditService）。与 announcement/repair 一致：所有适配器共享同一 SQLAlchemy
 Session，平台异常翻译为 billing BusinessError。
 """
+
 from __future__ import annotations
 
 from typing import Any

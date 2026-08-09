@@ -206,9 +206,7 @@ def test_confirm_executes_with_token():
 
 def test_high_risk_publish_never_executes():
     graph, rec = build_env()
-    result = graph.invoke(
-        _state("c5", "发一条停水公告", action="publish", announcement_id="A-1")
-    )
+    result = graph.invoke(_state("c5", "发一条停水公告", action="publish", announcement_id="A-1"))
 
     assert result["done"] is True
     assert rec.calls == []  # 高风险动作在图内被拦截，未进入执行节点
@@ -218,9 +216,7 @@ def test_high_risk_publish_never_executes():
 
 def test_high_risk_close_event_never_executes():
     graph, rec = build_env()
-    result = graph.invoke(
-        _state("c6", "关闭这个安防事件", action="close_event", event_id="E-1")
-    )
+    result = graph.invoke(_state("c6", "关闭这个安防事件", action="close_event", event_id="E-1"))
 
     assert rec.calls == []
     assert result["state"].handover_required is True

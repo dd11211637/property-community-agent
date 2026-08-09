@@ -5,6 +5,7 @@ PRD 5.1 / 12.1: every application surface — the unified app and each standalon
 module app — must emit the same envelope and the same ``X-Request-ID`` header.
 :func:`install_http_foundation` is the one-call installer that guarantees this.
 """
+
 from __future__ import annotations
 
 from uuid import uuid4
