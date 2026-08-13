@@ -13,10 +13,15 @@ The assembly pipeline is:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from dataclasses import replace
+from datetime import datetime
 from typing import Any
+from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI
 from sqlalchemy import text
@@ -32,7 +37,14 @@ from property_agent.agent.application.recovery import AgentRecoveryService
 from property_agent.agent.application.runner import AgentSessionRunner
 from property_agent.agent.graph import build_agent_graph
 from property_agent.agent.infrastructure.checkpointer import SqlAlchemyCheckpointer
-from property_agent.agent.model_gateway import DeterministicModelGateway
+from property_agent.agent.model_gateway import (
+    DeepSeekModelGateway,
+    DeterministicModelGateway,
+    FallbackModelGateway,
+    ModelGateway,
+)
+from property_agent.agent.read_planner import GatewayReadPlanner
+from property_agent.agent.read_tools import build_read_tools, read_tool_specs
 from property_agent.agent.state import GraphState
 from property_agent.agent.tools import (
     build_announcement_tools,
@@ -40,23 +52,36 @@ from property_agent.agent.tools import (
     build_inspection_tools,
     build_repair_tools,
 )
+from property_agent.agent.tools.repair import normalize_repair_category
+from property_agent.announcement.application.scheduler import AnnouncementScheduler
 from property_agent.announcement.application.service import AnnouncementService
+from property_agent.announcement.domain.enums import AnnouncementAction
 from property_agent.announcement.infrastructure.shared_ports import build_announcement_ports
 from property_agent.announcement.infrastructure.uow import SqlAlchemyAnnouncementUnitOfWork
 from property_agent.billing.application.service import BillingService, ConsultationService
+from property_agent.billing.infrastructure.unit_of_work import SqlAlchemyBillingUnitOfWork
 from property_agent.config import settings
+from property_agent.inspection.adapters.api.dependencies import to_inspection_context
 from property_agent.inspection.application.service import (
     InspectionTaskService,
     SecurityEventService,
 )
 from property_agent.inspection.infrastructure.shared_ports import build_inspection_ports
 from property_agent.inspection.infrastructure.uow import SqlAlchemyInspectionUnitOfWork
+from property_agent.platform.application.confirmation_service import ConfirmationService
 from property_agent.platform.context import RequestContext
 from property_agent.platform.infrastructure.database import (
     dispose_engine,
     get_session_factory,
 )
+from property_agent.platform.infrastructure.orm_models import (
+    CommunityModel,
+    HouseModel,
+    MessageRecordModel,
+)
+from property_agent.platform.infrastructure.outbox_dispatcher import OutboxDispatcher
 from property_agent.repair.application.service import WorkOrderService
+from property_agent.repair.domain.enums import Urgency
 from property_agent.repair.infrastructure.shared_ports import build_shared_ports
 from property_agent.repair.infrastructure.uow import SqlAlchemyRepairUnitOfWork
 
@@ -185,6 +210,7 @@ async def lifespan(app: FastAPI):
     global _services_configured, _async_engine, _async_session_factory
 
     # ── Startup ──────────────────────────────────────────────────
+    settings.validate_runtime_security()
     logger.info("Container starting (env=%s)...", settings.env)
 
     # Initialize database connection pool (side-effect: creates engine + session factory)
@@ -194,8 +220,20 @@ async def lifespan(app: FastAPI):
 
     # Initialize application services and bind them to app.state
     build_production_container(app)
+    dispatcher: OutboxDispatcher = app.state.outbox_dispatcher
+    dispatcher_task = asyncio.create_task(dispatcher.run(), name="message-outbox-dispatcher")
+    announcement_scheduler = AnnouncementScheduler(app.state.announcement_service)
+    announcement_scheduler_task = asyncio.create_task(
+        announcement_scheduler.run(), name="announcement-scheduler"
+    )
 
-    yield  # ── Application runs here ──
+    try:
+        yield  # ── Application runs here ──
+    finally:
+        await announcement_scheduler.stop()
+        await announcement_scheduler_task
+        await dispatcher.stop()
+        await dispatcher_task
 
     # ── Shutdown ─────────────────────────────────────────────────
     logger.info("Container shutting down...")
@@ -235,10 +273,30 @@ def build_production_container(app: FastAPI) -> None:
 
     container = ContainerState()
     container.services = _build_services(app)
+    dispatcher = build_outbox_dispatcher()
+    app.state.outbox_dispatcher = dispatcher
+    container.services["outbox_dispatcher"] = dispatcher
     app.state.container = container
     _services_configured = True
 
     logger.info("build_production_container: services=%s", list(container.services.keys()))
+
+
+async def _deliver_in_app_message(message: MessageRecordModel) -> bool:
+    """Production in-app transport.
+
+    Enqueueing already persists the complete inbox item atomically with its business event.
+    This transport acknowledges that durable record as delivered; external SMS/voice is
+    deliberately outside the product scope.
+    """
+    return bool(message.receiver_id and message.id)
+
+
+def build_outbox_dispatcher() -> OutboxDispatcher:
+    return OutboxDispatcher(
+        session_factory=get_session_factory(),
+        send_message=_deliver_in_app_message,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -287,21 +345,20 @@ def build_billing_service() -> BillingService:
 
     The billing read path is isolated behind ``BillingSourcePort`` (the local
     SQLAlchemy source is the default adapter). Bill
-    queries are scoped by community + current house and audited via the
-    platform ``AuditService``. The billing DB keeps its own engine (轻量接入);
-    the platform DB carries audit / idempotency rows.
+    Queries are scoped by community + current house and audited via the
+    platform ``AuditService``. Billing tables, audit and idempotency rows share
+    the request transaction on the unified application database.
     """
-    return BillingService()
+    return BillingService(SqlAlchemyBillingUnitOfWork)
 
 
 def build_consultation_service() -> ConsultationService:
     """Assemble the production financial-consultation service (PRD 6.3).
 
-    Persists the consultation ticket lifecycle in the billing DB and every
-    transition/audit row in the platform DB via the shared ports. Stateless —
-    holds no session; sessions are opened per call.
+    Persists the consultation lifecycle, idempotency record and audit event in
+    the same request transaction. The service is stateless and stores no session.
     """
-    return ConsultationService()
+    return ConsultationService(SqlAlchemyBillingUnitOfWork)
 
 
 def build_inspection_services() -> tuple[InspectionTaskService, SecurityEventService]:
@@ -329,9 +386,9 @@ def build_agent_runner(app: FastAPI) -> AgentSessionRunner:
     Wires the compiled agent graph with the real business services already on
     ``app.state`` (repair / announcement / billing / inspection), a persistent
     ``SqlAlchemyCheckpointer`` so pending-confirmation flows survive restarts,
-    and a ``DeterministicModelGateway`` that routes by keywords — the agent works
-    without an LLM API key, satisfying PRD R-02 (model unavailable → degrade,
-    structured interfaces stay up).
+    and a DeepSeek gateway when configured. Provider failures retry once and then
+    degrade to deterministic keyword routing; without an API key the fallback is
+    wired directly, so structured interfaces remain available (PRD R-02).
 
     Identity in tools comes from the trusted ``RequestContext`` activated by the
     platform auth layer (``RequestContext.current()``); a GraphState fallback is
@@ -339,27 +396,48 @@ def build_agent_runner(app: FastAPI) -> AgentSessionRunner:
     """
     session_factory = get_session_factory()
     checkpointer = SqlAlchemyCheckpointer(session_factory)
-    gateway = DeterministicModelGateway()
+    gateway = build_model_gateway()
 
     def context_provider(state: GraphState) -> RequestContext:
-        current = RequestContext.current()
-        if current is not None:
-            return current
-        house = state.current_house_id
-        return RequestContext(
-            actor_id=state.actor_id,
-            community_id=state.community_id,
-            roles=frozenset({"RESIDENT"}),
-            request_id=f"agent-{state.conversation_id}"[:64],
-            current_house_id=house,
-            bound_house_ids=frozenset({house}) if house else frozenset(),
-        )
+        return resolve_agent_request_context(state)
+
+    def inspection_context_provider(state: GraphState):
+        context = resolve_agent_request_context(state)
+        return to_inspection_context(context, context.request_id)
 
     def session_provider(state: GraphState) -> Any:
         return session_factory()
 
+    def context_loader(state: GraphState) -> GraphState:
+        """Load display-only, server-trusted context for dialogue understanding."""
+        trusted: dict[str, Any] = {
+            "business_date": datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+        }
+        with session_factory() as session:
+            community = session.get(CommunityModel, state.community_id)
+            if community is not None:
+                trusted["community_name"] = community.name
+            if state.current_house_id is not None:
+                house = session.get(HouseModel, state.current_house_id)
+                if house is not None and house.community_id == state.community_id:
+                    building = _display_part(house.building, "栋")
+                    unit = _display_part(house.unit, "单元")
+                    room = _display_part(house.room_no, "室")
+                    trusted.update(
+                        {
+                            "building": house.building,
+                            "unit": house.unit,
+                            "room_no": house.room_no,
+                            "house_display": f"{building} {unit} {room}",
+                        }
+                    )
+        state.trusted_context = trusted
+        return state
+
     repair_tools = build_repair_tools(app.state.work_order_service, context_provider)
-    announcement_tools = build_announcement_tools(app.state.announcement_service, context_provider)
+    announcement_tools = build_announcement_tools(
+        app.state.announcement_service, context_provider, gateway
+    )
     billing_tools = build_billing_tools(
         app.state.billing_service,
         app.state.consultation_service,
@@ -367,7 +445,13 @@ def build_agent_runner(app: FastAPI) -> AgentSessionRunner:
         session_provider,
     )
     inspection_tools = build_inspection_tools(
-        app.state.task_service, app.state.event_service, context_provider
+        app.state.task_service, app.state.event_service, inspection_context_provider
+    )
+    controlled_read_tools = build_read_tools(
+        announcement_tools=announcement_tools,
+        billing_tools=billing_tools,
+        repair_tools=repair_tools,
+        inspection_tools=inspection_tools,
     )
 
     graph = build_agent_graph(
@@ -377,10 +461,145 @@ def build_agent_runner(app: FastAPI) -> AgentSessionRunner:
         billing_tools=billing_tools,
         inspection_tools=inspection_tools,
         checkpointer=checkpointer,
+        context_loader=context_loader,
+        read_planner=GatewayReadPlanner(gateway),
+        read_tool_specs=read_tool_specs(),
+        read_tools=controlled_read_tools,
     )
     conversations = ConversationService(session_factory)
     recovery = AgentRecoveryService(conversations=conversations, checkpointer=checkpointer)
-    return AgentSessionRunner(graph=graph, conversations=conversations, recovery=recovery)
+
+    def confirmation_token_provider(state: GraphState) -> str:
+        pending = state.pending_action or {}
+        tool = str(pending.get("tool") or "")
+        if tool in {"announce_publish", "announcement_schedule_publish"}:
+            context = resolve_agent_request_context(state)
+            announcement = app.state.announcement_service.get(
+                UUID(str(state.slots["announcement_id"])), context
+            )
+            reviewed_version = int(state.slots["expected_version"])
+            if reviewed_version != announcement.version:
+                raise RuntimeError("公告内容已发生变化，请重新查看后再确认发布。")
+            if tool == "announce_publish":
+                parameters = {
+                    "announcement_id": announcement.id,
+                    "expected_version": announcement.version,
+                    "action": AnnouncementAction.PUBLISH,
+                }
+                action = "ANNOUNCEMENT_PUBLISH"
+            else:
+                scheduled_at = datetime.fromisoformat(str(state.slots["scheduled_at"]))
+                parameters = {
+                    "announcement_id": announcement.id,
+                    "expected_version": announcement.version,
+                    "scheduled_at": scheduled_at,
+                }
+                action = "ANNOUNCEMENT_SCHEDULE"
+        elif tool == "inspection_submit_records":
+            parameters = {
+                "note": str(state.slots.get("note") or ""),
+                "record_type": str(state.slots.get("record_type") or "COMPLETION"),
+                "point": str(state.slots.get("point") or ""),
+            }
+            action = "INSPECTION_TASK_SUBMIT_RECORDS"
+        elif tool == "security_event_create":
+            parameters = {
+                "event_type": str(state.slots.get("event_type") or "OTHER"),
+                "risk_level": str(state.slots.get("risk_level") or "MEDIUM"),
+                "location": str(state.slots.get("location") or ""),
+            }
+            action = "SECURITY_EVENT_CREATE"
+        elif tool != "repair_create":
+            # 其余受控写工具也必须拿到服务端签发、绑定当前待确认参数的令牌；
+            # 禁止再用可伪造的固定字符串充当确认凭据。
+            parameters = dict(pending.get("params") or {})
+            action = f"AGENT_{tool.upper()}"
+        else:
+            urgency_value = str(state.slots.get("urgency") or "NORMAL").upper()
+            category = normalize_repair_category(state.slots.get("category"))
+            try:
+                urgency = Urgency(urgency_value)
+            except ValueError:
+                urgency = Urgency.NORMAL
+            parameters = {
+                "house_id": state.current_house_id,
+                "category": category,
+                "location": str(state.slots.get("location") or ""),
+                "description": str(state.slots.get("description") or ""),
+                "urgency": urgency,
+                "attachment_ids": (),
+            }
+            action = "CREATE_WORK_ORDER"
+        with session_factory() as session:
+            confirmation_service = ConfirmationService(session)
+            token = confirmation_service.generate_token(
+                actor_id=state.actor_id,
+                action=action,
+                params=parameters,
+            )
+            if action.startswith("AGENT_"):
+                confirmation_service.validate_and_consume_token(
+                    token=token,
+                    actor_id=state.actor_id,
+                    action=action,
+                    params=parameters,
+                )
+            session.commit()
+            return token
+
+    return AgentSessionRunner(
+        graph=graph,
+        conversations=conversations,
+        recovery=recovery,
+        confirmation_token_provider=confirmation_token_provider,
+    )
+
+
+def _display_part(value: Any, suffix: str) -> str:
+    text = str(value or "").strip()
+    return text if text.endswith(suffix) else f"{text}{suffix}"
+
+
+def build_model_gateway() -> ModelGateway:
+    """Build the production model adapter without exposing the API key downstream."""
+    fallback = DeterministicModelGateway()
+    if not settings.deepseek_api_key.strip():
+        return fallback
+    primary = DeepSeekModelGateway(
+        api_key=settings.deepseek_api_key,
+        base_url=settings.deepseek_base_url,
+        model=settings.deepseek_model,
+        connect_timeout_seconds=settings.deepseek_connect_timeout_seconds,
+        read_timeout_seconds=settings.deepseek_read_timeout_seconds,
+        total_timeout_seconds=settings.deepseek_total_timeout_seconds,
+    )
+    return FallbackModelGateway(primary, fallback)
+
+
+def resolve_agent_request_context(state: GraphState) -> RequestContext:
+    """Bind the API-validated house to trusted identity for downstream tools.
+
+    JWT claims intentionally carry the set of bound houses but not a mutable current
+    house. The agent route validates ``state.current_house_id`` against that set before
+    graph execution; this composition-root guard repeats the membership check before
+    handing context to any application service.
+    """
+    current = RequestContext.current()
+    house = state.current_house_id
+    if current is not None:
+        if house is not None and house not in current.bound_house_ids:
+            raise ValueError("Agent current house is not bound to the authenticated user")
+        if house is not None and current.current_house_id != house:
+            return replace(current, current_house_id=house)
+        return current
+    return RequestContext(
+        actor_id=state.actor_id,
+        community_id=state.community_id,
+        roles=frozenset({"RESIDENT"}),
+        request_id=f"agent-{state.conversation_id}"[:64],
+        current_house_id=house,
+        bound_house_ids=frozenset({house}) if house else frozenset(),
+    )
 
 
 def _build_services(app: FastAPI) -> dict[str, Any]:

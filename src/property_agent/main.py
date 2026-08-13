@@ -19,6 +19,8 @@
 
 from __future__ import annotations
 
+import logging
+from time import perf_counter
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
@@ -28,6 +30,7 @@ from property_agent.agent.adapters.api.router import router as agent_router
 from property_agent.agent.application.errors import AgentSessionError
 from property_agent.announcement.adapters.api.router import router as announcement_router
 from property_agent.billing.adapters.api.router import router as billing_router
+from property_agent.config import settings
 from property_agent.inspection.adapters.api.router import (
     event_router as inspection_event_router,
 )
@@ -40,14 +43,17 @@ from property_agent.platform.adapters.api.envelope import (
     register_common_error_handlers,
 )
 from property_agent.platform.adapters.api.health_routes import router as health_router
+from property_agent.platform.adapters.api.operations_routes import router as operations_router
 from property_agent.platform.adapters.api.routes import router as platform_router
 from property_agent.platform.container import lifespan
 from property_agent.platform.dependencies import bind_request_context_to_jwt
 from property_agent.platform.errors import BusinessError as PlatformBusinessError
+from property_agent.platform.observability import configure_logging
 from property_agent.repair.adapters.api.router import router as repair_router
 from property_agent.repair.domain.errors import BusinessError as RepairBusinessError
 
 MAX_REQUEST_ID_LENGTH = 64
+access_logger = logging.getLogger("property_agent.access")
 
 
 def _request_id(header_value: str | None) -> str:
@@ -70,6 +76,7 @@ def create_app() -> FastAPI:
     dependency_overrides. Until real services are injected, repair/
     inspection endpoints return 503 ADAPTER_NOT_CONFIGURED.
     """
+    configure_logging(settings.log_level)
     app = FastAPI(
         title="Property Community Management Agent",
         version="0.1.0",
@@ -81,9 +88,33 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def request_id_middleware(request: Request, call_next):
         request.state.request_id = _request_id(request.headers.get("X-Request-ID"))
-        response = await call_next(request)
-        response.headers["X-Request-ID"] = request.state.request_id
-        return response
+        started = perf_counter()
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            response.headers["X-Request-ID"] = request.state.request_id
+            return response
+        finally:
+            duration_ms = round((perf_counter() - started) * 1000, 2)
+            route = request.scope.get("route")
+            route_template = getattr(route, "path", "unmatched")
+            level = (
+                logging.WARNING
+                if duration_ms >= settings.slow_request_threshold_ms or status_code >= 500
+                else logging.INFO
+            )
+            access_logger.log(
+                level,
+                "http_request",
+                extra={
+                    "request_id": request.state.request_id,
+                    "method": request.method,
+                    "route": route_template,
+                    "status_code": status_code,
+                    "duration_ms": duration_ms,
+                },
+            )
 
     # ── Error Handlers ─────────────────────────────────────────
     @app.exception_handler(RepairBusinessError)
@@ -138,6 +169,7 @@ def create_app() -> FastAPI:
 
     # Platform (auth, house selection, confirmations) — always mounted
     app.include_router(platform_router)
+    app.include_router(operations_router)
 
     # Business modules — mounted unconditionally; endpoints return 503
     # if services are not yet injected (per PRD: "未装配返回 503 ADAPTER_NOT_CONFIGURED")

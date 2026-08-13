@@ -31,7 +31,7 @@ from property_agent.agent.infrastructure.models import (
     AgentCheckpointModel,
     ConversationModel,
 )
-from property_agent.agent.model_gateway import DeterministicModelGateway
+from property_agent.agent.model_gateway import DeterministicModelGateway, ModelAnalysis
 from property_agent.agent.state import GraphState
 from property_agent.agent.tools.base import idempotency_key
 from property_agent.platform.infrastructure.orm_models import Base
@@ -86,7 +86,7 @@ def ctx() -> Ctx:
     return Ctx(actor_id=uuid4(), community_id=uuid4(), house_ids=frozenset({house}))
 
 
-def boot(session_factory, *, clock=None, ttl_seconds=300):
+def boot(session_factory, *, clock=None, ttl_seconds=300, gateway=None):
     """搭一套完整运行时。重复调用 = 模拟应用重启（对象全新，数据库不变）。"""
     rec = Recorder()
     repair = {
@@ -104,7 +104,25 @@ def boot(session_factory, *, clock=None, ttl_seconds=300):
     announcement = {
         "announcement_list": rec.tool("announcement_list"),
         "announcement_get": rec.tool("announcement_get"),
+        "announcement_draft": rec.tool(
+            "announcement_draft",
+            {
+                "ok": True,
+                "tool": "announcement_draft",
+                "data": {"draft": {"title": "公告", "body": "正文"}},
+            },
+        ),
+        "announcement_revise": rec.tool(
+            "announcement_revise",
+            {
+                "ok": True,
+                "tool": "announcement_revise",
+                "data": {"draft": {"title": "公告", "body": "修改后的正文"}},
+            },
+        ),
+        "announcement_create_draft": rec.tool("announcement_create_draft"),
         "announce_publish": rec.tool("announce_publish"),
+        "announcement_schedule_publish": rec.tool("announcement_schedule_publish"),
     }
     billing = {
         "billing_query": rec.tool("billing_query"),
@@ -119,7 +137,7 @@ def boot(session_factory, *, clock=None, ttl_seconds=300):
     }
     checkpointer = SqlAlchemyCheckpointer(session_factory)
     graph = build_agent_graph(
-        gateway=DeterministicModelGateway(),
+        gateway=gateway or DeterministicModelGateway(),
         repair_tools=repair,
         announcement_tools=announcement,
         billing_tools=billing,
@@ -254,6 +272,64 @@ def test_idempotency_key_is_stable_across_restart(session_factory, ctx):
     assert rec.calls == []
 
 
+def test_explicit_inspection_task_switch_clears_unrelated_slots(session_factory, ctx):
+    runner, _, cp, _, _ = boot(session_factory)
+    runner.start(
+        conversation_id="conv-inspection-switch",
+        context=ctx,
+        user_text="创建巡检任务",
+        slots={
+            "action": "create",
+            "title": "夜间巡检",
+            "description": "检查消防通道",
+            "point": "1栋大厅",
+        },
+    )
+
+    turn = runner.start(
+        conversation_id="conv-inspection-switch",
+        context=ctx,
+        user_text="查询巡检任务",
+    )
+
+    assert turn.state.slots["action"] == "query"
+    assert turn.state.slots["target"] == "task"
+    assert "title" not in turn.state.slots
+    assert "description" not in turn.state.slots
+    assert "point" not in turn.state.slots
+    persisted = cp.load("conv-inspection-switch")
+    assert persisted._interrupt_node is None
+    assert persisted.pending_action["tool"] == "inspection_list"
+
+
+def test_inspection_location_correction_overwrites_previous_value(session_factory, ctx):
+    runner, _, _, _, _ = boot(session_factory)
+    first = runner.start(
+        conversation_id="conv-inspection-correct",
+        context=ctx,
+        user_text="上报事件",
+        slots={
+            "action": "report_event",
+            "event_type": "EQUIPMENT_FAULT",
+            "location": "大厅",
+            "description": "照明故障",
+            "risk_level": "MEDIUM",
+        },
+    )
+    assert first.awaiting_confirmation
+
+    corrected = runner.start(
+        conversation_id="conv-inspection-correct",
+        context=ctx,
+        user_text="不是大厅，是地下车库",
+    )
+
+    assert corrected.state.slots["location"] == "地下车库"
+    assert corrected.state.pending_action is None or (
+        corrected.state.pending_action["params"]["location"] == "地下车库"
+    )
+
+
 # ------------------------------ Conversation 业务表 ------------------------------
 
 
@@ -273,7 +349,7 @@ def test_conversation_records_ownership_house_and_lifecycle(session_factory, ctx
     assert conversations.get("conv-1").is_closed is True
 
 
-def test_high_risk_turn_marks_conversation_handover(session_factory, ctx):
+def test_announcement_publish_first_loads_reviewable_version(session_factory, ctx):
     runner, rec, _, conversations, _ = boot(session_factory)
     turn = runner.start(
         conversation_id="conv-h",
@@ -282,10 +358,362 @@ def test_high_risk_turn_marks_conversation_handover(session_factory, ctx):
         slots={"action": "publish", "announcement_id": "A-1"},
     )
 
-    assert rec.calls == []
-    assert turn.state.handover_required is True
-    assert conversations.get("conv-h").status == ConversationStatus.HANDOVER.value
-    assert conversations.get("conv-h").handover_required is True
+    assert [name for name, _ in rec.calls] == ["announcement_get"]
+    assert turn.state.handover_required is False
+    assert conversations.get("conv-h").status == ConversationStatus.ACTIVE.value
+
+
+def test_adopt_announcement_keeps_generated_category_across_turns(session_factory, ctx):
+    runner, rec, _, _, _ = boot(session_factory)
+    first = runner.start(
+        conversation_id="conv-announcement-adopt",
+        context=ctx,
+        user_text="帮我写公告",
+        slots={
+            "action": "draft",
+            "topic": "消防设施检查",
+            "audience": {},
+        },
+    )
+    # Simulate the production draft tool storing validated generated fields.
+    first.state.slots.update(
+        title="消防设施检查通知",
+        body="请勿遮挡消防通道。",
+        category="SAFETY",
+        audience={},
+        action="create",
+    )
+    SqlAlchemyCheckpointer(session_factory).save("conv-announcement-adopt", first.state)
+
+    adopted = runner.start(
+        conversation_id="conv-announcement-adopt",
+        context=ctx,
+        user_text="采用这个稿件并保存草稿",
+    )
+
+    assert adopted.awaiting_confirmation
+    assert adopted.state.missing_slots == []
+    assert adopted.state.pending_action["tool"] == "announcement_create_draft"
+    assert adopted.state.pending_action["params"]["category"] == "SAFETY"
+    assert adopted.state.pending_action["params"]["audience"] == {}
+    assert rec.names[-1] != "announcement_create_draft"
+
+
+def test_adopt_draft_derives_missing_internal_category(session_factory, ctx):
+    runner, rec, checkpointer, _, _ = boot(session_factory)
+    first = runner.start(
+        conversation_id="conv-announcement-derived-category",
+        context=ctx,
+        user_text="帮我写公告",
+        slots={"action": "draft", "topic": "停水通知", "audience": {}},
+    )
+    # Compatibility case: an older checkpoint contains the visible draft but
+    # does not contain the newly system-derived internal category.
+    first.state.slots.update(
+        title="8月14日停水通知",
+        body="因供水设施维修，小区将暂停供水。",
+        audience={},
+        action="create",
+    )
+    first.state.slots.pop("category", None)
+    checkpointer.save("conv-announcement-derived-category", first.state)
+
+    adopted = runner.start(
+        conversation_id="conv-announcement-derived-category",
+        context=ctx,
+        user_text="采用该稿件",
+    )
+
+    assert adopted.awaiting_confirmation
+    assert adopted.state.missing_slots == []
+    assert adopted.state.pending_action["tool"] == "announcement_create_draft"
+    assert adopted.state.pending_action["params"]["category"] == "MAINTENANCE"
+    assert rec.names[-1] != "announcement_create_draft"
+
+
+def test_model_semantic_adoption_reactivates_verified_draft(session_factory, ctx):
+    class SemanticAdoptionGateway(DeterministicModelGateway):
+        def analyze_with_context(self, text, *, history, trusted_context):
+            if text == "就用这版吧":
+                assert history
+                return ModelAnalysis(
+                    intent="ANNOUNCEMENT",
+                    confidence=0.98,
+                    slots={"action": "create"},
+                    provider="semantic-test",
+                )
+            return super().analyze_with_context(
+                text, history=history, trusted_context=trusted_context
+            )
+
+    runner, _, checkpointer, _, _ = boot(session_factory, gateway=SemanticAdoptionGateway())
+    first = runner.start(
+        conversation_id="conv-announcement-semantic-adoption",
+        context=ctx,
+        user_text="帮我写停水公告",
+        slots={"action": "draft", "topic": "停水通知", "audience": {}},
+    )
+    first.state.slots.update(
+        title="8月14日停水通知",
+        body="因供水设施维修，小区将暂停供水。",
+        audience={},
+        action="create",
+    )
+    first.state.slots.pop("category", None)
+    checkpointer.save("conv-announcement-semantic-adoption", first.state)
+
+    adopted = runner.start(
+        conversation_id="conv-announcement-semantic-adoption",
+        context=ctx,
+        user_text="就用这版吧",
+    )
+
+    assert adopted.awaiting_confirmation
+    assert adopted.state.pending_action["tool"] == "announcement_create_draft"
+    assert adopted.state.pending_action["params"]["category"] == "MAINTENANCE"
+
+
+def test_retry_recovers_previous_failed_announcement_operation(session_factory, ctx):
+    runner, rec, checkpointer, _, _ = boot(session_factory)
+    first = runner.start(
+        conversation_id="conv-announcement-retry",
+        context=ctx,
+        user_text="帮我写停水公告",
+        slots={"action": "draft", "topic": "停水通知", "audience": "{}"},
+    )
+    first.state.error = "公告受众格式无效"
+    first.state.slots.update(action="draft", topic="停水通知", audience="{}")
+    checkpointer.save("conv-announcement-retry", first.state)
+    calls_before = len(rec.calls)
+
+    retried = runner.start(
+        conversation_id="conv-announcement-retry",
+        context=ctx,
+        user_text="重试",
+    )
+
+    assert retried.state.intent == "ANNOUNCEMENT"
+    assert retried.state.slots["action"] == "draft"
+    assert retried.state.slots["audience"] == "{}"
+    assert len(rec.calls) == calls_before + 1
+    assert rec.names[-1] == "announcement_draft"
+
+
+def test_adoption_normalizes_display_audience_before_confirmation(session_factory, ctx):
+    runner, _, checkpointer, _, _ = boot(session_factory)
+    first = runner.start(
+        conversation_id="conv-announcement-display-audience",
+        context=ctx,
+        user_text="帮我写停水公告",
+        slots={"action": "draft", "topic": "停水通知", "audience": {}},
+    )
+    first.state.slots.update(
+        title="8月14日停水通知",
+        body="因供水设施维修，小区将暂停供水。",
+        category="MAINTENANCE",
+        audience="1栋住户",
+        action="create",
+    )
+    checkpointer.save("conv-announcement-display-audience", first.state)
+
+    adopted = runner.start(
+        conversation_id="conv-announcement-display-audience",
+        context=ctx,
+        user_text="采纳",
+    )
+
+    assert adopted.awaiting_confirmation
+    assert adopted.state.pending_action["params"]["audience"] == {"building_ids": ["1栋"]}
+
+
+def test_implicit_announcement_revision_keeps_active_draft_context(session_factory, ctx):
+    runner, rec, checkpointer, _, _ = boot(session_factory)
+    first = runner.start(
+        conversation_id="conv-announcement-revise",
+        context=ctx,
+        user_text="帮我写公告",
+        slots={"action": "draft", "topic": "停水通知", "audience": {}},
+    )
+    first.state.slots.update(
+        title="停水通知",
+        body="明天暂停供水。",
+        category="MAINTENANCE",
+        audience={},
+        action="create",
+    )
+    checkpointer.save("conv-announcement-revise", first.state)
+
+    revised = runner.start(
+        conversation_id="conv-announcement-revise",
+        context=ctx,
+        user_text="语气正式一点",
+    )
+
+    assert revised.state.intent == "ANNOUNCEMENT"
+    assert rec.names[-1] == "announcement_revise"
+    called_slots = rec.calls[-1][1]
+    assert called_slots["title"] == "停水通知"
+    assert called_slots["body"] == "明天暂停供水。"
+    assert called_slots["revision_instruction"] == "语气正式一点"
+
+
+def test_modify_announcement_reason_does_not_fall_into_read_query(session_factory, ctx):
+    runner, rec, checkpointer, _, _ = boot(session_factory)
+    first = runner.start(
+        conversation_id="conv-announcement-reason",
+        context=ctx,
+        user_text="帮我写公告",
+        slots={"action": "draft", "topic": "停水通知", "audience": {}},
+    )
+    first.state.slots.update(
+        title="停水通知",
+        body="2026年8月14日暂停供水。",
+        category="MAINTENANCE",
+        audience={},
+        action="create",
+        target_date="2026-08-14",
+    )
+    checkpointer.save("conv-announcement-reason", first.state)
+
+    revised = runner.start(
+        conversation_id="conv-announcement-reason",
+        context=ctx,
+        user_text="修改原因，原因是洪水引发的供水设施损坏，需要检修",
+    )
+
+    assert revised.state.intent == "ANNOUNCEMENT"
+    assert rec.names[-1] == "announcement_revise"
+    assert rec.calls[-1][1]["revision_instruction"].startswith("修改原因")
+
+
+def test_one_revision_turn_merges_copy_audience_date_and_publish_time(session_factory, ctx):
+    runner, rec, checkpointer, _, _ = boot(session_factory)
+    first = runner.start(
+        conversation_id="conv-announcement-multi-edit",
+        context=ctx,
+        user_text="帮我写公告",
+        slots={"action": "draft", "topic": "停水通知", "audience": {}},
+    )
+    first.state.trusted_context = {"business_date": "2026-08-13"}
+    first.state.slots.update(
+        title="停水通知",
+        body="2026年8月14日暂停供水。",
+        category="MAINTENANCE",
+        audience={},
+        action="create",
+        target_date="2026-08-14",
+        scheduled_at="2026-08-13T20:00:00+08:00",
+    )
+    checkpointer.save("conv-announcement-multi-edit", first.state)
+
+    runner.start(
+        conversation_id="conv-announcement-multi-edit",
+        context=ctx,
+        user_text=("标题简短一点，原因改成管网损坏，受众改为1栋，后天停水，今晚9点发布"),
+    )
+
+    slots = rec.calls[-1][1]
+    assert rec.names[-1] == "announcement_revise"
+    assert slots["audience"] == {"building_ids": ["1栋"]}
+    assert slots["target_date"] == "2026-08-15"
+    assert slots["scheduled_at"] == "2026-08-13T21:00:00+08:00"
+    assert slots["revision_instruction"].startswith("标题简短一点")
+
+
+def test_revision_invalidates_previous_save_confirmation(session_factory, ctx):
+    runner, rec, checkpointer, _, _ = boot(session_factory)
+    first = runner.start(
+        conversation_id="conv-announcement-reconfirm",
+        context=ctx,
+        user_text="帮我写公告",
+        slots={"action": "draft", "topic": "停水通知", "audience": {}},
+    )
+    first.state.slots.update(
+        title="停水通知",
+        body="2026年8月14日暂停供水。",
+        category="MAINTENANCE",
+        audience={},
+        action="create",
+    )
+    first.state.pending_action = {
+        "tool": "announcement_create_draft",
+        "params_hash": "old-draft-hash",
+    }
+    first.state.confirmation_token = "old-token"
+    first.state._interrupt_node = "announcement.confirm"
+    checkpointer.save("conv-announcement-reconfirm", first.state)
+
+    revised = runner.start(
+        conversation_id="conv-announcement-reconfirm",
+        context=ctx,
+        user_text="标题简短一点，同时补充管网损坏原因",
+    )
+
+    assert rec.names[-1] == "announcement_revise"
+    assert revised.state.confirmation_token is None
+    assert revised.state.pending_action is not first.state.pending_action
+
+
+def test_announcement_revision_missing_specific_time_asks_for_business_time(session_factory, ctx):
+    runner, rec, checkpointer, _, _ = boot(session_factory)
+    first = runner.start(
+        conversation_id="conv-announcement-time",
+        context=ctx,
+        user_text="帮我写公告",
+        slots={"action": "draft", "topic": "停水通知", "audience": {}},
+    )
+    first.state.slots.update(
+        title="停水通知",
+        body="明天暂停供水。",
+        category="MAINTENANCE",
+        audience={},
+        action="create",
+        scheduled_at="2026-08-13T20:00:00+08:00",
+    )
+    checkpointer.save("conv-announcement-time", first.state)
+    calls_before = len(rec.calls)
+
+    turn = runner.start(
+        conversation_id="conv-announcement-time",
+        context=ctx,
+        user_text="明天要有具体时间",
+    )
+
+    assert turn.state.intent == "ANNOUNCEMENT"
+    assert turn.state.slots["action"] == "revise"
+    assert turn.state.missing_slots == ["revision_instruction"]
+    assert len(rec.calls) == calls_before
+    assert "开始时间和预计结束时间" in turn.state.messages[-1]["content"]
+    assert "公告发布时间会继续按原安排保留" in turn.state.messages[-1]["content"]
+
+
+def test_use_this_draft_cannot_replace_category_with_instruction(session_factory, ctx):
+    runner, _, checkpointer, _, _ = boot(session_factory)
+    first = runner.start(
+        conversation_id="conv-announcement-use",
+        context=ctx,
+        user_text="帮我写公告",
+        slots={"action": "draft", "topic": "消防检查", "audience": {}},
+    )
+    first.state.slots.update(
+        title="消防检查通知",
+        body="请勿遮挡消防通道。",
+        category="SAFETY",
+        audience={},
+        action="create",
+    )
+    checkpointer.save("conv-announcement-use", first.state)
+
+    adopted = runner.start(
+        conversation_id="conv-announcement-use",
+        context=ctx,
+        user_text="使用这个稿件并保存草稿",
+    )
+
+    assert adopted.awaiting_confirmation
+    params = adopted.state.pending_action["params"]
+    assert params["category"] == "SAFETY"
+    assert params["audience"] == {}
 
 
 def test_start_is_idempotent_but_rejects_foreign_actor(session_factory, ctx):

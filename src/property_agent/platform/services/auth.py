@@ -6,26 +6,17 @@ PRD 5.2: PF-01 (Login). Token payload: actor_id, community_id, roles, bound_hous
 
 from __future__ import annotations
 
-import os
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 import bcrypt
 from jose import jwt
 
+from property_agent.config import settings
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-
-JWT_SECRET_KEY: str = os.getenv(
-    "JWT_SECRET_KEY",
-    "dev-secret-change-in-production-32chars-min",
-)
-JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")
-JWT_EXPIRE_HOURS: int = int(os.getenv("JWT_EXPIRE_HOURS", "8"))
-
-BCRYPT_ROUNDS: int = int(os.getenv("BCRYPT_ROUNDS", "12"))
-
 
 # ---------------------------------------------------------------------------
 # Password hashing
@@ -35,7 +26,7 @@ BCRYPT_ROUNDS: int = int(os.getenv("BCRYPT_ROUNDS", "12"))
 def hash_password(plain_password: str) -> str:
     """Hash a plain-text password using bcrypt."""
     password_bytes = plain_password.encode("utf-8")
-    salt = bcrypt.gensalt(rounds=BCRYPT_ROUNDS)
+    salt = bcrypt.gensalt(rounds=settings.bcrypt_rounds)
     return bcrypt.hashpw(password_bytes, salt).decode("utf-8")
 
 
@@ -67,7 +58,7 @@ def create_jwt_token(
     these claims.
     """
     now = datetime.now(timezone.utc)
-    expire = now + (expires_delta or timedelta(hours=JWT_EXPIRE_HOURS))
+    expire = now + (expires_delta or timedelta(hours=settings.jwt_expire_hours))
 
     payload: dict = {
         "sub": str(actor_id),
@@ -78,7 +69,7 @@ def create_jwt_token(
         "iat": int(now.timestamp()),
         "exp": int(expire.timestamp()),
     }
-    return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
 def decode_jwt_token(token: str) -> dict:
@@ -87,4 +78,4 @@ def decode_jwt_token(token: str) -> dict:
     Returns the decoded payload dict. Raises JWTError if token is invalid,
     expired, or tampered with.
     """
-    return jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+    return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])

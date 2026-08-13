@@ -14,6 +14,7 @@ from decimal import Decimal
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -308,6 +309,10 @@ class BillModel(Base):
     )
 
     __table_args__ = (
+        CheckConstraint(
+            "total_amount = property_fee + utility_fee + parking_fee + late_fee",
+            name="ck_fee_bills_total_matches_components",
+        ),
         UniqueConstraint("user_id", "room_id", "bill_period", name="uq_bill_user_room_period"),
         Index("idx_bills_user_id", "user_id"),
         Index("idx_bills_status", "status"),

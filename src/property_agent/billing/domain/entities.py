@@ -32,6 +32,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 
 from .enums import (
     BillStatus,
@@ -44,7 +45,7 @@ from .enums import (
     UserRole,
     UserStatus,
 )
-from .value_objects import FeeDetail, Money
+from .value_objects import FeeDetail, Money, quantize_money
 
 # ═══════════════════════════════════════════════════════════════
 # Building · 楼栋实体
@@ -251,11 +252,11 @@ class Bill:
     user_id: str
     room_id: str
     bill_period: str
-    property_fee: float = 0.0
-    utility_fee: float = 0.0
-    parking_fee: float = 0.0
-    late_fee: float = 0.0
-    total_amount: float = 0.0
+    property_fee: Decimal = Decimal("0.00")
+    utility_fee: Decimal = Decimal("0.00")
+    parking_fee: Decimal = Decimal("0.00")
+    late_fee: Decimal = Decimal("0.00")
+    total_amount: Decimal | None = None
     due_date: str = ""
     status: BillStatus = BillStatus.UNPAID
     payment_time: str | None = None
@@ -274,6 +275,25 @@ class Bill:
     user_name: str = ""
     building_name: str = ""
     room_number: str = ""
+
+    def __post_init__(self) -> None:
+        amount_fields = ("property_fee", "utility_fee", "parking_fee", "late_fee")
+        for field_name in amount_fields:
+            amount = quantize_money(getattr(self, field_name))
+            if amount < 0:
+                raise ValueError(f"{field_name} must not be negative")
+            setattr(self, field_name, amount)
+
+        expected_total = sum(
+            (getattr(self, field_name) for field_name in amount_fields),
+            start=Decimal("0.00"),
+        )
+        if self.total_amount is None:
+            self.total_amount = expected_total
+        else:
+            self.total_amount = quantize_money(self.total_amount)
+            if self.total_amount != expected_total:
+                raise ValueError("total_amount must equal the sum of all fee components")
 
     def is_paid(self) -> bool:
         """
@@ -324,10 +344,10 @@ class Bill:
              WHERE bill_id = :bill_id;
         """
         return FeeDetail(
-            property_fee=Money.from_float(self.property_fee),
-            utility_fee=Money.from_float(self.utility_fee),
-            parking_fee=Money.from_float(self.parking_fee),
-            late_fee=Money.from_float(self.late_fee),
+            property_fee=Money(self.property_fee),
+            utility_fee=Money(self.utility_fee),
+            parking_fee=Money(self.parking_fee),
+            late_fee=Money(self.late_fee),
         )
 
 

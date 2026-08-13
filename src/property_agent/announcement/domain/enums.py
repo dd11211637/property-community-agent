@@ -3,6 +3,13 @@ from enum import StrEnum
 from property_agent.platform.roles import Role
 
 
+class AnnouncementCategory(StrEnum):
+    GENERAL = "GENERAL"
+    MAINTENANCE = "MAINTENANCE"
+    SAFETY = "SAFETY"
+    EMERGENCY = "EMERGENCY"
+
+
 class AnnouncementStatus(StrEnum):
     DRAFT = "DRAFT"
     PENDING_REVIEW = "PENDING_REVIEW"
@@ -20,6 +27,7 @@ class AnnouncementAction(StrEnum):
     APPROVE = "APPROVE"
     REJECT = "REJECT"
     PUBLISH = "PUBLISH"
+    SCHEDULE = "SCHEDULE"
     WITHDRAW = "WITHDRAW"
     ARCHIVE = "ARCHIVE"
 
@@ -36,5 +44,5 @@ class DeliveryStatus(StrEnum):
 
 
 CREATE_ROLES = (Role.CUSTOMER_SERVICE, Role.MANAGER)
-READ_ROLES = (Role.CUSTOMER_SERVICE, Role.MANAGER)
+READ_ROLES = (Role.RESIDENT, Role.CUSTOMER_SERVICE, Role.MANAGER)
 REVIEW_ROLES = (Role.MANAGER,)

@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, select, update
+from sqlalchemy import Select, func, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from property_agent.inspection.application.commands import TimelineEntry
@@ -97,6 +97,22 @@ class SqlAlchemyInspectionRepository:
             stmt = stmt.where(InspectionTaskModel.assignee_id == context.actor_id)
         stmt = stmt.offset(search.offset).limit(search.limit)
         return [self._task_to_domain(m) for m in self._session.scalars(stmt).all()]
+
+    def aggregate_task_statuses(self, community_id, search, context) -> dict[str, int]:
+        """Return an unpaginated status summary in the same authorized scope as list_tasks."""
+        stmt = select(InspectionTaskModel.status, func.count(InspectionTaskModel.id)).where(
+            InspectionTaskModel.community_id == community_id
+        )
+        if search.statuses:
+            stmt = stmt.where(InspectionTaskModel.status.in_(search.statuses))
+        if search.assigned_to_me:
+            stmt = stmt.where(InspectionTaskModel.assignee_id == context.actor_id)
+        if context.has_any_role(*TASK_ASSIGNEE_ROLES) and not context.has_any_role(
+            *TASK_ASSIGN_ROLES
+        ):
+            stmt = stmt.where(InspectionTaskModel.assignee_id == context.actor_id)
+        stmt = stmt.group_by(InspectionTaskModel.status)
+        return {str(status): int(count) for status, count in self._session.execute(stmt)}
 
     def find_active_tasks(self, community_id: UUID) -> Sequence[InspectionTask]:
         """返回社区内仍在进行的巡检任务（计划/已分派/进行中），用于冲突校验。

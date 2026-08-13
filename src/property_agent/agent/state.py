@@ -20,6 +20,7 @@ class GraphState:
     confidence: float = 0.0
     slots: dict[str, Any] = field(default_factory=dict)
     missing_slots: list[str] = field(default_factory=list)
+    requested_slot: str | None = None
     operation_level: str | None = None  # read / write-low-risk / write-high-risk
     pending_action: dict[str, Any] | None = None
     confirmation_token: str | None = None
@@ -27,10 +28,15 @@ class GraphState:
     retry_count: int = 0
     handover_required: bool = False
     messages: list[dict[str, Any]] = field(default_factory=list)
+    trusted_context: dict[str, Any] = field(default_factory=dict)
+    read_facts: dict[str, Any] | None = None
+    read_trace: dict[str, Any] | None = None
     error: str | None = None
     # 内部运行态（不进入业务语义）
     _resume: Any | None = None
     _interrupt_node: str | None = None
+    _continuation: bool = False
+    _contextual_followup: bool = False
 
     def add_message(self, role: str, content: str, **extra: Any) -> None:
         msg = {"role": role, "content": content, **extra}
@@ -51,6 +57,7 @@ class GraphState:
             "confidence": self.confidence,
             "slots": self.slots,
             "missing_slots": self.missing_slots,
+            "requested_slot": self.requested_slot,
             "operation_level": self.operation_level,
             "pending_action": self.pending_action,
             "confirmation_token": self.confirmation_token,
@@ -58,9 +65,14 @@ class GraphState:
             "retry_count": self.retry_count,
             "handover_required": self.handover_required,
             "messages": self.messages,
+            "trusted_context": self.trusted_context,
+            "read_facts": self.read_facts,
+            "read_trace": self.read_trace,
             "error": self.error,
             "_resume": self._resume,
             "_interrupt_node": self._interrupt_node,
+            "_continuation": self._continuation,
+            "_contextual_followup": self._contextual_followup,
         }
 
     @classmethod

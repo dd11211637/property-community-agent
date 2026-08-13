@@ -7,11 +7,18 @@ x-backend-environment: &backend-environment
   JWT_SECRET: demo-only-secret-change-before-production-32chars
   JWT_ALGORITHM: HS256
   JWT_EXPIRE_HOURS: "8"
+  LOGIN_FAILURE_LIMIT: "5"
+  LOGIN_FAILURE_WINDOW_MINUTES: "15"
+  LOGIN_LOCK_MINUTES: "15"
+  TRUSTED_PROXY_CIDRS: "172.16.0.0/12"
+  LOG_LEVEL: INFO
+  SLOW_REQUEST_THRESHOLD_MS: "1000"
   DEEPSEEK_BASE_URL: https://api.deepseek.com
   DEEPSEEK_MODEL: deepseek-v4-flash
   DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
   DEEPSEEK_CONNECT_TIMEOUT_SECONDS: "3"
   DEEPSEEK_READ_TIMEOUT_SECONDS: "12"
+  DEEPSEEK_TOTAL_TIMEOUT_SECONDS: "6"
 
 services:
   postgres:
@@ -45,6 +52,7 @@ services:
     build:
       context: .
       dockerfile: infra/backend.Dockerfile
+      target: demo-support
     environment: *backend-environment
     command: ["python", "-m", "testing.seeds.seed_demo"]
     depends_on:
@@ -89,6 +97,7 @@ services:
     build:
       context: .
       dockerfile: infra/backend.Dockerfile
+      target: demo-support
     environment: *backend-environment
     command: ["python", "-m", "testing.reset.reset_demo", "--yes"]
     depends_on:

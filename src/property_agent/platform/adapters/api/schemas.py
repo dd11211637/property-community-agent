@@ -43,6 +43,12 @@ class HouseSelectionResponse(BaseModel):
     room_no: str = Field(..., description="房号")
 
 
+class StaffOptionResponse(BaseModel):
+    id: UUID
+    display_name: str
+    role: str
+
+
 # ═══════════════════════════════════════════════════════════════
 # Generic Envelope (matches repair/inspection pattern)
 # ═══════════════════════════════════════════════════════════════

@@ -18,6 +18,7 @@
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from property_agent.agent.controlled_read import build_controlled_read_node, is_controlled_read
 from property_agent.agent.graph_core import Checkpointer, CompiledGraph, StateGraph
 from property_agent.agent.model_gateway import ModelGateway
 from property_agent.agent.nodes import classify_intent_node, explain_result_node
@@ -53,11 +54,16 @@ def _route_node():
     return node
 
 
-def _router(state: GraphState) -> str:
-    entry = subgraph_entry(state.intent)
-    if entry is not None:
-        return entry
-    return "general_help"
+def _router(controlled_read_enabled: bool):
+    def route(state: GraphState) -> str:
+        if controlled_read_enabled and is_controlled_read(state):
+            return "controlled_read"
+        entry = subgraph_entry(state.intent)
+        if entry is not None:
+            return entry
+        return "general_help"
+
+    return route
 
 
 def _general_help_node():
@@ -79,6 +85,9 @@ def build_agent_graph(
     inspection_tools: Mapping[str, Any],
     checkpointer: Checkpointer | None = None,
     context_loader: ContextLoader | None = None,
+    read_planner: Any | None = None,
+    read_tool_specs: Mapping[str, Any] | None = None,
+    read_tools: Mapping[str, Any] | None = None,
 ) -> CompiledGraph:
     graph = StateGraph()
 
@@ -88,11 +97,21 @@ def build_agent_graph(
     graph.add_node("general_help", _general_help_node())
     graph.add_node("explain", explain_result_node())
     graph.add_node("finish", lambda s: s)
+    if read_planner is not None and read_tool_specs is not None and read_tools is not None:
+        graph.add_node(
+            "controlled_read",
+            build_controlled_read_node(
+                planner=read_planner,
+                specs=read_tool_specs,
+                tools=read_tools,
+            ),
+        )
+        graph.add_edge("controlled_read", "explain")
 
     graph.set_entry_point("load_context")
     graph.add_edge("load_context", "classify_intent")
     graph.add_edge("classify_intent", "route")
-    graph.add_conditional_edges("route", _router)
+    graph.add_conditional_edges("route", _router(read_planner is not None))
     graph.add_edge("general_help", "finish")
     graph.add_edge("explain", "finish")
     graph.set_finish_point("finish")

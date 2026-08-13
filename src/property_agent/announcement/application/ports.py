@@ -49,6 +49,10 @@ class AnnouncementRepository(Protocol):
     def add_withdrawal(
         self, announcement_id: UUID, community_id: UUID, withdrawal: AnnouncementWithdrawal
     ) -> None: ...
+    def list_due_scheduled(self, now: datetime, limit: int) -> Sequence[Announcement]: ...
+    def latest_review(
+        self, announcement_id: UUID, community_id: UUID, action: str
+    ) -> AnnouncementReview | None: ...
 
 
 class IdempotencyPort(Protocol):

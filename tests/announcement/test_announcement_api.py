@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -72,3 +73,49 @@ def test_api_requires_service_and_authorization() -> None:
     )
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "FORBIDDEN"
+
+
+def test_manager_can_schedule_an_approved_announcement() -> None:
+    community = uuid4()
+    harness = Harness(audience_members=(uuid4(),))
+    service = AnnouncementService(harness.uow)
+    customer = RequestContext(uuid4(), community, frozenset({Role.CUSTOMER_SERVICE}), "customer")
+    manager = RequestContext(uuid4(), community, frozenset({Role.MANAGER}), "manager")
+    customer_client = _client(service, customer)
+    manager_client = _client(service, manager)
+    created = customer_client.post(
+        "/api/announcements",
+        json={
+            "title": "消防检查",
+            "body": "请相关住户配合检查。",
+            "category": "SAFETY",
+            "audience_condition": {"building_ids": ["B1"]},
+        },
+        headers={"Idempotency-Key": "schedule-create"},
+    ).json()["data"]
+    submitted = customer_client.post(
+        f"/api/announcements/{created['id']}/submit-review",
+        json={"expected_version": created["version"]},
+        headers={"Idempotency-Key": "schedule-submit"},
+    ).json()["data"]
+    approved = manager_client.post(
+        f"/api/announcements/{created['id']}/actions/approve",
+        json={"expected_version": submitted["version"]},
+        headers={"Idempotency-Key": "schedule-approve"},
+    ).json()["data"]
+    scheduled_at = (datetime.now(UTC) + timedelta(minutes=10)).isoformat()
+
+    response = manager_client.post(
+        f"/api/announcements/{created['id']}/actions/schedule",
+        json={
+            "expected_version": approved["version"],
+            "scheduled_at": scheduled_at,
+            "confirmation_token": "confirmed",
+        },
+        headers={"Idempotency-Key": "schedule-publish"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["status"] == "APPROVED"
+    assert response.json()["data"]["scheduled_at"] == scheduled_at
+    assert "SCHEDULE" in response.json()["data"]["available_actions"]

@@ -48,8 +48,18 @@ TASK_ASSIGN_ROLES = (Role.MANAGER,)
 TASK_COMPLETE_ROLES = (Role.MANAGER,)
 TASK_ASSIGNEE_ROLES = (Role.SECURITY_STAFF,)
 
-EVENT_READ_ROLES = (Role.MANAGER, Role.SECURITY_STAFF, Role.CUSTOMER_SERVICE, Role.RESIDENT)
-EVENT_CREATE_ROLES = (Role.RESIDENT, Role.CUSTOMER_SERVICE, Role.SECURITY_STAFF, Role.MANAGER)
+EVENT_READ_ROLES = (
+    Role.MANAGER,
+    Role.SECURITY_STAFF,
+    Role.CUSTOMER_SERVICE,
+    Role.RESIDENT,
+)
+EVENT_CREATE_ROLES = (
+    Role.RESIDENT,
+    Role.CUSTOMER_SERVICE,
+    Role.SECURITY_STAFF,
+    Role.MANAGER,
+)
 EVENT_ASSIGN_ROLES = (Role.MANAGER,)
 EVENT_HANDLER_ROLES = (Role.SECURITY_STAFF,)
 EVENT_REVIEW_ROLES = (Role.MANAGER,)
@@ -139,6 +149,25 @@ class InspectionTaskService:
         self._validate_pagination(search.limit, search.offset)
         with self._unit_of_work_factory() as uow:
             return list(uow.repository.list_tasks(context.community_id, search, context))
+
+    def summarize_tasks(
+        self, search: InspectionTaskSearch, context: RequestContext
+    ) -> dict[str, Any]:
+        """Return an exact, unpaginated status summary inside the caller's authorized scope."""
+        self._require_role(context, *TASK_READ_ROLES)
+        self._validate_pagination(search.limit, search.offset)
+        with self._unit_of_work_factory() as uow:
+            counts = uow.repository.aggregate_task_statuses(context.community_id, search, context)
+            incomplete = sum(
+                count for status, count in counts.items() if status != TaskStatus.COMPLETED.value
+            )
+            total = sum(counts.values())
+            return {
+                "total": total,
+                "completed": counts.get(TaskStatus.COMPLETED.value, 0),
+                "incomplete": incomplete,
+                "status_counts": counts,
+            }
 
     def get_task(self, task_id: UUID, context: RequestContext) -> InspectionTask:
         with self._unit_of_work_factory() as uow:
@@ -309,6 +338,12 @@ class InspectionTaskService:
 
     def _add_record(self, uow, task, command, context, now) -> str:
         self._require_task_assignee(task, context)
+        if task.status not in {TaskStatus.IN_PROGRESS, TaskStatus.SUBMITTED}:
+            raise invalid_transition(
+                task.status.value,
+                TaskAction.ADD_RECORD.value,
+                [action.value for action in task.state_actions()],
+            )
         if command.record_type not in {
             TaskRecordType.CHECKIN,
             TaskRecordType.POINT_RECORD,
@@ -814,12 +849,6 @@ class SecurityEventService:
             return [EventAction.ASSIGN]
         if (
             status == EventStatus.ASSIGNED
-            and context.has_any_role(*EVENT_HANDLER_ROLES)
-            and event.assignee_id == context.actor_id
-        ):
-            return [EventAction.SUBMIT_DISPOSAL]
-        if (
-            status == EventStatus.PENDING_REVIEW
             and context.has_any_role(*EVENT_HANDLER_ROLES)
             and event.assignee_id == context.actor_id
         ):

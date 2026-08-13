@@ -1,15 +1,17 @@
-from dataclasses import dataclass
 from typing import Any
 
+from property_agent.platform.domain.exceptions import PlatformError
 
-@dataclass(slots=True)
-class BusinessError(Exception):
+
+class BusinessError(PlatformError):
     """Stable application error contract shared by all business modules."""
 
-    code: str
-    message: str
-    status_code: int
-    details: dict[str, Any] | None = None
-
-    def __str__(self) -> str:
-        return self.message
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        status_code: int,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        self.details = details
+        super().__init__(code=code, message=message, status_code=status_code)

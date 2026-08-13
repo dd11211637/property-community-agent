@@ -112,7 +112,6 @@ def confirm(
         conversation_id=conversation_id,
         context=context,
         confirmed=payload.confirmed,
-        confirmation_token=payload.confirmation_token,
         action_hash=payload.action_hash,
     )
     return _envelope(turn_data(turn), context)

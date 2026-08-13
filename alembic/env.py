@@ -28,6 +28,15 @@ if database_url:
 
 target_metadata = Base.metadata
 
+# Column comments are documentation, not part of the executable schema contract.
+# Historical databases predate ORM comments, and treating those annotations as
+# migrations creates hundreds of noisy ALTER statements that obscure real type,
+# constraint, index and table drift.  Structural plugins remain enabled.
+AUTOGENERATE_PLUGINS = [
+    "alembic.autogenerate.*",
+    "~alembic.autogenerate.comments",
+]
+
 
 def run_migrations_offline() -> None:
     context.configure(
@@ -36,6 +45,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        autogenerate_plugins=AUTOGENERATE_PLUGINS,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -52,6 +62,7 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
             compare_type=True,
+            autogenerate_plugins=AUTOGENERATE_PLUGINS,
         )
         with context.begin_transaction():
             context.run_migrations()

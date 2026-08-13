@@ -24,7 +24,8 @@ class OperationLevel(StrEnum):
 
 # 各意图的必填槽位（确定性必填校验，PRD §6.5.5 必须用确定性逻辑）。
 SLOT_SPECS: dict[str, list[str]] = {
-    "REPAIR": ["category", "location", "description"],
+    # Residents provide observable facts. Category is derived by the system.
+    "REPAIR": ["description", "location"],
     "ANNOUNCEMENT": ["title", "body", "audience"],
     "BILLING": ["query_type"],
     "INSPECTION": ["action"],
@@ -35,8 +36,9 @@ SLOT_SPECS: dict[str, list[str]] = {
 # 低风险写意图（需用户确认 + 幂等 + 审计后才调用业务写 Service）。
 WRITE_LOW_RISK_INTENTS = {"REPAIR", "BILLING", "INSPECTION"}
 
-# 高风险工具名：Agent 不执行，只转授权人工接管（PRD §6.5.7）。
-HIGH_RISK_TOOLS = {"announce_publish", "close_high_risk_event"}
+# 高风险事件关闭仍只允许人工处理。公告发布必须由管理者审稿确认并经
+# 业务服务确认令牌执行，因此属于受控写，而不是模型自主高风险写。
+HIGH_RISK_TOOLS = {"close_high_risk_event"}
 
 # 工具名 -> 操作等级（确定性门控，PRD §6.5.7）。优先于意图判定，避免把
 # "查询类"工具误判为低风险写。
@@ -48,15 +50,25 @@ TOOL_LEVELS: dict[str, str] = {
     # 公告
     "announcement_list": OperationLevel.READ.value,
     "announcement_get": OperationLevel.READ.value,
-    "announce_publish": OperationLevel.WRITE_HIGH_RISK.value,
+    "announcement_draft": OperationLevel.READ.value,
+    "announcement_revise": OperationLevel.READ.value,
+    "announcement_create_draft": OperationLevel.WRITE_LOW_RISK.value,
+    "announce_publish": OperationLevel.WRITE_LOW_RISK.value,
+    "announcement_schedule_publish": OperationLevel.WRITE_LOW_RISK.value,
     # 账单
     "billing_query": OperationLevel.READ.value,
     "billing_consult": OperationLevel.WRITE_LOW_RISK.value,
     # 巡检
     "inspection_list": OperationLevel.READ.value,
     "inspection_create": OperationLevel.WRITE_LOW_RISK.value,
+    "inspection_create_task": OperationLevel.WRITE_LOW_RISK.value,
+    "inspection_start_task": OperationLevel.WRITE_LOW_RISK.value,
+    "inspection_add_record": OperationLevel.WRITE_LOW_RISK.value,
     "inspection_submit_record": OperationLevel.WRITE_LOW_RISK.value,
+    "inspection_submit_records": OperationLevel.WRITE_LOW_RISK.value,
     "inspection_ai_suggest": OperationLevel.WRITE_LOW_RISK.value,
+    "security_event_create": OperationLevel.WRITE_LOW_RISK.value,
+    "security_event_submit_disposal": OperationLevel.WRITE_LOW_RISK.value,
     "close_high_risk_event": OperationLevel.WRITE_HIGH_RISK.value,
 }
 
@@ -66,16 +78,37 @@ TOOL_LEVELS: dict[str, str] = {
 TOOL_SLOTS: dict[str, list[str]] = {
     "repair_list": [],
     "repair_get": ["work_order_id"],
-    "repair_create": ["category", "location", "description"],
+    "repair_create": ["description", "location"],
     "announcement_list": [],
     "announcement_get": ["announcement_id"],
-    "announce_publish": ["announcement_id"],
+    "announcement_draft": ["topic", "audience"],
+    "announcement_revise": [
+        "title",
+        "body",
+        "audience",
+        "revision_instruction",
+    ],
+    # Category is derived from title/body and is never requested from the user.
+    "announcement_create_draft": ["title", "body", "audience"],
+    "announce_publish": ["announcement_id", "expected_version"],
+    "announcement_schedule_publish": [
+        "announcement_id",
+        "expected_version",
+        "scheduled_at",
+    ],
     "billing_query": [],
     "billing_consult": ["subject", "description"],
     "inspection_list": [],
-    "inspection_create": ["title", "description"],
-    "inspection_submit_record": ["task_id", "expected_version", "point"],
+    "inspection_create": ["title", "description", "point"],
+    "inspection_create_task": ["title", "description", "point"],
+    "inspection_start_task": ["task_id", "expected_version"],
+    "inspection_add_record": ["task_id", "expected_version", "point", "note"],
+    "inspection_submit_record": ["task_id", "expected_version", "point", "note"],
+    "inspection_submit_records": ["task_id", "expected_version", "point", "note"],
     "inspection_ai_suggest": ["task_id", "point", "finding"],
+    # Event type and minimum risk are derived from the reported facts.
+    "security_event_create": ["description", "location"],
+    "security_event_submit_disposal": ["event_id", "expected_version", "note"],
     "close_high_risk_event": ["event_id"],
 }
 

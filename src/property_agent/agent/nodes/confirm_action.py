@@ -19,7 +19,11 @@ from property_agent.platform.application.hashing import canonical_hash
 
 
 def _build_pending(state):
-    params = {k: v for k, v in state.slots.items() if k not in ("user_text", "tool")}
+    params = {
+        k: v
+        for k, v in state.slots.items()
+        if k not in ("user_text", "tool") and not k.startswith("_")
+    }
     return {
         "intent": state.intent,
         "tool": state.slots.get("tool"),
@@ -39,7 +43,9 @@ def confirm_action_node():
     def node(state):
         if state._resume is not None:
             if state._resume.get("confirmed"):
-                token = state._resume.get("confirmation_token") or "agent-confirmed"
+                token = state._resume.get("confirmation_token")
+                if not token:
+                    raise RuntimeError("server-issued confirmation token is required")
                 state.confirmation_token = token
                 state.add_message("assistant", "已确认，正在为您办理。")
             else:

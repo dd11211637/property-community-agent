@@ -26,10 +26,10 @@ def test_classify_operation_level():
     assert classify_operation_level("BILLING") == OperationLevel.WRITE_LOW_RISK.value
     assert classify_operation_level("INSPECTION") == OperationLevel.WRITE_LOW_RISK.value
     assert classify_operation_level("GENERAL_HELP") == OperationLevel.READ.value
-    # 高风险工具名强制升级为写-高风险（转人工接管）
+    # 公告发布经审稿版本绑定、管理者权限和确认令牌后属于受控低风险写入。
     assert (
         classify_operation_level("ANNOUNCEMENT", tool_name="announce_publish")
-        == OperationLevel.WRITE_HIGH_RISK.value
+        == OperationLevel.WRITE_LOW_RISK.value
     )
     assert (
         classify_operation_level("INSPECTION", tool_name="close_high_risk_event")
@@ -38,9 +38,9 @@ def test_classify_operation_level():
 
 
 def test_missing_slots_for():
-    assert missing_slots_for("REPAIR", {}) == ["category", "location", "description"]
-    assert missing_slots_for("REPAIR", {"category": "x", "location": "y"}) == ["description"]
-    assert missing_slots_for("REPAIR", {"category": "x", "location": "y", "description": "z"}) == []
+    assert missing_slots_for("REPAIR", {}) == ["description", "location"]
+    assert missing_slots_for("REPAIR", {"description": "插座频繁跳闸"}) == ["location"]
+    assert missing_slots_for("REPAIR", {"location": "客厅", "description": "插座频繁跳闸"}) == []
 
 
 # ============================== model gateway ==============================

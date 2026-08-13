@@ -8,7 +8,14 @@ domain/value_objects.py     值对象（不可变，无标识符）
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
+
+CENT = Decimal("0.01")
+
+
+def quantize_money(value: Decimal | int | str | float) -> Decimal:
+    """Convert an external numeric value to the business currency precision."""
+    return Decimal(str(value)).quantize(CENT, rounding=ROUND_HALF_UP)
 
 
 @dataclass(frozen=True)
@@ -31,7 +38,7 @@ class Money:
     amount: Decimal
 
     def __post_init__(self):
-        object.__setattr__(self, "amount", Decimal(str(self.amount)).quantize(Decimal("0.01")))
+        object.__setattr__(self, "amount", quantize_money(self.amount))
 
     def __add__(self, other: Money) -> Money:
         """SQL: SELECT :a + :b AS total;"""

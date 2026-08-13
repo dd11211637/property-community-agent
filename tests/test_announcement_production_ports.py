@@ -412,7 +412,7 @@ def test_reusing_a_key_with_different_parameters_conflicts(service, seed) -> Non
 # ═══════════════════════════════════════════════════════════════
 
 
-def test_publish_freezes_the_audience_and_fans_out_one_message_per_member(
+def test_publish_and_withdraw_fan_out_messages_to_the_frozen_audience(
     service, sessions, seed
 ) -> None:
     announcement_id = publish_to_approved(service, seed)
@@ -450,6 +450,25 @@ def test_publish_freezes_the_audience_and_fans_out_one_message_per_member(
 
         consumed = session.execute(select(ConfirmationTokenModel)).scalar_one()
         assert consumed.consumed_at is not None
+
+    withdrawn = service.withdraw(
+        announcement_id,
+        ReviewActionCommand(AnnouncementAction.WITHDRAW, published.version, "维护计划调整"),
+        manager_context(seed, "req_withdraw"),
+        idempotency_key="withdraw-1",
+    )
+    assert withdrawn.status is AnnouncementStatus.WITHDRAWN
+
+    with sessions() as session:
+        messages = session.execute(select(MessageRecordModel)).scalars().all()
+        assert len(messages) == 4
+        withdrawal_messages = [message for message in messages if message.title == "公告已撤回"]
+        assert {message.receiver_id for message in withdrawal_messages} == {
+            seed.resident_a,
+            seed.resident_b,
+        }
+        actions = {row.action for row in session.execute(select(AuditLogModel)).scalars().all()}
+        assert "ANNOUNCEMENT_WITHDRAW" in actions
 
 
 def test_publish_rejects_a_token_minted_for_other_parameters(service, sessions, seed) -> None:

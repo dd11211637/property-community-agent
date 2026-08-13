@@ -17,6 +17,7 @@ from property_agent.platform.infrastructure.orm_models import (
     HandoverTicketModel,
     HouseModel,
     IdempotencyRecordModel,
+    LoginAttemptModel,
     MessageRecordModel,
     UserHouseBindingModel,
     UserModel,
@@ -25,7 +26,7 @@ from property_agent.platform.infrastructure.orm_models import (
 
 
 class TestPlatformModels:
-    """Verify all 10 core tables are created and support basic CRUD."""
+    """Verify the shared platform tables support their core persistence contracts."""
 
     def test_community_crud(self, session, community_a_id):
         """Community: create, read, update."""
@@ -143,6 +144,29 @@ class TestPlatformModels:
         found = session.query(MessageRecordModel).filter_by(status="PENDING").first()
         assert found is not None
         assert found.business_type == "REPAIR"
+
+    def test_login_attempt_unique_per_username_and_source(self, session):
+        now = datetime.now(timezone.utc)
+        session.add(
+            LoginAttemptModel(
+                username_normalized="resident1",
+                source_ip="192.0.2.1",
+                failure_count=1,
+                window_started_at=now,
+            )
+        )
+        session.commit()
+
+        session.add(
+            LoginAttemptModel(
+                username_normalized="resident1",
+                source_ip="192.0.2.1",
+                failure_count=1,
+                window_started_at=now,
+            )
+        )
+        with pytest.raises(IntegrityError):
+            session.commit()
 
     def test_audit_log(self, session):
         """AuditLog: create audit entry."""

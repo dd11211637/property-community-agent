@@ -5,7 +5,7 @@
 * A-02 必填槽位缺失时只追问，不调用业务服务
 * A-03 写操作在用户确认前不落库；取消后不产生任何业务对象
 * A-04 确认后携带确认令牌执行，且工具收到确定性幂等键
-* S-03 / R-01 高风险动作不执行，转授权人工
+* 公告发布先读取审稿版本再确认；高风险安防关闭不执行并转人工
 * R-02 模型不可用时降级为澄清，不臆造意图
 """
 
@@ -57,7 +57,11 @@ def build_env(gateway=None, checkpointer=None):
     announcement = {
         "announcement_list": rec.tool("announcement_list"),
         "announcement_get": rec.tool("announcement_get"),
+        "announcement_draft": rec.tool("announcement_draft"),
+        "announcement_revise": rec.tool("announcement_revise"),
+        "announcement_create_draft": rec.tool("announcement_create_draft"),
         "announce_publish": rec.tool("announce_publish"),
+        "announcement_schedule_publish": rec.tool("announcement_schedule_publish"),
     }
     billing = {
         "billing_query": rec.tool("billing_query"),
@@ -120,9 +124,10 @@ def test_missing_slots_only_asks_never_calls_service():
     result = graph.invoke(_state("c1", "我要报修", action="create"))
 
     assert result["done"] is True
-    assert set(result["state"].missing_slots) == {"category", "location", "description"}
+    assert result["state"].missing_slots == ["description", "location"]
     assert rec.calls == []  # 未触碰任何业务服务
-    assert any("缺失" in m["content"] for m in result["state"].messages)
+    assert result["state"].requested_slot == "description"
+    assert result["state"].messages[-1]["content"] == "请描述一下具体出现了什么故障？"
 
 
 # ============================== A-03 确认前不写 ==============================
@@ -195,23 +200,41 @@ def test_confirm_executes_with_token():
     assert rec.names == ["repair_create"]
     assert resumed["state"].confirmation_token == "tok-123"
     assert resumed["state"].tool_result["data"]["work_order"]["id"] == "W-1"
-    assert any("已完成" in m["content"] for m in resumed["state"].messages)
+    assert any("报修已提交" in m["content"] for m in resumed["state"].messages)
     # 本轮结束后恢复态被清理，下一轮不会被误判为已确认
     assert resumed["state"]._resume is None
     assert resumed["state"]._interrupt_node is None
 
 
-# ============================== S-03 / R-01 高风险转人工 ==============================
+# ============================== 公告审稿与高风险转人工 ==============================
 
 
-def test_high_risk_publish_never_executes():
+def test_publish_first_reads_reviewed_announcement_version():
     graph, rec = build_env()
     result = graph.invoke(_state("c5", "发一条停水公告", action="publish", announcement_id="A-1"))
 
     assert result["done"] is True
-    assert rec.calls == []  # 高风险动作在图内被拦截，未进入执行节点
-    assert result["state"].handover_required is True
-    assert any("转人工" in m["content"] for m in result["state"].messages)
+    assert rec.names == ["announcement_get"]
+    assert result["state"].handover_required is False
+
+
+def test_announcement_revise_action_routes_to_revision_tool():
+    graph, rec = build_env()
+    result = graph.invoke(
+        _state(
+            "c-ann-revise",
+            "修改公告，语气正式一点",
+            action="revise",
+            title="停水通知",
+            body="明天停水。",
+            category="MAINTENANCE",
+            audience={},
+            revision_instruction="语气正式一点",
+        )
+    )
+
+    assert result["done"] is True
+    assert rec.names == ["announcement_revise"]
 
 
 def test_high_risk_close_event_never_executes():

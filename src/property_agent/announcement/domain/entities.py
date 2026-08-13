@@ -4,6 +4,7 @@ from uuid import UUID
 
 from property_agent.announcement.domain.enums import (
     AnnouncementAction,
+    AnnouncementCategory,
     AnnouncementStatus,
     VersionSource,
 )
@@ -28,7 +29,7 @@ class AnnouncementVersion:
     version_no: int
     title: str
     body: str
-    category: str
+    category: AnnouncementCategory
     audience_condition: dict[str, list[str]]
     operator_id: UUID
     source: VersionSource
@@ -67,7 +68,7 @@ class Announcement:
     business_no: str
     title: str
     body: str
-    category: str
+    category: AnnouncementCategory
     audience_condition: dict[str, list[str]]
     created_by: UUID
     create_idempotency_key: str
@@ -94,12 +95,23 @@ class Announcement:
         if action == AnnouncementAction.WITHDRAW:
             self.withdrawn_at = self.updated_at
 
+    def schedule(self, *, scheduled_at: datetime, now: datetime) -> None:
+        if self.status != AnnouncementStatus.APPROVED:
+            raise invalid_transition(
+                self.status.value,
+                AnnouncementAction.SCHEDULE.value,
+                [item.value for item in self.state_actions()],
+            )
+        self.scheduled_at = scheduled_at
+        self.version += 1
+        self.updated_at = now
+
     def edit(
         self,
         *,
         title: str,
         body: str,
-        category: str,
+        category: AnnouncementCategory,
         audience_condition: dict[str, list[str]],
         now: datetime,
     ) -> None:

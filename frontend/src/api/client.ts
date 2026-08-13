@@ -27,6 +27,7 @@ export class ApiError extends Error {
 export type RequestOptions = Omit<RequestInit, "body"> & {
   body?: unknown;
   idempotencyKey?: string;
+  timeoutMs?: number;
 };
 
 const baseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
@@ -51,14 +52,23 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   if (houseId) headers.set("X-Current-House-ID", houseId);
 
   let response: Response;
+  const controller = new AbortController();
+  const timeoutMs = options.timeoutMs ?? 10_000;
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     response = await fetch(`${baseUrl}${path}`, {
       ...options,
       headers,
+      signal: options.signal ?? controller.signal,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new ApiError(0, "REQUEST_TIMEOUT", "服务响应时间过长，请稍后重试。");
+    }
     throw new ApiError(0, "NETWORK_ERROR", "无法连接服务，请检查网络或稍后重试。");
+  } finally {
+    window.clearTimeout(timeoutId);
   }
 
   let payload: unknown;
@@ -84,7 +94,15 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     const detail = typeof payload === "object" && payload !== null
       ? (payload as { detail?: unknown }).detail
       : null;
-    const message = typeof detail === "string" ? detail : "请求未成功。";
+    const statusMessages: Record<number, string> = {
+      429: "操作过于频繁，请稍后再试。",
+      502: "后端服务暂时不可用，请稍后重试。",
+      503: "服务当前繁忙或维护中，请稍后重试。",
+      504: "服务响应超时，请稍后重试。",
+    };
+    const message = typeof detail === "string"
+      ? detail
+      : statusMessages[response.status] ?? "请求未成功。";
     throw new ApiError(response.status, `HTTP_${response.status}`, message);
   }
   return payload as T;

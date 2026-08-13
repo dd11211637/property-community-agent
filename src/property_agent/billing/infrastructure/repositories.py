@@ -14,6 +14,8 @@ from datetime import datetime as _dt
 
 from sqlalchemy.orm import Session, joinedload
 
+from property_agent.billing.errors import ConsultationError
+
 from ..application.ports import (
     BillRepository,
     BuildingRepository,
@@ -64,11 +66,11 @@ def _bill_from_model(m: BillModel) -> Bill:
         user_id=m.user_id,
         room_id=m.room_id,
         bill_period=m.bill_period,
-        property_fee=float(m.property_fee),
-        utility_fee=float(m.utility_fee),
-        parking_fee=float(m.parking_fee),
-        late_fee=float(m.late_fee),
-        total_amount=float(m.total_amount),
+        property_fee=m.property_fee,
+        utility_fee=m.utility_fee,
+        parking_fee=m.parking_fee,
+        late_fee=m.late_fee,
+        total_amount=m.total_amount,
         due_date=m.due_date.isoformat() if m.due_date else "",
         status=BillStatus(m.status),
         payment_time=m.payment_time.strftime("%Y-%m-%d %H:%M:%S") if m.payment_time else None,
@@ -927,17 +929,33 @@ class SqlAlchemyConsultationRepository:
         )
         return [_consultation_from_model(r) for r in rows]
 
-    def update(self, ticket: ConsultationTicket) -> ConsultationTicket:
-        m = self._db.query(ConsultationModel).filter(ConsultationModel.id == ticket.id).first()
-        if not m:
-            raise ValueError(f"咨询单 {ticket.id} 不存在")
-        m.status = ticket.status.value
-        m.answer = ticket.answer
-        m.handler_id = ticket.handler_id
-        m.house_id = ticket.house_id
-        m.bill_id = ticket.bill_id
-        m.version = ticket.version
-        m.updated_at = _dt.now()
+    def update(self, ticket: ConsultationTicket, *, expected_version: int) -> ConsultationTicket:
+        updated = (
+            self._db.query(ConsultationModel)
+            .filter(
+                ConsultationModel.id == ticket.id,
+                ConsultationModel.version == expected_version,
+            )
+            .update(
+                {
+                    ConsultationModel.status: ticket.status.value,
+                    ConsultationModel.answer: ticket.answer,
+                    ConsultationModel.handler_id: ticket.handler_id,
+                    ConsultationModel.house_id: ticket.house_id,
+                    ConsultationModel.bill_id: ticket.bill_id,
+                    ConsultationModel.version: expected_version + 1,
+                    ConsultationModel.updated_at: _dt.now(),
+                },
+                synchronize_session=False,
+            )
+        )
+        if updated != 1:
+            raise ConsultationError(
+                "VERSION_CONFLICT",
+                "咨询单已被其他操作更新，请刷新后重试",
+                409,
+            )
+        ticket.version = expected_version + 1
         self._db.flush()
         return ticket
 

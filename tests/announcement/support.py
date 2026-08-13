@@ -21,6 +21,7 @@ class FakeState:
     announcements: dict[UUID, Announcement] = field(default_factory=dict)
     versions: dict[UUID, list[AnnouncementVersion]] = field(default_factory=dict)
     reviews: list[AnnouncementReview] = field(default_factory=list)
+    reviews_by_announcement: dict[UUID, list[AnnouncementReview]] = field(default_factory=dict)
     snapshots: dict[UUID, list[AudienceSnapshot]] = field(default_factory=dict)
     withdrawals: list[AnnouncementWithdrawal] = field(default_factory=list)
     idempotency: dict[tuple[UUID, str, str], IdempotencyRecord] = field(default_factory=dict)
@@ -49,6 +50,16 @@ class FakeRepository:
             items = [item for item in items if item.status.value in search.statuses]
         return items[search.offset : search.offset + search.limit]
 
+    def list_due_scheduled(self, now: datetime, limit: int) -> list[Announcement]:
+        items = [
+            item
+            for item in self.state.announcements.values()
+            if item.status.value == "APPROVED"
+            and item.scheduled_at is not None
+            and item.scheduled_at <= now
+        ]
+        return sorted(items, key=lambda item: item.scheduled_at)[:limit]
+
     def add_version(
         self, announcement_id: UUID, community_id: UUID, version: AnnouncementVersion
     ) -> None:
@@ -61,6 +72,23 @@ class FakeRepository:
         self, announcement_id: UUID, community_id: UUID, review: AnnouncementReview
     ) -> None:
         self.state.reviews.append(review)
+        self.state.reviews_by_announcement.setdefault(announcement_id, []).append(review)
+
+    def latest_review(
+        self,
+        announcement_id: UUID,
+        community_id: UUID,
+        action,
+    ) -> AnnouncementReview | None:
+        reviews = self.state.reviews_by_announcement.get(announcement_id, [])
+        return next(
+            (
+                review
+                for review in reversed(reviews)
+                if review.action.value == getattr(action, "value", action)
+            ),
+            None,
+        )
 
     def add_audience_snapshot(
         self, announcement_id: UUID, community_id: UUID, snapshot: AudienceSnapshot

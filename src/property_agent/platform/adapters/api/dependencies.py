@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextvars
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Annotated
 from uuid import UUID
 
@@ -26,7 +27,9 @@ from sqlalchemy.orm import Session
 from property_agent.platform.infrastructure.database import get_db
 from property_agent.platform.infrastructure.orm_models import (
     HouseModel,
+    UserHouseBindingModel,
     UserModel,
+    UserRoleModel,
 )
 from property_agent.platform.services.auth import decode_jwt_token
 from property_agent.platform.services.shared import AuditService
@@ -67,6 +70,17 @@ class RequestContext:
     def has_any_role(self, *roles: str) -> bool:
         return bool(self.roles.intersection(roles))
 
+    @property
+    def house_ids(self) -> frozenset[UUID]:
+        """Compatibility view used by business-module context protocols.
+
+        ``bound_house_ids`` remains the canonical platform/JWT field.  Repair,
+        inspection and Agent application ports historically name the same
+        trusted collection ``house_ids``; exposing it read-only keeps every
+        module on this single authenticated context type.
+        """
+        return self.bound_house_ids
+
     # -- contextvars helpers --
 
     @classmethod
@@ -106,14 +120,11 @@ async def get_current_user(
     try:
         payload = decode_jwt_token(token)
     except JWTError as exc:
-        raise HTTPException(401, detail=f"Invalid or expired token: {exc}") from exc
+        raise HTTPException(401, detail="Invalid or expired token") from exc
 
     # Extract claims (all server-generated — trust the JWT payload)
     actor_id_str: str | None = payload.get("actor_id") or payload.get("sub")
     community_id_str: str | None = payload.get("community_id")
-    roles_list: list[str] = payload.get("roles", [])
-    bound_house_ids_raw: list[str] = payload.get("bound_house_ids", [])
-
     if not actor_id_str or not community_id_str:
         raise HTTPException(401, detail="Token missing required claims")
 
@@ -127,22 +138,46 @@ async def get_current_user(
     user = db.query(UserModel).filter_by(id=actor_id, status="ACTIVE").first()
     if user is None:
         raise HTTPException(401, detail="User not found or inactive")
+    if user.community_id != community_id:
+        raise HTTPException(401, detail="Token identity is no longer valid")
 
-    # Build bound_house_ids from JWT (avoid DB round-trip for house bindings)
-    bound_house_ids: frozenset[UUID] = frozenset()
-    for raw in bound_house_ids_raw:
-        try:
-            bound_house_ids = bound_house_ids | {UUID(raw)}
-        except ValueError:
-            pass  # skip malformed IDs
-
-    roles = frozenset(roles_list) if roles_list else frozenset({"RESIDENT"})
+    # Authorization is mutable business data. Reload it on every request so role
+    # revocation and house unbinding take effect immediately instead of remaining
+    # valid until the eight-hour access token expires.
+    now = datetime.now(timezone.utc)
+    role_rows = (
+        db.query(UserRoleModel.role)
+        .filter(
+            UserRoleModel.user_id == actor_id,
+            UserRoleModel.valid_from <= now,
+            (UserRoleModel.valid_until.is_(None) | (UserRoleModel.valid_until > now)),
+        )
+        .all()
+    )
+    roles = frozenset(row.role for row in role_rows)
+    binding_rows = (
+        db.query(UserHouseBindingModel.house_id)
+        .join(HouseModel, HouseModel.id == UserHouseBindingModel.house_id)
+        .filter(
+            UserHouseBindingModel.user_id == actor_id,
+            UserHouseBindingModel.status == "ACTIVE",
+            UserHouseBindingModel.valid_from <= now,
+            (
+                UserHouseBindingModel.valid_until.is_(None)
+                | (UserHouseBindingModel.valid_until > now)
+            ),
+            HouseModel.community_id == user.community_id,
+            HouseModel.status == "ACTIVE",
+        )
+        .all()
+    )
+    bound_house_ids = frozenset(row.house_id for row in binding_rows)
 
     request_id = getattr(request.state, "request_id", "")
 
     ctx = RequestContext(
         actor_id=actor_id,
-        community_id=community_id,
+        community_id=user.community_id,
         roles=roles,
         request_id=request_id,
         bound_house_ids=bound_house_ids,
@@ -198,6 +233,7 @@ async def get_current_house_context(
                 result="DENIED",
                 request_id=context.request_id,
             )
+            db.commit()
             raise HTTPException(403, detail="Access denied: not bound to this house")
 
         # Valid: create updated context with current_house_id set

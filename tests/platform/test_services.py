@@ -113,6 +113,31 @@ class TestConfirmationService:
             request_id="req_001",
         )
 
+    def test_generate_is_visible_without_commit_when_autoflush_is_disabled(self, engine):
+        from sqlalchemy.orm import sessionmaker
+
+        session = sessionmaker(bind=engine, autoflush=False)()
+        try:
+            actor_id = uuid4()
+            params = {"title": "公告", "category": "SAFETY"}
+            svc = ConfirmationService(session)
+            token = svc.generate(
+                actor_id=actor_id,
+                action="AGENT_ANNOUNCEMENT_CREATE_DRAFT",
+                parameters=params,
+            )
+
+            svc.consume(
+                token=token,
+                actor_id=actor_id,
+                action="AGENT_ANNOUNCEMENT_CREATE_DRAFT",
+                parameter_hash=_hash_dict(params),
+                request_id="req_same_transaction",
+            )
+            session.commit()
+        finally:
+            session.close()
+
     def test_consume_twice_fails(self, session):
         actor_id = uuid4()
         svc = ConfirmationService(session)
@@ -284,6 +309,34 @@ class TestMessageOutboxService:
         )
         assert id1 == id2
 
+    def test_enqueue_hashes_oversized_key_and_preserves_deduplication(self, session):
+        svc = MessageOutboxService(session)
+        oversized_key = "repair:" + "x" * 200
+        first = svc.enqueue(
+            receiver_id=uuid4(),
+            business_type="REPAIR",
+            resource_id="WO-001",
+            title="Title",
+            body="Body",
+            idempotency_key=oversized_key,
+        )
+        session.commit()
+        second = svc.enqueue(
+            receiver_id=uuid4(),
+            business_type="REPAIR",
+            resource_id="WO-001",
+            title="Title",
+            body="Body",
+            idempotency_key=oversized_key,
+        )
+
+        from property_agent.platform.infrastructure.orm_models import MessageRecordModel
+
+        message = session.get(MessageRecordModel, first)
+        assert first == second
+        assert message.idempotency_key.startswith("sha256:")
+        assert len(message.idempotency_key) <= 128
+
     def test_mark_sent(self, session):
         svc = MessageOutboxService(session)
         msg_id = svc.enqueue(
@@ -365,7 +418,8 @@ class TestMessageOutboxService:
         from property_agent.platform.infrastructure.orm_models import MessageRecordModel
 
         msg = session.get(MessageRecordModel, msg_id)
-        assert msg.status == "READ"
+        assert msg.status == "PENDING"
+        assert msg.read_at is not None
 
 
 class TestHelpers:

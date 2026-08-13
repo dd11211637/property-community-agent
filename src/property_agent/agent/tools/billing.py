@@ -25,11 +25,24 @@ from property_agent.billing.errors import BillingError
 
 
 def _bill_brief(bill: Any) -> dict[str, Any]:
+    period = getattr(bill, "bill_period", None) or getattr(bill, "period", None)
+    total_amount = getattr(bill, "total_amount", None)
+    if total_amount is None:
+        total_amount = getattr(bill, "amount", None)
+    amount_text = str(total_amount) if total_amount is not None else None
     return {
+        "entity_type": "BILL",
         "bill_id": getattr(bill, "bill_id", None) or getattr(bill, "id", None),
         "fee_type": getattr(bill, "fee_type", None),
-        "period": getattr(bill, "period", None),
-        "amount": str(getattr(bill, "amount", "")) or None,
+        "period": period,
+        "total_amount": amount_text,
+        # Keep the former presentation field for older clients while the
+        # canonical Billing contract remains ``total_amount``.
+        "amount": amount_text,
+        "property_fee": str(getattr(bill, "property_fee", "0.00")),
+        "utility_fee": str(getattr(bill, "utility_fee", "0.00")),
+        "parking_fee": str(getattr(bill, "parking_fee", "0.00")),
+        "late_fee": str(getattr(bill, "late_fee", "0.00")),
         "status": str(getattr(bill, "status", "")),
         "due_date": str(getattr(bill, "due_date", "") or "") or None,
     }
@@ -55,6 +68,7 @@ def build_billing_tools(
         ctx = context_provider(state)
         db = session_provider(state)
         query_type = str(state.slots.get("query_type") or "list").lower()
+        period = state.slots.get("period")
         try:
             if query_type == "detail":
                 bill_id = str(require_slot(state, "bill_id", "billing_query"))
@@ -78,11 +92,12 @@ def build_billing_tools(
                 ctx,
                 db,
                 fee_type=state.slots.get("fee_type"),
-                period=state.slots.get("period"),
+                period=period,
             )
             return ok(
                 "billing_query",
                 query_type="list",
+                period=period,
                 count=len(bills),
                 items=[_bill_brief(b) for b in bills],
             )

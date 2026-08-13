@@ -41,7 +41,7 @@ from property_agent.agent.infrastructure.models import (
     AgentCheckpointModel,
     ConversationModel,
 )
-from property_agent.agent.model_gateway import DeterministicModelGateway
+from property_agent.agent.model_gateway import DeterministicModelGateway, ModelAnalysis
 from property_agent.platform.adapters.api.envelope import error_envelope
 from property_agent.platform.context import RequestContext
 from property_agent.platform.dependencies import (
@@ -81,9 +81,21 @@ class _Recorder:
         return [name for name, _ in self.calls]
 
 
-def build_runner(session_factory, *, clock=None, ttl_seconds=300):
+def build_runner(
+    session_factory,
+    *,
+    clock=None,
+    ttl_seconds=300,
+    confirmation_token_provider=None,
+    gateway=None,
+):
     """搭一套完整运行时。重复调用 = 模拟应用重启（对象全新，数据库不变）。"""
     rec = _Recorder()
+    if confirmation_token_provider is None:
+
+        def confirmation_token_provider(_state):
+            return "test-server-issued-token"
+
     repair = {
         "repair_list": rec.tool("repair_list"),
         "repair_get": rec.tool("repair_get"),
@@ -114,7 +126,7 @@ def build_runner(session_factory, *, clock=None, ttl_seconds=300):
     }
     checkpointer = SqlAlchemyCheckpointer(session_factory)
     graph = build_agent_graph(
-        gateway=DeterministicModelGateway(),
+        gateway=gateway or DeterministicModelGateway(),
         repair_tools=repair,
         announcement_tools=announcement,
         billing_tools=billing,
@@ -128,7 +140,12 @@ def build_runner(session_factory, *, clock=None, ttl_seconds=300):
     recovery = AgentRecoveryService(
         conversations=conversations, checkpointer=checkpointer, **recovery_kwargs
     )
-    runner = AgentSessionRunner(graph=graph, conversations=conversations, recovery=recovery)
+    runner = AgentSessionRunner(
+        graph=graph,
+        conversations=conversations,
+        recovery=recovery,
+        confirmation_token_provider=confirmation_token_provider,
+    )
     return runner, rec, checkpointer, conversations, recovery
 
 
@@ -262,9 +279,175 @@ def test_a02_missing_slots_only_asks_never_calls_service(session_factory):
     assert resp.status_code == 200
     data = body["data"]
     assert data["done"] is True
-    assert set(data["missing_slots"]) == {"category", "location", "description"}
+    assert data["missing_slots"] == ["description", "location"]
     assert rec.calls == []  # 未触碰任何业务服务
-    assert any("缺失" in m["content"] for m in data["messages"])
+    assert data["requested_slot"] == "description"
+    assert data["reply"] == "请描述一下具体出现了什么故障？"
+    assert all("缺失" not in m["content"] for m in data["messages"])
+
+
+def test_a02_follow_up_messages_accumulate_missing_repair_slots(session_factory):
+    class IncrementalGateway:
+        def ready(self):
+            return True
+
+        def analyze(self, text):
+            if text == "我要报修":
+                # DeepSeek may classify the intent without emitting an action
+                # slot; deterministic tool selection must retain create mode.
+                return ModelAnalysis("REPAIR", 0.95, {})
+            if text == "漏电":
+                return ModelAnalysis(
+                    "REPAIR",
+                    0.95,
+                    {"category": "ELECTRICAL", "description": "漏电"},
+                )
+            # A single-word follow-up can produce no model slots; the runner
+            # should bind it to the sole field requested in the prior turn.
+            return ModelAnalysis("UNCERTAIN", 0.3, {})
+
+    runner, rec, *_ = build_runner(session_factory, gateway=IncrementalGateway())
+    ctx = make_context()
+    client = make_client(runner, ctx)
+    path = "/api/agent/conversations/incremental-repair/messages"
+
+    first = client.post(path, json={"text": "我要报修", "house_id": str(ctx.current_house_id)})
+    first_data = first.json()["data"]
+    assert first_data["missing_slots"] == ["description", "location"]
+    assert first_data["slot_prompt"]["field"] == "description"
+    assert first_data["slot_prompt"]["options"] == []
+    second = client.post(path, json={"text": "漏电", "house_id": str(ctx.current_house_id)})
+    assert second.json()["data"]["missing_slots"] == ["location"]
+    third = client.post(path, json={"text": "厨房", "house_id": str(ctx.current_house_id)})
+
+    data = third.json()["data"]
+    assert data["intent"] == "REPAIR"
+    assert data["missing_slots"] == []
+    assert data["pending_confirmation"]["tool"] == "repair_create"
+    assert data["pending_confirmation"]["params"]["location"] == "厨房"
+    assert data["reply"] == ""
+    assert rec.calls == []
+
+
+def test_repair_guidance_binds_each_plain_text_answer_to_the_active_question(
+    session_factory,
+):
+    class MinimalGateway:
+        def ready(self):
+            return True
+
+        def analyze(self, text):
+            if text == "我要报修":
+                return ModelAnalysis("REPAIR", 0.95, {})
+            return ModelAnalysis("UNCERTAIN", 0.2, {})
+
+    runner, rec, *_ = build_runner(session_factory, gateway=MinimalGateway())
+    ctx = make_context()
+    client = make_client(runner, ctx)
+    path = "/api/agent/conversations/plain-guided-repair/messages"
+
+    description = client.post(
+        path,
+        json={"text": "我要报修", "house_id": str(ctx.current_house_id)},
+    ).json()["data"]
+    assert description["requested_slot"] == "description"
+    assert description["slot_prompt"]["step"] == 1
+
+    location = client.post(path, json={"text": "插座频繁跳闸"}).json()["data"]
+    assert location["requested_slot"] == "location"
+    assert location["slot_prompt"]["step"] == 2
+    assert location["slot_prompt"]["completed"] == [
+        {"field": "description", "label": "故障现象", "value": "插座频繁跳闸"}
+    ]
+
+    ready = client.post(path, json={"text": "阳台"}).json()["data"]
+    assert ready["requested_slot"] is None
+    assert ready["missing_slots"] == []
+    params = ready["pending_confirmation"]["params"]
+    assert params["action"] == "create"
+    assert params["category"] == "ELECTRICAL"
+    assert params["location"] == "阳台"
+    assert params["description"] == "插座频繁跳闸"
+    assert rec.calls == []
+
+
+def test_complete_repair_text_fills_description_and_normalizes_category(session_factory):
+    class CompleteRepairGateway:
+        def ready(self):
+            return True
+
+        def analyze(self, _text):
+            return ModelAnalysis("REPAIR", 0.95, {"category": "电灯", "location": "客厅"})
+
+    runner, rec, *_ = build_runner(session_factory, gateway=CompleteRepairGateway())
+    ctx = make_context()
+    client = make_client(runner, ctx)
+    response = client.post(
+        "/api/agent/conversations/complete-repair/messages",
+        json={
+            "text": "客厅电灯坏了，需要报修",
+            "house_id": str(ctx.current_house_id),
+        },
+    )
+
+    data = response.json()["data"]
+    assert data["missing_slots"] == []
+    assert data["pending_confirmation"]["params"]["category"] == "ELECTRICAL"
+    assert data["pending_confirmation"]["params"]["description"] == "客厅电灯坏了，需要报修"
+    assert rec.calls == []
+
+
+def test_user_can_correct_location_before_confirming_without_writing(session_factory):
+    runner, rec, *_ = build_runner(session_factory)
+    ctx = make_context()
+    client = make_client(runner, ctx)
+    path = "/api/agent/conversations/correct-location/messages"
+
+    first = client.post(
+        path,
+        json={
+            "text": "厨房漏水，需要报修",
+            "house_id": str(ctx.current_house_id),
+            "slots": {
+                "action": "create",
+                "category": "WATER_PLUMBING",
+                "location": "厨房",
+                "description": "厨房水管漏水",
+            },
+        },
+    )
+    assert first.json()["data"]["pending_confirmation"]["params"]["location"] == "厨房"
+
+    corrected = client.post(
+        path,
+        json={"text": "不是厨房，是卧室", "house_id": str(ctx.current_house_id)},
+    )
+
+    data = corrected.json()["data"]
+    assert corrected.status_code == 200
+    assert data["pending_confirmation"]["params"]["location"] == "卧室"
+    assert rec.calls == []
+
+
+def test_business_number_progress_query_routes_to_repair_detail(session_factory):
+    class ProgressGateway:
+        def ready(self):
+            return True
+
+        def analyze(self, _text):
+            return ModelAnalysis("REPAIR", 0.95, {"action": "query"})
+
+    runner, rec, *_ = build_runner(session_factory, gateway=ProgressGateway())
+    client = make_client(runner, make_context())
+    response = client.post(
+        "/api/agent/conversations/progress-query/messages",
+        json={"text": "查询工单进度 WX-20260811-D5C2A32F"},
+    )
+
+    data = response.json()["data"]
+    assert response.status_code == 200
+    assert data["pending_confirmation"] is None
+    assert rec.names == ["repair_get"]
 
 
 # ============================== A-03 确认前不写 ==============================
@@ -310,7 +493,6 @@ def test_a04_confirm_executes_with_token_and_facts(session_factory):
         "/api/agent/conversations/c4/confirmations",
         json={
             "confirmed": True,
-            "confirmation_token": "tok-123",
             "action_hash": action_hash,
         },
     )
@@ -322,7 +504,62 @@ def test_a04_confirm_executes_with_token_and_facts(session_factory):
     assert data["pending_confirmation"] is None  # 确认后不再有待确认卡片
     assert rec.names == ["repair_create"]
     assert data["facts"]["work_order"]["id"] == "W-1"
-    assert any("已完成" in m["content"] for m in data["messages"])
+    assert any("报修已提交" in m["content"] for m in data["messages"])
+
+
+def test_confirm_can_issue_business_token_after_recovery_checks(session_factory):
+    issued = []
+    runner, rec, *_ = build_runner(
+        session_factory,
+        confirmation_token_provider=lambda state: (
+            issued.append(state.conversation_id) or "server-issued-token"
+        ),
+    )
+    ctx = make_context()
+    client = make_client(runner, ctx)
+    action_hash = start_pending_repair(client, "server-token", house_id=ctx.current_house_id)
+
+    response = client.post(
+        "/api/agent/conversations/server-token/confirmations",
+        json={"confirmed": True, "action_hash": action_hash},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["facts"]["work_order"]["id"] == "W-1"
+    assert issued == ["server-token"]
+    assert rec.names == ["repair_create"]
+
+
+def test_confirmation_requires_action_hash(session_factory):
+    runner, *_ = build_runner(session_factory)
+    ctx = make_context()
+    client = make_client(runner, ctx)
+    start_pending_repair(client, "missing-hash", house_id=ctx.current_house_id)
+
+    response = client.post(
+        "/api/agent/conversations/missing-hash/confirmations",
+        json={"confirmed": True},
+    )
+
+    assert response.status_code == 422
+
+
+def test_confirmation_rejects_client_supplied_token(session_factory):
+    runner, *_ = build_runner(session_factory)
+    ctx = make_context()
+    client = make_client(runner, ctx)
+    action_hash = start_pending_repair(client, "client-token", house_id=ctx.current_house_id)
+
+    response = client.post(
+        "/api/agent/conversations/client-token/confirmations",
+        json={
+            "confirmed": True,
+            "action_hash": action_hash,
+            "confirmation_token": "attacker-controlled",
+        },
+    )
+
+    assert response.status_code == 422
 
 
 # ============================== 重启恢复 ==============================
@@ -344,7 +581,6 @@ def test_restart_recovery_resumes_valid_pending_via_api(session_factory):
         "/api/agent/conversations/conv-1/confirmations",
         json={
             "confirmed": True,
-            "confirmation_token": "tok-after-restart",
             "action_hash": action_hash,
         },
     )
@@ -373,7 +609,6 @@ def test_params_fingerprint_mismatch_is_rejected(session_factory):
         "/api/agent/conversations/c9/confirmations",
         json={
             "confirmed": True,
-            "confirmation_token": "tok-x",
             "action_hash": "tampered-fingerprint",
         },
     )
@@ -410,7 +645,7 @@ def test_get_status_and_delete_close_lifecycle(session_factory):
     # 关闭后的会话不能再确认
     after = client.post(
         "/api/agent/conversations/c6/confirmations",
-        json={"confirmed": True, "confirmation_token": "tok-z", "action_hash": "h"},
+        json={"confirmed": True, "action_hash": "h"},
     )
     assert after.status_code == 409
     assert after.json()["error"]["code"] == AgentSessionErrorCode.CONVERSATION_CLOSED.value
@@ -433,7 +668,7 @@ def test_foreign_actor_rejected_with_403(session_factory):
     client2 = make_client(runner2, intruder)
     resp = client2.post(
         "/api/agent/conversations/conv-x/confirmations",
-        json={"confirmed": True, "confirmation_token": "tok", "action_hash": "h"},
+        json={"confirmed": True, "action_hash": "h"},
     )
 
     assert resp.status_code == 403

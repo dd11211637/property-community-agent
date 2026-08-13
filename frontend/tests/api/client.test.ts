@@ -28,6 +28,30 @@ describe("apiRequest", () => {
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("offline"));
     await expect(apiRequest("/api/example")).rejects.toMatchObject({ code: "NETWORK_ERROR", status: 0 });
   });
+
+  it("maps proxy throttling to a truthful user-facing message", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
+      JSON.stringify({ status: 429 }),
+      { status: 429, headers: { "Content-Type": "application/json" } },
+    ));
+
+    await expect(apiRequest("/api/auth/login")).rejects.toMatchObject({
+      status: 429,
+      code: "HTTP_429",
+      message: "操作过于频繁，请稍后再试。",
+    });
+  });
+
+  it("aborts stalled requests and returns a user-facing timeout error", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+    }));
+
+    await expect(apiRequest("/api/slow", { timeoutMs: 5 })).rejects.toMatchObject({
+      code: "REQUEST_TIMEOUT",
+      status: 0,
+    });
+  });
 });
 
 it("omits empty query values", () => {

@@ -8,7 +8,11 @@ environment variables in production.
 
 from __future__ import annotations
 
+from urllib.parse import urlparse
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_DEVELOPMENT_JWT_SECRET = "dev-secret-change-in-production-32chars-min"
 
 
 class Settings(BaseSettings):
@@ -34,13 +38,20 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost/property_agent"
 
     # ── JWT / Auth ───────────────────────────────────────────────
-    jwt_secret: str = "dev-secret-change-in-production-32chars-min"
+    jwt_secret: str = _DEVELOPMENT_JWT_SECRET
     jwt_algorithm: str = "HS256"
     jwt_expire_hours: int = 8
+    bcrypt_rounds: int = 12
+    login_failure_limit: int = 5
+    login_failure_window_minutes: int = 15
+    login_lock_minutes: int = 15
+    trusted_proxy_cidrs: str = "127.0.0.0/8,::1/128"
 
     # ── Server ───────────────────────────────────────────────────
     host: str = "0.0.0.0"
     port: int = 8000
+    log_level: str = "INFO"
+    slow_request_threshold_ms: int = 1000
 
     # ── DeepSeek model gateway ───────────────────────────────────
     deepseek_base_url: str = "https://api.deepseek.com"
@@ -48,6 +59,43 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     deepseek_connect_timeout_seconds: float = 3.0
     deepseek_read_timeout_seconds: float = 12.0
+    deepseek_total_timeout_seconds: float = 6.0
+
+    def validate_runtime_security(self) -> None:
+        """Reject development credentials when the production profile is selected."""
+        if self.env.strip().lower() != "production":
+            return
+
+        problems: list[str] = []
+        if self.jwt_secret == _DEVELOPMENT_JWT_SECRET or len(self.jwt_secret) < 32:
+            problems.append("JWT_SECRET must be a non-default secret of at least 32 characters")
+
+        parsed_database = urlparse(self.database_url.replace("postgresql+psycopg", "postgresql"))
+        if parsed_database.username == "postgres" and parsed_database.password == "postgres":
+            problems.append("DATABASE_URL must not use the default postgres credentials")
+        if not parsed_database.hostname:
+            problems.append("DATABASE_URL must include an explicit database host")
+
+        if self.deepseek_connect_timeout_seconds <= 0:
+            problems.append("DEEPSEEK_CONNECT_TIMEOUT_SECONDS must be positive")
+        if self.deepseek_read_timeout_seconds <= 0:
+            problems.append("DEEPSEEK_READ_TIMEOUT_SECONDS must be positive")
+        if self.deepseek_total_timeout_seconds <= 0:
+            problems.append("DEEPSEEK_TOTAL_TIMEOUT_SECONDS must be positive")
+
+        if self.login_failure_limit <= 0:
+            problems.append("LOGIN_FAILURE_LIMIT must be positive")
+        if self.login_failure_window_minutes <= 0:
+            problems.append("LOGIN_FAILURE_WINDOW_MINUTES must be positive")
+        if self.login_lock_minutes <= 0:
+            problems.append("LOGIN_LOCK_MINUTES must be positive")
+        if self.log_level.upper() not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+            problems.append("LOG_LEVEL must be a supported Python logging level")
+        if self.slow_request_threshold_ms <= 0:
+            problems.append("SLOW_REQUEST_THRESHOLD_MS must be positive")
+
+        if problems:
+            raise RuntimeError("Unsafe production configuration: " + "; ".join(problems))
 
 
 # Singleton instance — import this throughout the application

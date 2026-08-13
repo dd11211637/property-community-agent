@@ -521,6 +521,30 @@ class BillingSourcePort(Protocol):
     def get_bill(self, *, bill_id: str) -> Bill | None: ...
 
 
+class BillingIdempotencyPort(Protocol):
+    def get(self, actor_id: UUID, operation: str, key: str) -> IdempotencyRecord | None: ...
+
+    def add(self, record: IdempotencyRecord) -> None: ...
+
+
+class BillingAuditPort(Protocol):
+    def add(self, **event: object) -> None: ...
+
+
+class BillingUnitOfWorkPort(Protocol):
+    """Application-facing transaction boundary for billing operations."""
+
+    source: BillingSourcePort
+    rules: RuleRepository
+    consultations: ConsultationRepository
+    idempotency: BillingIdempotencyPort
+    audit: BillingAuditPort
+
+    def community_code(self, community_id: UUID) -> str: ...
+
+    def commit(self) -> None: ...
+
+
 class RuleRepository(ABC):
     """计费规则仓储（PRD 6.3）。"""
 
@@ -548,4 +572,6 @@ class ConsultationRepository(ABC):
     def list_by_actor(self, actor_id: str, community_id: str) -> list[ConsultationTicket]: ...
 
     @abstractmethod
-    def update(self, ticket: ConsultationTicket) -> ConsultationTicket: ...
+    def update(
+        self, ticket: ConsultationTicket, *, expected_version: int
+    ) -> ConsultationTicket: ...

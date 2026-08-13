@@ -158,6 +158,36 @@ def test_task_optimistic_lock(task_service, ids, manager_context, security_conte
     assert exc.value.code == "VERSION_CONFLICT"
 
 
+def test_add_record_rejects_assigned_task(task_service, ids, manager_context, security_context):
+    task = _create_task(task_service, manager_context, idem="record-state-1")
+    task = task_service.execute_task_action(
+        task.id,
+        ExecuteTaskActionCommand(
+            action=TaskAction.ASSIGN,
+            expected_version=task.version,
+            assignee_id=ids.security_worker,
+        ),
+        manager_context,
+        idempotency_key="record-state-assign",
+    )
+
+    with pytest.raises(BusinessError) as exc:
+        task_service.execute_task_action(
+            task.id,
+            ExecuteTaskActionCommand(
+                action=TaskAction.ADD_RECORD,
+                expected_version=task.version,
+                record_type=TaskRecordType.POINT_RECORD,
+                point="B1",
+                note="设备正常",
+            ),
+            security_context,
+            idempotency_key="record-state-add",
+        )
+
+    assert exc.value.code == "INVALID_TRANSITION"
+
+
 def test_task_list_scoping(task_service, harness, ids, manager_context, security_context):
     t = _create_task(task_service, manager_context, idem="scope-1")
     task_service.execute_task_action(

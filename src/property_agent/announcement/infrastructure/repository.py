@@ -12,7 +12,12 @@ from property_agent.announcement.domain.entities import (
     AnnouncementWithdrawal,
     AudienceSnapshot,
 )
-from property_agent.announcement.domain.enums import AnnouncementStatus, VersionSource
+from property_agent.announcement.domain.enums import (
+    AnnouncementAction,
+    AnnouncementCategory,
+    AnnouncementStatus,
+    VersionSource,
+)
 from property_agent.announcement.domain.errors import version_conflict
 from property_agent.announcement.infrastructure.models import (
     AnnouncementAudienceSnapshotModel,
@@ -41,11 +46,12 @@ class SqlAlchemyAnnouncementRepository:
             .values(
                 title=announcement.title,
                 body=announcement.body,
-                category=announcement.category,
+                category=announcement.category.value,
                 audience_condition=announcement.audience_condition,
                 status=announcement.status.value,
                 version=announcement.version,
                 manager_recheck_required=announcement.manager_recheck_required,
+                scheduled_at=announcement.scheduled_at,
                 published_at=announcement.published_at,
                 withdrawn_at=announcement.withdrawn_at,
                 updated_at=announcement.updated_at,
@@ -90,7 +96,7 @@ class SqlAlchemyAnnouncementRepository:
                 version_no=version.version_no,
                 title=version.title,
                 body=version.body,
-                category=version.category,
+                category=version.category.value,
                 audience_condition=version.audience_condition,
                 operator_id=version.operator_id,
                 source=version.source.value,
@@ -112,7 +118,7 @@ class SqlAlchemyAnnouncementRepository:
                 item.version_no,
                 item.title,
                 item.body,
-                item.category,
+                AnnouncementCategory(item.category),
                 item.audience_condition,
                 item.operator_id,
                 VersionSource(item.source),
@@ -190,6 +196,40 @@ class SqlAlchemyAnnouncementRepository:
             )
         )
 
+    def list_due_scheduled(self, now, limit: int) -> Sequence[Announcement]:
+        records = self._session.scalars(
+            select(AnnouncementModel)
+            .where(
+                AnnouncementModel.status == AnnouncementStatus.APPROVED.value,
+                AnnouncementModel.scheduled_at.is_not(None),
+                AnnouncementModel.scheduled_at <= now,
+            )
+            .order_by(AnnouncementModel.scheduled_at)
+            .with_for_update(skip_locked=True)
+            .limit(limit)
+        ).all()
+        return [self._to_domain(item) for item in records]
+
+    def latest_review(
+        self, announcement_id: UUID, community_id: UUID, action: str
+    ) -> AnnouncementReview | None:
+        item = self._session.scalar(
+            select(AnnouncementReviewModel)
+            .where(
+                AnnouncementReviewModel.announcement_id == announcement_id,
+                AnnouncementReviewModel.community_id == community_id,
+                AnnouncementReviewModel.action == action,
+            )
+            .order_by(AnnouncementReviewModel.created_at.desc())
+        )
+        return (
+            AnnouncementReview(
+                AnnouncementAction(item.action), item.reviewer_id, item.reason, item.created_at
+            )
+            if item
+            else None
+        )
+
     @staticmethod
     def _to_model(item: Announcement) -> AnnouncementModel:
         return AnnouncementModel(
@@ -198,7 +238,7 @@ class SqlAlchemyAnnouncementRepository:
             business_no=item.business_no,
             title=item.title,
             body=item.body,
-            category=item.category,
+            category=item.category.value,
             audience_condition=item.audience_condition,
             created_by=item.created_by,
             create_idempotency_key=item.create_idempotency_key,
@@ -220,7 +260,7 @@ class SqlAlchemyAnnouncementRepository:
             business_no=item.business_no,
             title=item.title,
             body=item.body,
-            category=item.category,
+            category=AnnouncementCategory(item.category),
             audience_condition=item.audience_condition,
             created_by=item.created_by,
             create_idempotency_key=item.create_idempotency_key,

@@ -1,0 +1,101 @@
+name: Quality gates
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install ".[dev]"
+      - run: python -m ruff check src tests testing alembic scripts
+      - run: python -m ruff format --check src tests testing alembic scripts
+      - run: python scripts/check_code_structure.py
+      - run: python -m compileall -q src
+      - run: python -m pip check
+      - name: Verify committed OpenAPI contract is current
+        run: python scripts/export_openapi.py && git diff --exit-code -- docs/api/openapi.json
+      - run: python -m pytest -rs
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: property_agent_test
+          POSTGRES_USER: property_agent
+          POSTGRES_PASSWORD: test-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U property_agent -d property_agent_test"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      TEST_POSTGRES_URL: postgresql+psycopg://property_agent:test-password@127.0.0.1:5432/property_agent_test
+      DATABASE_URL: postgresql+psycopg://property_agent:test-password@127.0.0.1:5432/property_agent_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install ".[dev]"
+      - run: alembic upgrade head
+      - run: alembic check
+      - name: Run PostgreSQL suite without skips
+        run: python -m pytest -rs | tee pytest-postgres.log && ! grep -q "SKIPPED \[" pytest-postgres.log
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  browser-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Start real PostgreSQL application stack
+        run: docker compose up -d --build --wait postgres backend frontend
+      - run: npm ci
+        working-directory: frontend
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend
+      - run: npm run test:e2e
+        working-directory: frontend
+        env:
+          PLAYWRIGHT_BASE_URL: http://127.0.0.1:5173
+      - name: Show service logs on failure
+        if: failure()
+        run: docker compose logs --no-color backend frontend postgres
+      - if: always()
+        run: docker compose down --volumes

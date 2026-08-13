@@ -51,6 +51,10 @@ class InspectionRepository(Protocol):
         self, community_id: UUID, search: InspectionTaskSearch, context: RequestContext
     ) -> Sequence[InspectionTask]: ...
 
+    def aggregate_task_statuses(
+        self, community_id: UUID, search: InspectionTaskSearch, context: RequestContext
+    ) -> dict[str, int]: ...
+
     def add_task_status_log(
         self,
         *,

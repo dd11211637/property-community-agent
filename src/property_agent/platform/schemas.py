@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel
 
@@ -9,8 +9,11 @@ class ErrorBody(BaseModel):
     details: dict[str, Any] | None = None
 
 
-class Envelope(BaseModel):
+T = TypeVar("T")
+
+
+class Envelope(BaseModel, Generic[T]):
     success: bool
-    data: Any = None
+    data: T | None = None
     error: ErrorBody | None = None
     request_id: str

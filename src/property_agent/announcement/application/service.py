@@ -8,6 +8,7 @@ from property_agent.announcement.application.commands import (
     CreateAnnouncementCommand,
     EditAnnouncementCommand,
     ReviewActionCommand,
+    ScheduleAnnouncementCommand,
 )
 from property_agent.announcement.application.ports import (
     AnnouncementUnitOfWork,
@@ -142,7 +143,9 @@ class AnnouncementService:
     def get(self, announcement_id: UUID, context: RequestContext) -> Announcement:
         require_role(context, *READ_ROLES)
         with self._unit_of_work_factory() as uow:
-            return self._get(uow, announcement_id, context)
+            announcement = self._get(uow, announcement_id, context)
+            self._ensure_resident_visibility(uow, announcement, context)
+            return announcement
 
     def preview_audience(self, announcement_id: UUID, context: RequestContext) -> AudienceSnapshot:
         require_role(context, *CREATE_ROLES)
@@ -266,6 +269,134 @@ class AnnouncementService:
             uow.commit()
             return announcement
 
+    def schedule_publish(
+        self,
+        announcement_id: UUID,
+        command: ScheduleAnnouncementCommand,
+        context: RequestContext,
+        *,
+        idempotency_key: str,
+    ) -> Announcement:
+        self._require_manager(context, announcement_id, AnnouncementAction.SCHEDULE.value)
+        require_idempotency_key(idempotency_key)
+        now = datetime.now(UTC)
+        scheduled_at = command.scheduled_at
+        if scheduled_at.tzinfo is None:
+            from property_agent.announcement.domain.errors import validation_error
+
+            raise validation_error("scheduled_at must include a timezone.")
+        scheduled_at = scheduled_at.astimezone(UTC)
+        if scheduled_at <= now:
+            from property_agent.announcement.domain.errors import validation_error
+
+            raise validation_error("scheduled_at must be in the future.")
+        operation = "ANNOUNCEMENT_SCHEDULE"
+        confirmation_hash = canonical_hash(
+            {
+                "announcement_id": announcement_id,
+                "expected_version": command.expected_version,
+                "scheduled_at": scheduled_at,
+            }
+        )
+        request_hash = canonical_hash({"confirmation": confirmation_hash, "key": idempotency_key})
+        with self._unit_of_work_factory() as uow:
+            replay = self._replay(uow, context, operation, idempotency_key, request_hash)
+            if replay is not None:
+                return replay
+            announcement = self._get(uow, announcement_id, context)
+            if announcement.version != command.expected_version:
+                raise version_conflict(announcement.version)
+            snapshot = uow.audiences.resolve(
+                community_id=context.community_id,
+                condition=announcement.audience_condition,
+                request_id=context.request_id,
+            )
+            if snapshot.count <= 0 or not snapshot.member_ids:
+                raise empty_audience()
+            uow.confirmations.consume(
+                token=command.confirmation_token.strip(),
+                actor_id=context.actor_id,
+                action=operation,
+                parameter_hash=confirmation_hash,
+                request_id=context.request_id,
+            )
+            announcement.schedule(scheduled_at=scheduled_at, now=now)
+            uow.announcements.add_audience_snapshot(announcement.id, context.community_id, snapshot)
+            uow.announcements.add_review(
+                announcement.id,
+                context.community_id,
+                AnnouncementReview(AnnouncementAction.SCHEDULE, context.actor_id, None, now),
+            )
+            uow.announcements.save(announcement)
+            self._record_idempotency(
+                uow, announcement, context, operation, idempotency_key, request_hash
+            )
+            self._audit(
+                uow,
+                announcement,
+                context,
+                AnnouncementAction.SCHEDULE,
+                {"scheduled_at": scheduled_at.isoformat(), "audience_count": snapshot.count},
+                now,
+            )
+            uow.commit()
+            return announcement
+
+    def publish_due(self, *, now: datetime | None = None, limit: int = 50) -> int:
+        """Publish pre-authorized scheduled announcements from persistent state."""
+        due_at = (now or datetime.now(UTC)).astimezone(UTC)
+        published_count = 0
+        with self._unit_of_work_factory() as uow:
+            for announcement in uow.announcements.list_due_scheduled(due_at, limit):
+                authorization = uow.announcements.latest_review(
+                    announcement.id,
+                    announcement.community_id,
+                    AnnouncementAction.SCHEDULE.value,
+                )
+                snapshot = uow.announcements.latest_audience_snapshot(
+                    announcement.id, announcement.community_id
+                )
+                if authorization is None or snapshot is None or not snapshot.member_ids:
+                    continue
+                announcement.transition(AnnouncementAction.PUBLISH, now=due_at)
+                uow.announcements.add_review(
+                    announcement.id,
+                    announcement.community_id,
+                    AnnouncementReview(
+                        AnnouncementAction.PUBLISH,
+                        authorization.reviewer_id,
+                        "SCHEDULED_EXECUTION",
+                        due_at,
+                    ),
+                )
+                uow.announcements.save(announcement)
+                for receiver_id in snapshot.member_ids:
+                    uow.messages.enqueue(
+                        community_id=announcement.community_id,
+                        receiver_id=receiver_id,
+                        event_type="ANNOUNCEMENT_PUBLISHED",
+                        resource_id=announcement.id,
+                        request_id=f"scheduled:{announcement.id}",
+                        created_at=due_at,
+                    )
+                system_context = RequestContext(
+                    authorization.reviewer_id,
+                    announcement.community_id,
+                    frozenset({Role.MANAGER}),
+                    f"scheduled:{announcement.id}",
+                )
+                self._audit(
+                    uow,
+                    announcement,
+                    system_context,
+                    AnnouncementAction.PUBLISH,
+                    {"scheduled_execution": True, "audience_count": snapshot.count},
+                    due_at,
+                )
+                published_count += 1
+            uow.commit()
+        return published_count
+
     def withdraw(
         self,
         announcement_id: UUID,
@@ -299,6 +430,19 @@ class AnnouncementService:
                 AnnouncementWithdrawal(context.actor_id, reason, prior_version, now),
             )
             uow.announcements.save(announcement)
+            audience = uow.announcements.latest_audience_snapshot(
+                announcement.id, context.community_id
+            )
+            if audience is not None:
+                for receiver_id in audience.member_ids:
+                    uow.messages.enqueue(
+                        community_id=context.community_id,
+                        receiver_id=receiver_id,
+                        event_type="ANNOUNCEMENT_WITHDRAWN",
+                        resource_id=announcement.id,
+                        request_id=context.request_id,
+                        created_at=now,
+                    )
             self._record_idempotency(
                 uow, announcement, context, operation, idempotency_key, request_hash
             )
@@ -307,7 +451,10 @@ class AnnouncementService:
                 announcement,
                 context,
                 AnnouncementAction.WITHDRAW,
-                {"reason": reason},
+                {
+                    "reason": reason,
+                    "audience_count": audience.count if audience is not None else 0,
+                },
                 now,
             )
             uow.commit()
@@ -374,10 +521,21 @@ class AnnouncementService:
         require_role(context, *READ_ROLES)
         validate_pagination(search.limit, search.offset)
         with self._unit_of_work_factory() as uow:
+            if self._is_resident_only(context):
+                published = uow.announcements.list(
+                    context.community_id,
+                    AnnouncementSearch((AnnouncementStatus.PUBLISHED.value,), 10_000, 0),
+                )
+                visible = [
+                    item
+                    for item in published
+                    if self._resident_in_frozen_audience(uow, item, context.actor_id)
+                ]
+                return visible[search.offset : search.offset + search.limit]
             return list(uow.announcements.list(context.community_id, search))
 
     def versions(self, announcement_id: UUID, context: RequestContext) -> list[AnnouncementVersion]:
-        require_role(context, *READ_ROLES)
+        require_role(context, Role.CUSTOMER_SERVICE, Role.MANAGER)
         with self._unit_of_work_factory() as uow:
             announcement = self._get(uow, announcement_id, context)
             return list(uow.announcements.versions(announcement.id, context.community_id))
@@ -396,7 +554,41 @@ class AnnouncementService:
             actions.extend(
                 action for action in announcement.state_actions() if action not in actions
             )
+            if (
+                announcement.status == AnnouncementStatus.APPROVED
+                and AnnouncementAction.SCHEDULE not in actions
+            ):
+                actions.append(AnnouncementAction.SCHEDULE)
         return actions
+
+    @staticmethod
+    def _is_resident_only(context: RequestContext) -> bool:
+        return context.has_any_role(Role.RESIDENT) and not context.has_any_role(
+            Role.CUSTOMER_SERVICE, Role.MANAGER
+        )
+
+    def _ensure_resident_visibility(
+        self,
+        uow: AnnouncementUnitOfWork,
+        announcement: Announcement,
+        context: RequestContext,
+    ) -> None:
+        if not self._is_resident_only(context):
+            return
+        if (
+            announcement.status != AnnouncementStatus.PUBLISHED
+            or not self._resident_in_frozen_audience(uow, announcement, context.actor_id)
+        ):
+            raise not_found()
+
+    @staticmethod
+    def _resident_in_frozen_audience(
+        uow: AnnouncementUnitOfWork, announcement: Announcement, actor_id: UUID
+    ) -> bool:
+        snapshot = uow.announcements.latest_audience_snapshot(
+            announcement.id, announcement.community_id
+        )
+        return snapshot is not None and actor_id in snapshot.member_ids
 
     @staticmethod
     def _validated_content(

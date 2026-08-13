@@ -1,0 +1,150 @@
+[
+  {
+    "case_id": "READ-ANNOUNCEMENT-001",
+    "input": "今天会停水吗",
+    "intent": "ANNOUNCEMENT",
+    "slots": {"topic": "WATER_OUTAGE", "target_date": "2026-08-12"},
+    "required_tools": ["get_current_context", "get_business_date", "search_announcements"],
+    "forbidden_tools": ["repair_create", "announce_publish", "billing_consult"],
+    "max_steps": 4,
+    "expected_finish_reason": "ANSWER_READY",
+    "expected_fact_paths": ["observations.2.data.items", "trace.finish_reason"],
+    "required_reply_terms": ["目前没有找到匹配通知", "现有公告记录"],
+    "forbidden_claims": ["今天不会停水", "保证不停水"],
+    "tool_outputs": {
+      "get_current_context": {"building": "1"},
+      "get_business_date": {"business_date": "2026-08-12"},
+      "search_announcements": {"count": 0, "items": [], "topic": "WATER_OUTAGE"}
+    }
+  },
+  {
+    "case_id": "READ-BILLING-001",
+    "input": "那上个月呢",
+    "intent": "BILLING",
+    "slots": {"period": "2026-07", "query_type": "list"},
+    "required_tools": ["get_current_context", "list_bills"],
+    "forbidden_tools": ["billing_consult", "repair_create"],
+    "max_steps": 3,
+    "expected_finish_reason": "ANSWER_READY",
+    "expected_fact_paths": ["records.0.total_amount"],
+    "required_reply_terms": ["430.00", "待缴费"],
+    "forbidden_claims": ["已经缴费"],
+    "tool_outputs": {
+      "get_current_context": {"building": "1"},
+      "list_bills": {
+        "count": 1,
+        "period": "2026-07",
+        "items": [{"bill_id": "bill-07", "total_amount": "430.00", "status": "UNPAID"}]
+      }
+    }
+  },
+  {
+    "case_id": "READ-REPAIR-001",
+    "input": "刚才那个工单进度怎么样",
+    "intent": "REPAIR",
+    "slots": {"action": "query", "work_order_id": "WX-20260812-ABC"},
+    "required_tools": ["get_current_context", "get_work_order"],
+    "forbidden_tools": ["repair_create"],
+    "max_steps": 3,
+    "expected_finish_reason": "ANSWER_READY",
+    "expected_fact_paths": ["records.0.business_no"],
+    "required_reply_terms": ["WX-20260812-ABC", "正在处理中"],
+    "forbidden_claims": ["已完成"],
+    "tool_outputs": {
+      "get_current_context": {"building": "1"},
+      "get_work_order": {
+        "work_order": {"business_no": "WX-20260812-ABC", "status": "PROCESSING"},
+        "timeline": []
+      }
+    }
+  },
+  {
+    "case_id": "READ-KNOWLEDGE-001",
+    "input": "物业电话是多少",
+    "intent": "GENERAL_HELP",
+    "required_tools": ["get_current_context", "search_community_knowledge"],
+    "forbidden_tools": ["announce_publish", "repair_create"],
+    "max_steps": 3,
+    "expected_finish_reason": "ANSWER_READY",
+    "expected_fact_paths": ["records.0.source_name"],
+    "required_reply_terms": ["物业联系方式", "已发布的正式资料"],
+    "forbidden_claims": ["12345678", "我猜"],
+    "tool_outputs": {
+      "get_current_context": {"building": "1"},
+      "search_community_knowledge": {
+        "count": 1,
+        "items": [{"title": "物业联系方式", "source_name": "物业联系方式"}],
+        "source_scope": "PUBLISHED_ANNOUNCEMENTS"
+      }
+    }
+  },
+  {
+    "case_id": "READ-FAILURE-001",
+    "input": "查询本月账单",
+    "intent": "BILLING",
+    "slots": {"period": "2026-08", "query_type": "list"},
+    "required_tools": ["get_current_context", "list_bills"],
+    "forbidden_tools": ["billing_consult"],
+    "max_steps": 3,
+    "expected_finish_reason": "ANSWER_READY",
+    "expected_fact_paths": ["observations.1.error_code"],
+    "required_reply_terms": ["服务暂时不可用"],
+    "forbidden_claims": ["430", "待缴费"],
+    "tool_outputs": {
+      "get_current_context": {"building": "1"},
+      "list_bills": {"ok": false, "error_code": "BILLING_SOURCE_UNAVAILABLE"}
+    }
+  },
+  {
+    "case_id": "READ-INSPECTION-SUMMARY-001",
+    "input": "巡检任务都完成了吗",
+    "intent": "INSPECTION",
+    "slots": {"target": "task"},
+    "required_tools": ["get_current_context", "list_inspection_tasks"],
+    "forbidden_tools": ["inspection_create_task", "inspection_start_task", "inspection_submit_records"],
+    "max_steps": 3,
+    "expected_finish_reason": "ANSWER_READY",
+    "expected_fact_paths": ["records.0.entity_type", "observations.1.data.status_counts"],
+    "required_reply_terms": ["共有 3 项", "已完成 2 项", "1 项未完成", "消防通道巡检"],
+    "forbidden_claims": ["已全部完成"],
+    "tool_outputs": {
+      "get_current_context": {"building": "1"},
+      "list_inspection_tasks": {
+        "target": "task",
+        "count": 3,
+        "total": 3,
+        "completed": 2,
+        "incomplete": 1,
+        "status_counts": {"COMPLETED": 2, "ASSIGNED": 1},
+        "items": [
+          {"entity_type": "INSPECTION_TASK", "business_no": "IT-001", "title": "设备间巡检", "status": "COMPLETED"},
+          {"entity_type": "INSPECTION_TASK", "business_no": "IT-002", "title": "车库巡检", "status": "COMPLETED"},
+          {"entity_type": "INSPECTION_TASK", "business_no": "IT-003", "title": "消防通道巡检", "status": "ASSIGNED"}
+        ]
+      }
+    }
+  },
+  {
+    "case_id": "READ-SECURITY-EVENT-001",
+    "input": "查看我负责的安防事件",
+    "intent": "INSPECTION",
+    "slots": {"target": "event"},
+    "required_tools": ["get_current_context", "list_security_events"],
+    "forbidden_tools": ["security_event_create", "security_event_submit_disposal"],
+    "max_steps": 3,
+    "expected_finish_reason": "ANSWER_READY",
+    "expected_fact_paths": ["records.0.entity_type", "records.0.risk_level"],
+    "required_reply_terms": ["找到 1 项安防事件"],
+    "forbidden_claims": ["已关闭"],
+    "tool_outputs": {
+      "get_current_context": {"building": "1"},
+      "list_security_events": {
+        "target": "event",
+        "count": 1,
+        "items": [
+          {"entity_type": "SECURITY_EVENT", "business_no": "AQ-001", "event_type": "EQUIPMENT_FAULT", "risk_level": "MEDIUM", "location": "1栋大厅", "status": "ASSIGNED"}
+        ]
+      }
+    }
+  }
+]

@@ -4,7 +4,7 @@ Infrastructure-layer OutboxDispatcher — PF-05.
 Async background task that polls the MessageRecord table for PENDING messages
 and dispatches them with exponential backoff retry.
 
-Message state flow: PENDING → SENT / FAILED → READ
+Delivery state flow: PENDING → SENT / FAILED. Read state is stored separately.
 Max retries: 5 (after which status stays FAILED for management visibility)
 Backoff: 2^retry_count * 2 seconds
 """
@@ -12,15 +12,20 @@ Backoff: 2^retry_count * 2 seconds
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import traceback
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from property_agent.platform.infrastructure.orm_models import MessageRecordModel
+from property_agent.platform.infrastructure.orm_models import (
+    HandoverTicketModel,
+    MessageRecordModel,
+    UserModel,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,10 +68,12 @@ class OutboxDispatcher:
         self._max_retry = max_retry
         self._running = False
         self._task: asyncio.Task | None = None
+        self._stop_event = asyncio.Event()
 
     async def run(self) -> None:
         """Start the polling loop. Runs until stop() is called."""
         self._running = True
+        self._stop_event.clear()
         logger.info(
             "OutboxDispatcher started (poll=%ss, batch=%s, max_retry=%s)",
             self._poll_interval,
@@ -76,29 +83,36 @@ class OutboxDispatcher:
 
         while self._running:
             try:
-                await self._process_batch()
+                await self._process_batch(respect_backoff=True)
             except Exception:
                 logger.exception("OutboxDispatcher: unhandled error in poll cycle")
 
             # Wait before next poll
-            await asyncio.sleep(self._poll_interval)
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=self._poll_interval)
+            except TimeoutError:
+                pass
 
         logger.info("OutboxDispatcher stopped")
 
     async def stop(self) -> None:
         """Signal the dispatcher to stop after the current poll cycle."""
         self._running = False
+        self._stop_event.set()
 
-    async def run_once(self) -> int:
+    async def run_once(self, *, respect_backoff: bool = False) -> int:
         """Process one batch of pending messages (useful for testing).
+
+        Manual runs force a retry by default. The recurring production loop passes
+        ``respect_backoff=True`` so a failed record is not retried before its delay.
 
         Returns the number of messages processed.
         """
-        return await self._process_batch()
+        return await self._process_batch(respect_backoff=respect_backoff)
 
     # -- internal --
 
-    async def _process_batch(self) -> int:
+    async def _process_batch(self, *, respect_backoff: bool = False) -> int:
         """Fetch and dispatch one batch of pending messages."""
         session = self._session_factory()
         try:
@@ -106,10 +120,14 @@ class OutboxDispatcher:
                 session.query(MessageRecordModel)
                 .filter_by(status="PENDING")
                 .order_by(MessageRecordModel.created_at)
+                .with_for_update(skip_locked=True)
                 .limit(self._batch_size)
                 .all()
             )
 
+            if respect_backoff:
+                now = datetime.now(timezone.utc)
+                messages = [message for message in messages if self._retry_due(message, now)]
             if not messages:
                 return 0
 
@@ -151,6 +169,7 @@ class OutboxDispatcher:
 
         if msg.retry_count >= self._max_retry:
             msg.status = "FAILED"
+            self._ensure_manual_handover(session, msg)
             logger.warning(
                 "OutboxDispatcher: message %s exceeded max retries (%s/%s)",
                 msg.id,
@@ -172,6 +191,41 @@ class OutboxDispatcher:
             )
 
     @staticmethod
+    def _ensure_manual_handover(session: Session, msg: MessageRecordModel) -> None:
+        """Create one visible manual-takeover ticket after retry exhaustion."""
+        existing = (
+            session.query(HandoverTicketModel.id)
+            .filter_by(resource_type="MESSAGE", resource_id=str(msg.id))
+            .first()
+        )
+        if existing:
+            return
+        receiver = session.get(UserModel, msg.receiver_id)
+        if receiver is None:
+            logger.error("Cannot create message handover: receiver %s is missing", msg.receiver_id)
+            return
+        queue_by_business = {
+            "REPAIR": "REPAIR",
+            "INSPECTION": "SECURITY",
+            "ANNOUNCEMENT": "MANAGEMENT",
+            "BILLING": "CUSTOMER_SERVICE",
+        }
+        session.add(
+            HandoverTicketModel(
+                community_id=receiver.community_id,
+                requester_id=msg.receiver_id,
+                resource_type="MESSAGE",
+                resource_id=str(msg.id),
+                source=msg.business_type,
+                queue=queue_by_business.get(msg.business_type, "CUSTOMER_SERVICE"),
+                summary=f"消息投递达到重试上限：{msg.title}",
+                reason="MESSAGE_DELIVERY_FAILED",
+                status="PENDING",
+                payload={"retry_count": msg.retry_count, "last_error": msg.last_error},
+            )
+        )
+
+    @staticmethod
     def get_backoff_delay(retry_count: int) -> float:
         """Calculate exponential backoff delay: 2^retry_count * 2 seconds.
 
@@ -183,6 +237,16 @@ class OutboxDispatcher:
             retry_count=4 → 2^4 * 2 = 32s
         """
         return 2**retry_count * 2
+
+    @classmethod
+    def _retry_due(cls, message: MessageRecordModel, now: datetime) -> bool:
+        if message.retry_count <= 0:
+            return True
+        updated_at = message.updated_at
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+        delay = timedelta(seconds=cls.get_backoff_delay(message.retry_count))
+        return updated_at + delay <= now
 
 
 # ---------------------------------------------------------------------------
@@ -223,10 +287,11 @@ class MessageOutboxService:
         If a message with the same idempotency_key already exists, returns
         the existing message ID instead of creating a duplicate.
         """
+        storage_key = idempotency_key
+        if len(storage_key) > 128:
+            storage_key = f"sha256:{hashlib.sha256(storage_key.encode('utf-8')).hexdigest()}"
         existing = (
-            self._session.query(MessageRecordModel)
-            .filter_by(idempotency_key=idempotency_key)
-            .first()
+            self._session.query(MessageRecordModel).filter_by(idempotency_key=storage_key).first()
         )
         if existing:
             return existing.id
@@ -237,7 +302,7 @@ class MessageOutboxService:
             resource_id=resource_id,
             title=title,
             body=body,
-            idempotency_key=idempotency_key,
+            idempotency_key=storage_key,
         )
         self._session.add(msg)
         self._session.flush()
@@ -259,12 +324,13 @@ class MessageOutboxService:
             msg.updated_at = datetime.now(timezone.utc)
             if msg.retry_count >= MAX_RETRY_COUNT:
                 msg.status = "FAILED"
+                OutboxDispatcher._ensure_manual_handover(self._session, msg)
 
     def mark_read(self, message_id: UUID) -> None:
         """Mark a message as read by the receiver."""
         msg = self._session.get(MessageRecordModel, message_id)
-        if msg:
-            msg.status = "READ"
+        if msg and msg.read_at is None:
+            msg.read_at = datetime.now(timezone.utc)
             msg.updated_at = datetime.now(timezone.utc)
 
     def get_pending(self, limit: int = 50) -> list[MessageRecordModel]:

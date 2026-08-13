@@ -24,6 +24,8 @@ from property_agent.platform.adapters.api.dependencies import (
     RequestContext,
     require_idempotency_key,
 )
+from property_agent.platform.adapters.api.routes import generate_confirmation
+from property_agent.platform.adapters.api.schemas import ConfirmationGenerateRequest
 from property_agent.platform.application.audit_service import (
     AuditService,
     DataMasker,
@@ -294,6 +296,19 @@ class TestRequireIdempotencyKey:
 class TestConfirmationService:
     """Tests for ConfirmationService.generate_token() and validate_and_consume_token()."""
 
+    def test_api_generation_commits_token(self, session, request_context):
+        response = generate_confirmation(
+            ConfirmationGenerateRequest(action="TEST_WRITE", parameters={"value": 1}),
+            request_context,
+            session,
+        )
+
+        assert not session.in_transaction()
+        session.expire_all()
+        from property_agent.platform.infrastructure.orm_models import ConfirmationTokenModel
+
+        assert session.query(ConfirmationTokenModel).filter_by(token=response.token).one_or_none()
+
     def test_generate_and_consume_success(self, session, actor_id):
         """Generate a token and successfully consume it with matching params."""
         svc = ConfirmationService(session)
@@ -563,7 +578,7 @@ class TestMessageOutboxService:
         assert "Error attempt" in msg.last_error
 
     def test_mark_read(self, session, actor_id):
-        """mark_read should update status to READ."""
+        """mark_read should preserve delivery status and store read time."""
         svc = MessageOutboxService(session)
         msg_id = svc.enqueue(
             receiver_id=actor_id,
@@ -579,7 +594,8 @@ class TestMessageOutboxService:
         session.commit()
 
         msg = session.get(MessageRecordModel, msg_id)
-        assert msg.status == "READ"
+        assert msg.status == "PENDING"
+        assert msg.read_at is not None
 
     def test_get_pending(self, session, actor_id):
         """get_pending should return only PENDING messages."""
@@ -730,6 +746,9 @@ class TestOutboxDispatcher:
         assert msg.status == "PENDING"  # Not yet failed
         assert msg.last_error is not None
         session.close()
+
+        # The production loop respects the exponential delay and must not retry now.
+        assert await dispatcher.run_once(respect_backoff=True) == 0
 
     @pytest.mark.asyncio
     async def test_dispatcher_max_retries_reached(self, session_factory, actor_id):

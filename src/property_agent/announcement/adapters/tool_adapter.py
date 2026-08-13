@@ -14,7 +14,11 @@ from property_agent.announcement.application.commands import (
     ReviewActionCommand,
 )
 from property_agent.announcement.application.service import AnnouncementService
-from property_agent.announcement.domain.enums import AnnouncementAction, VersionSource
+from property_agent.announcement.domain.enums import (
+    AnnouncementAction,
+    AnnouncementCategory,
+    VersionSource,
+)
 from property_agent.platform.context import RequestContext
 
 
@@ -31,7 +35,7 @@ class SearchAnnouncementsInput(ToolInput):
 class CreateDraftInput(ToolInput):
     title: str = Field(min_length=1, max_length=128)
     body: str = Field(min_length=1)
-    category: str = Field(min_length=1, max_length=32)
+    category: AnnouncementCategory
     audience_condition: dict[str, list[str]] = Field(default_factory=dict)
     idempotency_key: str = Field(min_length=1, max_length=128)
 

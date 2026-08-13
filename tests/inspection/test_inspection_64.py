@@ -353,6 +353,7 @@ def test_high_risk_requires_grade_confirm_before_close(
         idempotency_key="gc-disposal",
     )
     assert ev.status == EventStatus.PENDING_REVIEW
+    assert svc.available_event_actions(ev, security_context) == []
 
     # 高风险未确认等级时，管理者可用动作仅为 GRADE_CONFIRM
     actions = svc.available_event_actions(ev, manager_context)

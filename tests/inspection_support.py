@@ -72,6 +72,18 @@ class FakeInspectionRepository:
             results = [t for t in results if t.assignee_id == context.actor_id]
         return results[search.offset : search.offset + search.limit]
 
+    def aggregate_task_statuses(self, community_id, search, context) -> dict[str, int]:
+        unpaged = type(search)(
+            statuses=search.statuses,
+            assigned_to_me=search.assigned_to_me,
+            limit=100,
+            offset=0,
+        )
+        counts: dict[str, int] = {}
+        for task in self.list_tasks(community_id, unpaged, context):
+            counts[task.status.value] = counts.get(task.status.value, 0) + 1
+        return counts
+
     def add_task_status_log(
         self,
         *,

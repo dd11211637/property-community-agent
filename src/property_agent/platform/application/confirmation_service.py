@@ -78,6 +78,10 @@ class ConfirmationService:
                 expires_at=expires_at,
             )
         )
+        # Some production session factories deliberately disable autoflush.
+        # The Agent signs and validates generic confirmation tokens in the
+        # same transaction, so make the newly issued token query-visible now.
+        self._session.flush()
         return token
 
     def validate_and_consume_token(
@@ -103,7 +107,12 @@ class ConfirmationService:
         """
         parameter_hash = _hash_dict(params)
 
-        record = self._session.query(ConfirmationTokenModel).filter_by(token=token).first()
+        record = (
+            self._session.query(ConfirmationTokenModel)
+            .filter_by(token=token)
+            .with_for_update()
+            .first()
+        )
 
         if record is None:
             raise InvalidConfirmationTokenException("Confirmation token not found.")
@@ -152,7 +161,12 @@ class ConfirmationService:
         request_id: str,
     ) -> None:
         """Backward-compatible consume (accepts pre-computed hash)."""
-        record = self._session.query(ConfirmationTokenModel).filter_by(token=token).first()
+        record = (
+            self._session.query(ConfirmationTokenModel)
+            .filter_by(token=token)
+            .with_for_update()
+            .first()
+        )
 
         if record is None:
             raise InvalidConfirmationTokenException("Confirmation token not found.")

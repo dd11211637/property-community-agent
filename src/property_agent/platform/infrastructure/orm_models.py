@@ -272,6 +272,34 @@ class UserHouseBindingModel(Base):
     house: Mapped[HouseModel] = relationship(back_populates="bindings")
 
 
+class LoginAttemptModel(Base):
+    """Persistent authentication failure state shared by all API replicas."""
+
+    __tablename__ = "login_attempts"
+    __table_args__ = (
+        UniqueConstraint(
+            "username_normalized",
+            "source_ip",
+            name="uq_login_attempts_username_source",
+        ),
+        Index("ix_login_attempts_locked_until", "locked_until"),
+        CheckConstraint("failure_count >= 0", name="ck_login_attempts_failure_count_non_negative"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    username_normalized: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_ip: Mapped[str] = mapped_column(String(64), nullable=False)
+    failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    window_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=func.now(), onupdate=func.now()
+    )
+
+
 # ═══════════════════════════════════════════════════════════════
 # 6. ConfirmationToken — write operation secondary confirmation
 # ═══════════════════════════════════════════════════════════════
@@ -358,7 +386,10 @@ class MessageRecordModel(Base):
         String(16),
         nullable=False,
         default="PENDING",
-        comment="状态: PENDING / SENT / FAILED / READ",
+        comment="投递状态: PENDING / SENT / FAILED",
+    )
+    read_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), comment="接收人首次阅读时间"
     )
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="重试次数")
     last_error: Mapped[str | None] = mapped_column(Text, comment="最后一次错误信息")

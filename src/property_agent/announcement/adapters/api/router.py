@@ -12,6 +12,7 @@ from property_agent.announcement.adapters.api.schemas import (
     EditAnnouncementRequest,
     PublishAnnouncementRequest,
     RejectAnnouncementRequest,
+    ScheduleAnnouncementRequest,
     VersionedActionRequest,
     WithdrawAnnouncementRequest,
 )
@@ -25,6 +26,7 @@ from property_agent.announcement.application.commands import (
     CreateAnnouncementCommand,
     EditAnnouncementCommand,
     ReviewActionCommand,
+    ScheduleAnnouncementCommand,
 )
 from property_agent.announcement.application.service import AnnouncementService
 from property_agent.announcement.domain.enums import AnnouncementAction
@@ -184,6 +186,27 @@ def publish(
             AnnouncementAction.PUBLISH,
             payload.expected_version,
             confirmation_token=payload.confirmation_token,
+        ),
+        context,
+        idempotency_key=idempotency_key,
+    )
+    return success_envelope(announcement_data(item, service, context), context)
+
+
+@router.post("/{announcement_id}/actions/schedule", response_model=Envelope)
+def schedule_publish(
+    announcement_id: UUID,
+    payload: ScheduleAnnouncementRequest,
+    idempotency_key: IdempotencyHeader,
+    service: ServiceDep,
+    context: ContextDep,
+) -> Envelope:
+    item = service.schedule_publish(
+        announcement_id,
+        ScheduleAnnouncementCommand(
+            payload.expected_version,
+            payload.scheduled_at,
+            payload.confirmation_token,
         ),
         context,
         idempotency_key=idempotency_key,

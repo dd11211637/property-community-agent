@@ -1,9 +1,10 @@
 from typing import Any
 
+from property_agent.announcement.domain.enums import AnnouncementCategory
 from property_agent.announcement.domain.errors import validation_error
 
-ALLOWED_CATEGORIES = frozenset({"GENERAL", "MAINTENANCE", "SAFETY", "EMERGENCY"})
-HIGH_RISK_CATEGORIES = frozenset({"SAFETY", "EMERGENCY"})
+ALLOWED_CATEGORIES = frozenset(AnnouncementCategory)
+HIGH_RISK_CATEGORIES = frozenset({AnnouncementCategory.SAFETY, AnnouncementCategory.EMERGENCY})
 AUDIENCE_FIELDS = frozenset({"building_ids", "unit_ids", "house_types"})
 
 
@@ -21,8 +22,8 @@ def normalize_audience_condition(value: dict[str, Any] | None) -> dict[str, list
     return normalized
 
 
-def validate_category(category: str) -> str:
-    candidate = category.strip().upper()
-    if candidate not in ALLOWED_CATEGORIES:
-        raise validation_error("Announcement category is not supported.")
-    return candidate
+def validate_category(category: str | AnnouncementCategory) -> AnnouncementCategory:
+    try:
+        return AnnouncementCategory(str(category).strip().upper())
+    except ValueError:
+        raise validation_error("Announcement category is not supported.") from None

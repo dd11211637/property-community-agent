@@ -4,9 +4,7 @@ from testing.reset.reset_demo import validate_target
 
 
 def test_demo_reset_accepts_only_confirmed_demo_database() -> None:
-    validate_target(
-        "postgresql+psycopg://user:password@postgres/property_agent_demo", "demo", True
-    )
+    validate_target("postgresql+psycopg://user:password@postgres/property_agent_demo", "demo", True)
 
 
 @pytest.mark.parametrize(

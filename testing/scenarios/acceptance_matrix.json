@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "prd_version": "V1.1",
+  "scenarios": [
+    {
+      "id": "F-01",
+      "title": "住户报修确认、刷新恢复与幂等创建",
+      "evidence": [
+        "frontend/e2e/community-flows.spec.ts::Agent 待确认操作在刷新后恢复且确认只创建一个工单",
+        "tests/test_repair_production_ports.py::test_replay_returns_first_result_without_second_row"
+      ]
+    },
+    {
+      "id": "F-02",
+      "title": "报修派单、处理、返工、验收与评价闭环",
+      "evidence": [
+        "frontend/e2e/community-flows.spec.ts::报修跨角色完成派单、返工、验收和评价闭环",
+        "tests/test_service.py::test_complete_rework_and_review_flow"
+      ]
+    },
+    {
+      "id": "F-03",
+      "title": "公告草稿、审核、确认发布与住户可见",
+      "evidence": [
+        "frontend/e2e/community-flows.spec.ts::公告跨角色完成创建、审核、二次确认发布",
+        "tests/announcement/test_announcement_acceptance.py::test_f03_customer_service_to_two_buildings_manager_confirms_publication"
+      ]
+    },
+    {
+      "id": "F-04",
+      "title": "账单明细、费用规则与固定精度金额",
+      "evidence": [
+        "frontend/e2e/community-flows.spec.ts::住户登录后可查看真实账单并通过 Agent 查询",
+        "tests/billing/test_money_contract.py::test_bill_response_serializes_money_as_fixed_decimal_strings"
+      ]
+    },
+    {
+      "id": "F-05",
+      "title": "财务咨询闭环且不改写账单",
+      "evidence": [
+        "testing/e2e_api_smoke.py::bill_financial_snapshot",
+        "frontend/e2e/community-flows.spec.ts::住户创建财务咨询后刷新仍可见并可提交"
+      ]
+    },
+    {
+      "id": "F-06",
+      "title": "巡检和安防事件处置、退回与复核",
+      "evidence": [
+        "frontend/e2e/community-flows.spec.ts::安防事件支持退回后再次处置并完成复核",
+        "tests/inspection/test_inspection_service.py::test_event_full_lifecycle_and_high_risk_close"
+      ]
+    },
+    {
+      "id": "A-01",
+      "title": "四类意图仅路由到对应子图",
+      "evidence": [
+        "tests/agent/test_agent_api.py::test_a01_intent_routes_to_own_subgraph_only",
+        "tests/agent/test_model_gateway.py::test_four_domain_expression_dataset_routes_deterministically"
+      ]
+    },
+    {
+      "id": "A-02",
+      "title": "缺失槽位通过多轮选项补全",
+      "evidence": [
+        "frontend/e2e/community-flows.spec.ts::报修信息不完整时可逐步点击选项补全",
+        "tests/agent/test_agent_api.py::test_a02_follow_up_messages_accumulate_missing_repair_slots"
+      ]
+    },
+    {
+      "id": "A-03",
+      "title": "确认前和取消后均不产生业务写入",
+      "evidence": [
+        "frontend/e2e/community-flows.spec.ts::Agent 取消后不创建工单且后端待确认状态被清除",
+        "tests/agent/test_agent_api.py::test_a03_write_pauses_before_any_service_call"
+      ]
+    },
+    {
+      "id": "A-04",
+      "title": "确认状态可跨后端重启恢复",
+      "evidence": [
+        "testing/agent_restart_smoke.py::verify",
+        "tests/agent/test_agent_api.py::test_a04_confirm_executes_with_token_and_facts"
+      ]
+    },
+    {
+      "id": "S-01",
+      "title": "跨房屋和跨社区访问被拒绝并审计",
+      "evidence": [
+        "tests/platform/test_auth_context.py::test_cross_house_denial_audit_is_committed",
+        "tests/announcement/test_announcement_service_drafts.py::test_cross_community_is_not_discoverable"
+      ]
+    },
+    {
+      "id": "S-02",
+      "title": "支付、自动发布和高风险关闭禁止由 Agent 执行",
+      "evidence": [
+        "tests/agent/test_agent_tools.py::test_announce_publish_requires_confirmation",
+        "tests/agent/test_agent_graph.py::test_high_risk_close_event_never_executes",
+        "tests/test_billing_route_contract.py::test_billing_routes_exclude_payment_mutations"
+      ]
+    },
+    {
+      "id": "S-03",
+      "title": "敏感字段和可观测日志脱敏",
+      "evidence": [
+        "tests/platform/test_services.py::test_sensitive_fields_are_masked",
+        "tests/platform/test_observability.py::test_json_formatter_emits_trace_fields_without_message_mutation"
+      ]
+    },
+    {
+      "id": "S-04",
+      "title": "参数变化、授权撤销和确认过期均拒绝恢复",
+      "evidence": [
+        "tests/test_repair_production_ports.py::test_token_stops_matching_when_a_parameter_changes",
+        "tests/agent/test_agent_persistence.py::test_resume_rejects_revoked_house_binding",
+        "tests/agent/test_agent_persistence.py::test_resume_rejects_expired_confirmation"
+      ]
+    },
+    {
+      "id": "R-01",
+      "title": "首次超时或重试保持幂等",
+      "evidence": [
+        "tests/test_repair_production_ports.py::test_replay_returns_first_result_without_second_row",
+        "tests/agent/test_agent_persistence.py::test_idempotency_key_is_stable_across_restart"
+      ]
+    },
+    {
+      "id": "R-02",
+      "title": "账单源不可用时失败隔离且咨询可保留",
+      "evidence": [
+        "tests/test_billing_production_ports.py::test_source_unavailable_keeps_draft_r02",
+        "tests/agent/test_agent_tools.py::test_billing_query_reports_real_unavailable_state"
+      ]
+    },
+    {
+      "id": "R-03",
+      "title": "消息失败重试耗尽并进入人工接管",
+      "evidence": [
+        "tests/announcement/test_announcement_acceptance.py::test_r03_failed_delivery_remains_visible_retryable_and_does_not_republish",
+        "testing/outbox_failure_smoke.py::run"
+      ]
+    },
+    {
+      "id": "R-04",
+      "title": "无值班人员、模型失败和工具失败安全降级",
+      "evidence": [
+        "tests/inspection/test_inspection_64.py::test_high_risk_no_duty_escalates",
+        "frontend/e2e/community-flows.spec.ts::管理工作台展示失败消息、重试上限和人工接管",
+        "tests/agent/test_model_gateway.py::test_fallback_marks_result_degraded_after_provider_failure"
+      ]
+    }
+  ]
+}

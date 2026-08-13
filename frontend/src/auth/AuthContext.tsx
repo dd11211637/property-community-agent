@@ -31,6 +31,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       sessionStorage.removeItem(sessionKey);
       sessionStorage.removeItem("property_agent_token");
       sessionStorage.removeItem("property_agent_house_id");
+      sessionStorage.removeItem("property_agent_conversation_id");
       return;
     }
     sessionStorage.setItem(sessionKey, JSON.stringify(next));

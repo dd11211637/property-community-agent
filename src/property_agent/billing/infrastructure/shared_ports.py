@@ -53,9 +53,8 @@ class SqlAlchemyBillingIdempotencyPort:
             )
         ).scalar_one_or_none()
         if existing is not None:
-            existing.request_hash = record.request_hash
-            existing.resource_id = str(record.resource_id)
-            existing.response_snapshot = record.response_snapshot
+            if existing.request_hash != record.request_hash:
+                raise ValueError("idempotency key reused with different request hash")
             return
         self._session.add(
             IdempotencyRecordModel(

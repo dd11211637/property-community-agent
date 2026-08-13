@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from property_agent.platform.application.hashing import canonical_hash
@@ -65,16 +66,29 @@ class IdempotencyService:
         )
 
         if record is None:
-            # New request — record the hash, proceed
-            self._session.add(
-                IdempotencyRecordModel(
-                    actor_id=actor_id,
-                    operation=operation,
-                    key=key,
-                    request_hash=request_hash,
+            # Claim the key immediately inside a savepoint.  The database unique
+            # constraint arbitrates concurrent requests; a losing transaction can
+            # then replay the winner instead of leaking an IntegrityError.
+            try:
+                with self._session.begin_nested():
+                    self._session.add(
+                        IdempotencyRecordModel(
+                            actor_id=actor_id,
+                            operation=operation,
+                            key=key,
+                            request_hash=request_hash,
+                        )
+                    )
+                    self._session.flush()
+                return None
+            except IntegrityError:
+                record = (
+                    self._session.query(IdempotencyRecordModel)
+                    .filter_by(actor_id=actor_id, operation=operation, key=key)
+                    .first()
                 )
-            )
-            return None
+                if record is None:
+                    raise
 
         if record.request_hash != request_hash:
             raise IdempotencyConflictException(
@@ -96,6 +110,10 @@ class IdempotencyService:
         response_snapshot: dict[str, Any],
     ) -> None:
         """Update the idempotency record with the actual response after successful processing."""
+        # Production sessions use ``autoflush=False``. Flush the new record
+        # created by ``check`` so this query can update its response snapshot
+        # in the same transaction; otherwise the first replay executes twice.
+        self._session.flush()
         record = (
             self._session.query(IdempotencyRecordModel)
             .filter_by(actor_id=actor_id, operation=operation, key=key)

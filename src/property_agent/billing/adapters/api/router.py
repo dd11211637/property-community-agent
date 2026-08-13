@@ -22,17 +22,25 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from property_agent.billing.adapters.api.dependencies import (
     get_billing_service,
     get_consultation_service,
+)
+from property_agent.billing.adapters.api.schemas import (
+    BillDetailResponse,
+    BillingRuleLookupResponse,
+    BillingRuleResponse,
+    BillResponse,
+    ConsultationResponse,
 )
 from property_agent.billing.application.service import (
     BillingService,
     ConsultationService,
 )
 from property_agent.billing.domain.entities import Bill, ConsultationTicket
+from property_agent.platform.adapters.api.dependencies import get_current_house_context
 from property_agent.platform.context import RequestContext
 from property_agent.platform.dependencies import get_request_context
 from property_agent.platform.infrastructure.database import get_db
@@ -44,6 +52,7 @@ router = APIRouter(prefix="/api/billing", tags=["billing"])
 BillingServiceDep = Annotated[BillingService, Depends(get_billing_service)]
 ConsultationServiceDep = Annotated[ConsultationService, Depends(get_consultation_service)]
 ContextDep = Annotated[RequestContext, Depends(get_request_context)]
+HouseContextDep = Annotated[RequestContext, Depends(get_current_house_context)]
 DbDep = Annotated[object, Depends(get_db)]
 IdempotencyHeader = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)]
 
@@ -59,77 +68,88 @@ class CreateConsultationRequest(BaseModel):
 
 class AnswerConsultationRequest(BaseModel):
     answer: str
+    expected_version: int = Field(ge=1)
+
+
+class VersionedConsultationRequest(BaseModel):
+    expected_version: int = Field(ge=1)
 
 
 # ── 表现层 ─────────────────────────────────────────────
 
 
-def bill_data(bill: Bill) -> dict:
-    return {
-        "bill_id": bill.bill_id,
-        "bill_period": bill.bill_period,
-        "property_fee": bill.property_fee,
-        "utility_fee": bill.utility_fee,
-        "parking_fee": bill.parking_fee,
-        "late_fee": bill.late_fee,
-        "total_amount": bill.total_amount,
-        "due_date": bill.due_date,
-        "status": bill.status.value if hasattr(bill.status, "value") else bill.status,
-        "payment_time": bill.payment_time,
-        "receipt_no": bill.receipt_no,
-        "community_id": bill.community_id,
-        "house_id": bill.house_id,
-        "version": bill.version,
-        "fee_type": bill.fee_type,
-        "source_time": bill.source_time,
-        "rule_version": bill.rule_version,
-        "rule_name": bill.rule_name,
-        "user_name": bill.user_name,
-        "building_name": bill.building_name,
-        "room_number": bill.room_number,
-    }
+def bill_data(bill: Bill) -> BillResponse:
+    return BillResponse.model_validate(
+        {
+            "bill_id": bill.bill_id,
+            "bill_period": bill.bill_period,
+            "property_fee": bill.property_fee,
+            "utility_fee": bill.utility_fee,
+            "parking_fee": bill.parking_fee,
+            "late_fee": bill.late_fee,
+            "total_amount": bill.total_amount,
+            "due_date": bill.due_date,
+            "status": bill.status.value if hasattr(bill.status, "value") else bill.status,
+            "payment_time": bill.payment_time,
+            "receipt_no": bill.receipt_no,
+            "community_id": bill.community_id,
+            "house_id": bill.house_id,
+            "version": bill.version,
+            "fee_type": bill.fee_type,
+            "source_time": bill.source_time,
+            "rule_version": bill.rule_version,
+            "rule_name": bill.rule_name,
+            "user_name": bill.user_name,
+            "building_name": bill.building_name,
+            "room_number": bill.room_number,
+        }
+    )
 
 
-def rule_data(rule) -> dict:
+def rule_data(rule) -> BillingRuleResponse | None:
     if rule is None:
         return None
-    return {
-        "id": rule.id,
-        "community_id": rule.community_id,
-        "fee_type": rule.fee_type,
-        "version": rule.version,
-        "name": rule.name,
-        "parameters": rule.parameters,
-        "valid_from": rule.valid_from,
-        "valid_until": rule.valid_until,
-    }
+    return BillingRuleResponse.model_validate(
+        {
+            "id": rule.id,
+            "community_id": rule.community_id,
+            "fee_type": rule.fee_type,
+            "version": rule.version,
+            "name": rule.name,
+            "parameters": rule.parameters,
+            "valid_from": rule.valid_from,
+            "valid_until": rule.valid_until,
+        }
+    )
 
 
-def consultation_data(ticket: ConsultationTicket) -> dict:
-    return {
-        "id": ticket.id,
-        "community_id": ticket.community_id,
-        "actor_id": ticket.actor_id,
-        "subject": ticket.subject,
-        "description": ticket.description,
-        "house_id": ticket.house_id,
-        "bill_id": ticket.bill_id,
-        "status": ticket.status.value,
-        "answer": ticket.answer,
-        "handler_id": ticket.handler_id,
-        "version": ticket.version,
-        "created_at": ticket.created_at,
-        "updated_at": ticket.updated_at,
-    }
+def consultation_data(ticket: ConsultationTicket) -> ConsultationResponse:
+    return ConsultationResponse.model_validate(
+        {
+            "id": ticket.id,
+            "community_id": ticket.community_id,
+            "actor_id": ticket.actor_id,
+            "subject": ticket.subject,
+            "description": ticket.description,
+            "house_id": ticket.house_id,
+            "bill_id": ticket.bill_id,
+            "status": ticket.status.value,
+            "answer": ticket.answer,
+            "handler_id": ticket.handler_id,
+            "version": ticket.version,
+            "created_at": ticket.created_at,
+            "updated_at": ticket.updated_at,
+        }
+    )
 
 
 # ── 账单查询 ───────────────────────────────────────────
 
 
-@router.get("/bills", response_model=Envelope)
+@router.get("/bills", response_model=Envelope[list[BillResponse]])
 def list_bills(
     service: BillingServiceDep,
-    context: ContextDep,
+    context: HouseContextDep,
     db: DbDep,
     fee_type: Annotated[str | None, Query()] = None,
     period: Annotated[str | None, Query()] = None,
@@ -138,8 +158,10 @@ def list_bills(
     return success_envelope([bill_data(b) for b in bills], context)
 
 
-@router.get("/bills/{bill_id}", response_model=Envelope)
-def get_bill(bill_id: str, service: BillingServiceDep, context: ContextDep, db: DbDep) -> Envelope:
+@router.get("/bills/{bill_id}", response_model=Envelope[BillDetailResponse])
+def get_bill(
+    bill_id: str, service: BillingServiceDep, context: HouseContextDep, db: DbDep
+) -> Envelope:
     bill, rule = service.get_bill(context, db, bill_id)
     return success_envelope(
         {
@@ -152,8 +174,10 @@ def get_bill(bill_id: str, service: BillingServiceDep, context: ContextDep, db: 
     )
 
 
-@router.get("/bills/rules/{fee_type}", response_model=Envelope)
-def get_rule(fee_type: str, service: BillingServiceDep, context: ContextDep, db: DbDep) -> Envelope:
+@router.get("/bills/rules/{fee_type}", response_model=Envelope[BillingRuleLookupResponse])
+def get_rule(
+    fee_type: str, service: BillingServiceDep, context: HouseContextDep, db: DbDep
+) -> Envelope:
     rule = service.get_rule(context, db, fee_type)
     return success_envelope(
         {
@@ -169,12 +193,12 @@ def get_rule(fee_type: str, service: BillingServiceDep, context: ContextDep, db:
 # ── 财务咨询单 ─────────────────────────────────────────
 
 
-@router.post("/consultations", response_model=Envelope, status_code=201)
+@router.post("/consultations", response_model=Envelope[ConsultationResponse], status_code=201)
 def create_consultation(
     payload: CreateConsultationRequest,
     idempotency_key: IdempotencyHeader,
     service: ConsultationServiceDep,
-    context: ContextDep,
+    context: HouseContextDep,
     db: DbDep,
 ) -> Envelope:
     ticket = service.create_draft(
@@ -188,7 +212,7 @@ def create_consultation(
     return success_envelope(consultation_data(ticket), context)
 
 
-@router.get("/consultations", response_model=Envelope)
+@router.get("/consultations", response_model=Envelope[list[ConsultationResponse]])
 def list_my_consultations(
     service: ConsultationServiceDep, context: ContextDep, db: DbDep
 ) -> Envelope:
@@ -196,7 +220,7 @@ def list_my_consultations(
     return success_envelope([consultation_data(t) for t in tickets], context)
 
 
-@router.get("/consultations/{consultation_id}", response_model=Envelope)
+@router.get("/consultations/{consultation_id}", response_model=Envelope[ConsultationResponse])
 def get_consultation(
     consultation_id: str, service: ConsultationServiceDep, context: ContextDep, db: DbDep
 ) -> Envelope:
@@ -204,23 +228,39 @@ def get_consultation(
     return success_envelope(consultation_data(ticket), context)
 
 
-@router.post("/consultations/{consultation_id}/submit", response_model=Envelope)
+@router.post(
+    "/consultations/{consultation_id}/submit", response_model=Envelope[ConsultationResponse]
+)
 def submit_consultation(
-    consultation_id: str, service: ConsultationServiceDep, context: ContextDep, db: DbDep
+    consultation_id: str,
+    payload: VersionedConsultationRequest,
+    service: ConsultationServiceDep,
+    context: ContextDep,
+    db: DbDep,
 ) -> Envelope:
-    ticket = service.submit(context, db, consultation_id)
+    ticket = service.submit(context, db, consultation_id, expected_version=payload.expected_version)
     return success_envelope(consultation_data(ticket), context)
 
 
-@router.post("/consultations/{consultation_id}/process", response_model=Envelope)
+@router.post(
+    "/consultations/{consultation_id}/process", response_model=Envelope[ConsultationResponse]
+)
 def process_consultation(
-    consultation_id: str, service: ConsultationServiceDep, context: ContextDep, db: DbDep
+    consultation_id: str,
+    payload: VersionedConsultationRequest,
+    service: ConsultationServiceDep,
+    context: ContextDep,
+    db: DbDep,
 ) -> Envelope:
-    ticket = service.start_processing(context, db, consultation_id)
+    ticket = service.start_processing(
+        context, db, consultation_id, expected_version=payload.expected_version
+    )
     return success_envelope(consultation_data(ticket), context)
 
 
-@router.post("/consultations/{consultation_id}/answer", response_model=Envelope)
+@router.post(
+    "/consultations/{consultation_id}/answer", response_model=Envelope[ConsultationResponse]
+)
 def answer_consultation(
     consultation_id: str,
     payload: AnswerConsultationRequest,
@@ -228,21 +268,41 @@ def answer_consultation(
     context: ContextDep,
     db: DbDep,
 ) -> Envelope:
-    ticket = service.answer(context, db, consultation_id, payload.answer)
+    ticket = service.answer(
+        context,
+        db,
+        consultation_id,
+        payload.answer,
+        expected_version=payload.expected_version,
+    )
     return success_envelope(consultation_data(ticket), context)
 
 
-@router.post("/consultations/{consultation_id}/resolve", response_model=Envelope)
+@router.post(
+    "/consultations/{consultation_id}/resolve", response_model=Envelope[ConsultationResponse]
+)
 def resolve_consultation(
-    consultation_id: str, service: ConsultationServiceDep, context: ContextDep, db: DbDep
+    consultation_id: str,
+    payload: VersionedConsultationRequest,
+    service: ConsultationServiceDep,
+    context: ContextDep,
+    db: DbDep,
 ) -> Envelope:
-    ticket = service.resolve(context, db, consultation_id)
+    ticket = service.resolve(
+        context, db, consultation_id, expected_version=payload.expected_version
+    )
     return success_envelope(consultation_data(ticket), context)
 
 
-@router.post("/consultations/{consultation_id}/appeal", response_model=Envelope)
+@router.post(
+    "/consultations/{consultation_id}/appeal", response_model=Envelope[ConsultationResponse]
+)
 def appeal_consultation(
-    consultation_id: str, service: ConsultationServiceDep, context: ContextDep, db: DbDep
+    consultation_id: str,
+    payload: VersionedConsultationRequest,
+    service: ConsultationServiceDep,
+    context: ContextDep,
+    db: DbDep,
 ) -> Envelope:
-    ticket = service.appeal(context, db, consultation_id)
+    ticket = service.appeal(context, db, consultation_id, expected_version=payload.expected_version)
     return success_envelope(consultation_data(ticket), context)

@@ -17,13 +17,13 @@ AI 负责意图识别、信息补全、只读查询、内容生成和操作建�
 
 | 范围 | 状态 |
 |---|---|
-| 统一身份、JWT、房屋选择和 RBAC | 已实现，待真实浏览器验收 |
-| 报修、公告、Billing、巡检安防后端 | 已合并，待全流程联调 |
-| 统一 FastAPI 组合根与 Alembic 迁移 | 已实现，Billing 正在纳入统一 PostgreSQL |
-| Web 前端基础页面与 API 客户端 | 已实现，四类业务闭环待补齐 |
-| Agent 编排、持久化确认与关键词路由 | 已实现，DeepSeek 真实网关待接入 |
-| 消息中心与管理工作台 API | 待实现（M2） |
-| Docker Compose 真实 PostgreSQL 环境 | 正在实现与验收（M1） |
+| 统一身份、JWT、房屋选择和 RBAC | 已通过真实 API 和 Playwright 浏览器验收 |
+| 报修、公告、Billing、巡检安防后端 | 已通过 Docker PostgreSQL 主流程联调 |
+| 统一 FastAPI 组合根与 Alembic 迁移 | 已实现并通过真实 PostgreSQL 测试 |
+| Web 四类业务页面与 API 客户端 | 已通过组件测试、lint、构建及 Playwright 浏览器 E2E |
+| Agent 编排、持久化确认与模型路由 | DeepSeek 网关、严格 JSON、重试、确定性语义保护和关键词降级已通过真实入口验收 |
+| 消息中心与管理工作台 API | 已实现并使用真实表聚合 |
+| Docker Compose 真实 PostgreSQL 环境 | 已实现一键启动、迁移、种子和重置 |
 
 “已实现”表示已有生产调用链和自动化测试，不等同于已通过真实 PostgreSQL
 和浏览器端到端联调。
@@ -40,6 +40,23 @@ AI 负责意图识别、信息补全、只读查询、内容生成和操作建�
 演示账号、重置和故障注入见 [`testing/DEMO_ACCOUNTS.md`](testing/DEMO_ACCOUNTS.md)。
 该脚本会使用指向当前仓库的 ASCII 目录联接，规避 Windows BuildKit 对中文检出路径的
 gRPC 会话头兼容问题；不会复制或移动仓库。
+
+如需启用 Agent 的 DeepSeek 意图与槽位识别，在仓库根目录的本地 `.env` 中设置
+`DEEPSEEK_API_KEY` 后重新构建/启动后端。密钥为空时后端自动使用确定性关键词路由；
+模型调用失败最多重试一次，随后同样降级，不影响结构化业务页面。
+
+浏览器 E2E 需要先安装一次 Chromium，并确保 Compose 已启动：
+
+```powershell
+cd frontend
+npx playwright install chromium
+npm run test:e2e
+```
+
+当前验收记录见 [`docs/ACCEPTANCE_STATUS.md`](docs/ACCEPTANCE_STATUS.md)。2026-08-13
+基于当前未提交工作区的回归结果为：默认 Playwright 26/26、前端 Vitest 27/27、
+真实 PostgreSQL 后端测试 439/439；本地快速套件 436 项通过、3 项 PostgreSQL 专项按设计跳过。
+这些数字只对应文档日期和当时工作区，代码变化后必须重新执行。
 
 ## 仓库结构
 
@@ -97,7 +114,12 @@ $env:DATABASE_URL = "postgresql+psycopg://postgres:postgres@localhost/property_a
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
 .\.venv\Scripts\python.exe -m ruff check src tests alembic
+.\.venv\Scripts\python.exe scripts/check_code_structure.py
+.\scripts\compose.ps1 Test
 ```
+
+统一应用 OpenAPI 契约位于 [`docs/api/openapi.json`](docs/api/openapi.json)，需要刷新时执行
+`.\.venv\Scripts\python.exe scripts/export_openapi.py`。
 
 ## 协作约定
 

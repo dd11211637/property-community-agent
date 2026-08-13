@@ -21,7 +21,7 @@ INTENT_SUBGRAPH: dict[str, str] = {
 def subgraph_entry(intent: str | None) -> str | None:
     """返回意图对应的子图入口节点名；无对应子图返回 None。"""
     name = INTENT_SUBGRAPH.get(intent or "")
-    return f"{name}.select_tool" if name else None
+    return f"{name}.prepare" if name == "inspection" else (f"{name}.select_tool" if name else None)
 
 
 def merge_registries(*registries: Mapping[str, Any]) -> dict[str, Any]:

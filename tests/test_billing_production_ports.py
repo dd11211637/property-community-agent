@@ -4,10 +4,8 @@ Production shared-port integration tests — PRD 6.3 账单与财务咨询.
 Mirrors ``tests/test_announcement_production_ports.py``: drive the real
 ``BillingService`` / ``ConsultationService`` against a live SQLite database.
 
-The billing DB keeps its own engine (轻量接入). In tests we redirect that engine to
-the SAME in-memory StaticPool engine used for the platform master data so a single
-session sees both ``fee_bills``/``billing_rules``/``billing_consultations`` and the
-platform ``communities``/``audit_logs``/``idempotency_records`` rows.
+Billing and platform tables share one application database. Tests use one in-memory
+StaticPool engine so a single transaction covers business data, audit and idempotency.
 
 Coverage:
   * 当前房屋必选（HOUSE_SELECTION_REQUIRED）
@@ -44,7 +42,9 @@ from property_agent.billing.errors import (
 from property_agent.billing.infrastructure.orm_models import (
     BillingRuleModel,
     BillModel,
+    ConsultationModel,
 )
+from property_agent.billing.infrastructure.unit_of_work import SqlAlchemyBillingUnitOfWork
 from property_agent.platform.context import RequestContext
 from property_agent.platform.infrastructure.orm_models import (
     AuditLogModel,
@@ -65,6 +65,25 @@ class UnavailableBillingSourcePort:
         raise BillingSourceUnavailable("账单数据源暂时不可用")
 
 
+class UnavailableBillingUnitOfWork(SqlAlchemyBillingUnitOfWork):
+    """Test-only UoW variant that injects an unavailable external source."""
+
+    def __init__(self, session: Session) -> None:
+        super().__init__(session)
+        self.source = UnavailableBillingSourcePort()
+
+
+class FailingAuditPort:
+    def add(self, **_: object) -> None:
+        raise RuntimeError("audit storage unavailable")
+
+
+class FailingAuditUnitOfWork(SqlAlchemyBillingUnitOfWork):
+    def __init__(self, session: Session) -> None:
+        super().__init__(session)
+        self.audit = FailingAuditPort()
+
+
 @pytest.fixture
 def sessions():
     # 单一 in-memory 引擎，platform 与 billing 共用（同 Base.metadata）。
@@ -76,13 +95,6 @@ def sessions():
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
 
-    # 让 billing 模块使用同一个引擎（覆盖模块级默认引擎）。
-    import property_agent.billing.application.service as bservice
-    import property_agent.billing.infrastructure.database as bd
-
-    bd.engine = engine
-    bd.SessionLocal = factory
-    bservice.SessionLocal = factory
     return factory
 
 
@@ -161,6 +173,23 @@ def seed(sessions: sessionmaker[Session]):
                     version=1,
                     fee_type="PROPERTY",
                 ),
+                BillModel(
+                    bill_id="B004",
+                    user_id="u1",
+                    room_id="r1",
+                    bill_period="2026-07",
+                    property_fee=0,
+                    utility_fee=88.0,
+                    parking_fee=0,
+                    late_fee=0,
+                    total_amount=88.0,
+                    due_date=date(2026, 7, 31),
+                    status="UNPAID",
+                    community_id=COMMUNITY_CODE,
+                    house_id=str(current_house),
+                    version=1,
+                    fee_type="UTILITY",
+                ),
                 BillingRuleModel(
                     id="R001",
                     community_id=COMMUNITY_CODE,
@@ -203,7 +232,7 @@ def _ctx(seed, actor_field, *, with_house=True, roles=("RESIDENT",)):
 
 def test_list_bills_requires_current_house(sessions, seed):
     ctx = _ctx(seed, "resident", with_house=False)
-    service = BillingService()
+    service = BillingService(SqlAlchemyBillingUnitOfWork)
     with sessions() as db:
         with pytest.raises(BillingError) as exc:
             service.list_bills(ctx, db)
@@ -212,17 +241,17 @@ def test_list_bills_requires_current_house(sessions, seed):
 
 def test_list_bills_filters_by_house_and_community(sessions, seed):
     ctx = _ctx(seed, "resident")
-    service = BillingService()
+    service = BillingService(SqlAlchemyBillingUnitOfWork)
     with sessions() as db:
         bills = service.list_bills(ctx, db)
     ids = {b.bill_id for b in bills}
-    assert ids == {"B001"}, f"仅应返回当前房屋账单，实际: {ids}"
+    assert ids == {"B001", "B004"}, f"仅应返回当前房屋账单，实际: {ids}"
     # 跨社区 B003 与跨房屋 B002 均被排除
 
 
 def test_get_bill_returns_rule_when_effective(sessions, seed):
     ctx = _ctx(seed, "resident")
-    service = BillingService()
+    service = BillingService(SqlAlchemyBillingUnitOfWork)
     with sessions() as db:
         bill, rule = service.get_bill(ctx, db, "B001")
     assert bill.community_id == COMMUNITY_CODE
@@ -232,15 +261,22 @@ def test_get_bill_returns_rule_when_effective(sessions, seed):
 
 def test_get_bill_declares_unknown_when_no_rule(sessions, seed):
     ctx = _ctx(seed, "resident")
-    service = BillingService()
+    service = BillingService(SqlAlchemyBillingUnitOfWork)
     with sessions() as db:
-        bill, rule = service.get_bill(ctx, db, "B002")
+        bill, rule = service.get_bill(ctx, db, "B004")
     assert rule is None  # UTILITY 无规则 → 声明未知
+
+
+def test_get_bill_hides_same_community_other_house(sessions, seed):
+    ctx = _ctx(seed, "resident")
+    with sessions() as db, pytest.raises(BillingError) as exc:
+        BillingService(SqlAlchemyBillingUnitOfWork).get_bill(ctx, db, "B002")
+    assert exc.value.code == "BILL_NOT_FOUND"
 
 
 def test_query_is_audited(sessions, seed):
     ctx = _ctx(seed, "resident")
-    service = BillingService()
+    service = BillingService(SqlAlchemyBillingUnitOfWork)
     with sessions() as db:
         service.list_bills(ctx, db)
         audit = (
@@ -257,7 +293,7 @@ def test_query_is_audited(sessions, seed):
 
 def test_create_consultation_idempotent(sessions, seed):
     resident_ctx = _ctx(seed, "resident")
-    service = ConsultationService()
+    service = ConsultationService(SqlAlchemyBillingUnitOfWork)
     with sessions() as db:
         t1 = service.create_draft(
             resident_ctx,
@@ -277,10 +313,55 @@ def test_create_consultation_idempotent(sessions, seed):
     assert t1.status == ConsultationStatus.DRAFT
 
 
+def test_create_consultation_rejects_idempotency_key_with_different_payload(sessions, seed):
+    ctx = _ctx(seed, "resident")
+    service = ConsultationService(SqlAlchemyBillingUnitOfWork)
+    with sessions() as db:
+        service.create_draft(
+            ctx, db, subject="原问题", description="原描述", idempotency_key="idem-conflict"
+        )
+        with pytest.raises(ConsultationError) as exc:
+            service.create_draft(
+                ctx, db, subject="新问题", description="新描述", idempotency_key="idem-conflict"
+            )
+    assert exc.value.code == "IDEMPOTENCY_CONFLICT"
+
+
+def test_consultation_detail_is_private_between_residents(sessions, seed):
+    owner_ctx = _ctx(seed, "resident")
+    other_ctx = _ctx(seed, "other_resident")
+    service = ConsultationService(SqlAlchemyBillingUnitOfWork)
+    with sessions() as db:
+        ticket = service.create_draft(
+            owner_ctx,
+            db,
+            subject="仅本人可见",
+            description="隐私内容",
+            idempotency_key="idem-private",
+        )
+        with pytest.raises(ConsultationError) as exc:
+            service.get(other_ctx, db, ticket.id)
+    assert exc.value.code == "CONSULTATION_FORBIDDEN"
+
+
+def test_consultation_can_only_link_current_house_bill(sessions, seed):
+    ctx = _ctx(seed, "resident")
+    with sessions() as db, pytest.raises(BillingError) as exc:
+        ConsultationService(SqlAlchemyBillingUnitOfWork).create_draft(
+            ctx,
+            db,
+            subject="咨询别户账单",
+            description="不应允许",
+            bill_id="B002",
+            idempotency_key="idem-cross-house",
+        )
+    assert exc.value.code == "BILL_NOT_FOUND"
+
+
 def test_consultation_lifecycle(sessions, seed):
     resident_ctx = _ctx(seed, "resident")
     staff_ctx = _ctx(seed, "staff", roles=("FINANCE",))
-    service = ConsultationService()
+    service = ConsultationService(SqlAlchemyBillingUnitOfWork)
     with sessions() as db:
         ticket = service.create_draft(
             resident_ctx,
@@ -289,64 +370,88 @@ def test_consultation_lifecycle(sessions, seed):
             description="d",
             idempotency_key="idem-2",
         )
-        ticket = service.submit(resident_ctx, db, ticket.id)
+        ticket = service.submit(resident_ctx, db, ticket.id, expected_version=ticket.version)
         assert ticket.status == ConsultationStatus.SUBMITTED
-        ticket = service.start_processing(staff_ctx, db, ticket.id)
+        ticket = service.start_processing(staff_ctx, db, ticket.id, expected_version=ticket.version)
         assert ticket.status == ConsultationStatus.PROCESSING
-        ticket = service.answer(staff_ctx, db, ticket.id, "按 2.5 元/平米计征")
+        ticket = service.answer(
+            staff_ctx,
+            db,
+            ticket.id,
+            "按 2.5 元/平米计征",
+            expected_version=ticket.version,
+        )
         assert ticket.status == ConsultationStatus.ANSWERED
         assert ticket.answer == "按 2.5 元/平米计征"
-        ticket = service.resolve(staff_ctx, db, ticket.id)
+        ticket = service.resolve(staff_ctx, db, ticket.id, expected_version=ticket.version)
         assert ticket.status == ConsultationStatus.RESOLVED
 
 
 def test_consultation_appeal(sessions, seed):
     resident_ctx = _ctx(seed, "resident")
     staff_ctx = _ctx(seed, "staff", roles=("FINANCE",))
-    service = ConsultationService()
+    service = ConsultationService(SqlAlchemyBillingUnitOfWork)
     with sessions() as db:
         ticket = service.create_draft(
             resident_ctx, db, subject="s", description="d", idempotency_key="idem-3"
         )
-        ticket = service.submit(resident_ctx, db, ticket.id)
-        ticket = service.start_processing(staff_ctx, db, ticket.id)
-        ticket = service.answer(staff_ctx, db, ticket.id, "a")
-        ticket = service.appeal(resident_ctx, db, ticket.id)
+        ticket = service.submit(resident_ctx, db, ticket.id, expected_version=ticket.version)
+        ticket = service.start_processing(staff_ctx, db, ticket.id, expected_version=ticket.version)
+        ticket = service.answer(staff_ctx, db, ticket.id, "a", expected_version=ticket.version)
+        ticket = service.appeal(resident_ctx, db, ticket.id, expected_version=ticket.version)
         assert ticket.status == ConsultationStatus.APPEALED
-        ticket = service.start_processing(staff_ctx, db, ticket.id)
+        ticket = service.start_processing(staff_ctx, db, ticket.id, expected_version=ticket.version)
         assert ticket.status == ConsultationStatus.PROCESSING
 
 
 def test_consultation_owner_only(sessions, seed):
     resident_ctx = _ctx(seed, "resident")
     other_ctx = _ctx(seed, "other_resident")
-    service = ConsultationService()
+    service = ConsultationService(SqlAlchemyBillingUnitOfWork)
     with sessions() as db:
         ticket = service.create_draft(
             resident_ctx, db, subject="s", description="d", idempotency_key="idem-4"
         )
         with pytest.raises(ConsultationError) as exc:
-            service.submit(other_ctx, db, ticket.id)
+            service.submit(other_ctx, db, ticket.id, expected_version=ticket.version)
     assert exc.value.code == "CONSULTATION_FORBIDDEN"
 
 
 def test_consultation_staff_only(sessions, seed):
     resident_ctx = _ctx(seed, "resident")
-    service = ConsultationService()
+    service = ConsultationService(SqlAlchemyBillingUnitOfWork)
     with sessions() as db:
         ticket = service.create_draft(
             resident_ctx, db, subject="s", description="d", idempotency_key="idem-5"
         )
         with pytest.raises(ConsultationError) as exc:
-            service.start_processing(resident_ctx, db, ticket.id)
+            service.start_processing(resident_ctx, db, ticket.id, expected_version=ticket.version)
     assert exc.value.code == "CONSULTATION_FORBIDDEN"
+
+
+def test_consultation_rejects_stale_version(sessions, seed):
+    resident_ctx = _ctx(seed, "resident")
+    service = ConsultationService(SqlAlchemyBillingUnitOfWork)
+    with sessions() as db:
+        ticket = service.create_draft(
+            resident_ctx,
+            db,
+            subject="并发更新",
+            description="验证版本冲突",
+            idempotency_key="idem-version",
+        )
+        service.submit(resident_ctx, db, ticket.id, expected_version=ticket.version)
+        with pytest.raises(ConsultationError) as exc:
+            service.submit(resident_ctx, db, ticket.id, expected_version=1)
+    assert exc.value.code == "VERSION_CONFLICT"
+    assert exc.value.details == {"current_version": 2}
 
 
 def test_source_unavailable_keeps_draft_r02(sessions, seed):
     resident_ctx = _ctx(seed, "resident")
     # 账单源不可用时，list_bills 应失败（503），但咨询草稿仍可保存（R-02）。
-    billing = BillingService(source_port_factory=lambda bdb: UnavailableBillingSourcePort())
-    consultation = ConsultationService()
+    billing = BillingService(UnavailableBillingUnitOfWork)
+    consultation = ConsultationService(SqlAlchemyBillingUnitOfWork)
     with sessions() as db:
         with pytest.raises(BillingError) as exc:
             billing.list_bills(resident_ctx, db)
@@ -355,4 +460,21 @@ def test_source_unavailable_keeps_draft_r02(sessions, seed):
             resident_ctx, db, subject="源挂了还能问吗", description="d", idempotency_key="idem-6"
         )
     assert ticket.id
+    assert len(ticket.id) == 32
     assert ticket.status == ConsultationStatus.DRAFT
+
+
+def test_consultation_and_audit_share_one_transaction(sessions, seed):
+    ctx = _ctx(seed, "resident")
+    with pytest.raises(RuntimeError, match="audit storage unavailable"):
+        with sessions() as db:
+            ConsultationService(FailingAuditUnitOfWork).create_draft(
+                ctx,
+                db,
+                subject="事务原子性",
+                description="审计失败时咨询也不能落库",
+                idempotency_key="idem-atomic",
+            )
+
+    with sessions() as db:
+        assert db.query(ConsultationModel).filter_by(subject="事务原子性").count() == 0
