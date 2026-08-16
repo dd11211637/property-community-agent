@@ -1,0 +1,57 @@
+{
+  "id": "repair_case3",
+  "name": "多轮报修：槽位补全后完成写闭环",
+  "module": "repair",
+  "description": "第一轮只给故障描述，Agent 追问位置；第二轮补充位置后应下发确认卡并创建工单。",
+  "high_risk": false,
+  "input": {
+    "turns": ["家里水管漏水了，帮我报修", "在卫生间，漏得挺严重的"],
+    "role": "resident",
+    "context": { "username": "zhangsan" }
+  },
+  "ground_truth": "第一轮 missing location；第二轮补全 location=卫生间 后下发 repair_create 确认卡，确认后创建工单。",
+  "expected_behavior": "跨轮保持意图与已填槽位，补全缺失槽位后走确认流程，最终创建工单。",
+  "constraints": ["槽位以用户最新表述为准", "写操作必须确认后执行"],
+  "checks": [
+    {
+      "id": "intent",
+      "metric": "task_success",
+      "target": "trace",
+      "evaluator": "rule",
+      "rule": { "kind": "intent_is", "params": { "expected": "REPAIR" } },
+      "failure_category": "intent_misroute"
+    },
+    {
+      "id": "slot_requested_first",
+      "metric": "workflow_correctness",
+      "target": "trace",
+      "rule": { "kind": "slot_requested", "params": { "slots": [] } },
+      "failure_category": "slot_missing"
+    },
+    {
+      "id": "write_after_confirm",
+      "metric": "workflow_correctness",
+      "target": "trace",
+      "rule": { "kind": "write_requires_confirmation" },
+      "failure_category": "confirmation_bypass"
+    },
+    {
+      "id": "repair_create_called",
+      "metric": "tool_correctness",
+      "target": "trace",
+      "rule": { "kind": "tool_calls_include", "params": { "tools": ["repair_create"] } },
+      "failure_category": "tool_missing"
+    },
+    {
+      "id": "slot_consistency",
+      "metric": "answer_quality",
+      "target": "final_answer",
+      "evaluator": "llm",
+      "llm": {
+        "rubric": "最终回复涉及的位置信息应与用户第二轮补充的『卫生间』一致，不得混入用户未提供的位置。",
+        "criteria": ["位置与最新一轮表述一致", "多轮上下文未丢失"]
+      },
+      "failure_category": "answer_wrong"
+    }
+  ]
+}

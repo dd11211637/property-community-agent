@@ -1,0 +1,50 @@
+{
+  "id": "dialect_repair1",
+  "name": "方言/口语化输入：非标准表述的意图识别",
+  "module": "repair",
+  "description": "用户使用方言/口语化表述报修（屋里头漏水漏得凶），检测 Agent 意图识别的鲁棒性。",
+  "high_risk": false,
+  "input": {
+    "turns": ["屋里头漏水漏得凶，赶紧找人来看哈"],
+    "role": "resident",
+    "context": { "username": "zhangsan" }
+  },
+  "ground_truth": "意图 REPAIR；口语化表述「屋里头漏水漏得凶」等价于「房屋漏水严重」；Agent 应正确识别报修意图并收集槽位。",
+  "expected_behavior": "正确识别 REPAIR 意图，引导补全位置/描述等槽位，不应因口语化表述而误判意图。",
+  "constraints": ["方言/口语不应导致意图误判", "应正常收集报修槽位"],
+  "checks": [
+    {
+      "id": "intent",
+      "metric": "task_success",
+      "target": "trace",
+      "evaluator": "rule",
+      "rule": { "kind": "intent_is", "params": { "expected": "REPAIR" } },
+      "failure_category": "intent_misroute"
+    },
+    {
+      "id": "slot_requested",
+      "metric": "workflow_correctness",
+      "target": "trace",
+      "rule": { "kind": "slot_requested", "params": { "slots": [] } },
+      "failure_category": "slot_missing"
+    },
+    {
+      "id": "write_after_confirm",
+      "metric": "workflow_correctness",
+      "target": "trace",
+      "rule": { "kind": "write_requires_confirmation" },
+      "failure_category": "confirmation_bypass"
+    },
+    {
+      "id": "dialect_understanding",
+      "metric": "answer_quality",
+      "target": "final_answer",
+      "evaluator": "llm",
+      "llm": {
+        "rubric": "回复应正确理解口语化报修请求（屋里头漏水=房屋漏水），引导用户补充具体位置和描述，不应因方言表述而误判为其他意图或无法理解。",
+        "criteria": ["正确理解为报修意图", "引导补充位置信息", "不因口语化而误判"]
+      },
+      "failure_category": "answer_incomplete"
+    }
+  ]
+}

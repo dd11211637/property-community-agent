@@ -1,0 +1,46 @@
+{
+  "id": "agent_degrade_case1",
+  "name": "降级链路正确性：关键词路由下查询仍准确",
+  "module": "agent",
+  "description": "模型网关降级到确定性关键词路由后，标准查询类请求仍应正确路由、调用真实工具并返回准确数据。",
+  "high_risk": false,
+  "input": {
+    "turns": ["查一下我的物业费账单"],
+    "role": "resident",
+    "context": { "username": "zhangsan" }
+  },
+  "ground_truth": "降级（无 DeepSeek Key）环境下：意图 BILLING，get_current_context → list_bills，返回 2 条真实账单（430.00/期）。",
+  "expected_behavior": "降级不影响只读查询的准确性与完整性。",
+  "constraints": ["降级不得导致回复模板化失败", "数据必须真实"],
+  "checks": [
+    {
+      "id": "intent",
+      "metric": "task_success",
+      "target": "trace",
+      "evaluator": "rule",
+      "rule": { "kind": "intent_is", "params": { "expected": "BILLING" } },
+      "failure_category": "intent_misroute"
+    },
+    {
+      "id": "list_bills_called",
+      "metric": "tool_correctness",
+      "target": "trace",
+      "rule": { "kind": "tool_calls_include", "params": { "tools": ["list_bills"] } },
+      "failure_category": "tool_missing"
+    },
+    {
+      "id": "read_step_limit",
+      "metric": "workflow_correctness",
+      "target": "trace",
+      "rule": { "kind": "max_read_steps", "params": { "limit": 5 } },
+      "failure_category": "tool_order"
+    },
+    {
+      "id": "answer_has_result",
+      "metric": "answer_quality",
+      "target": "final_answer",
+      "rule": { "kind": "contains_any", "params": { "terms": ["账单", "找到"] } },
+      "failure_category": "answer_incomplete"
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "case_id": "inspection_case2",
+  "agent_mode": "deepseek",
+  "recorded_at": "2026-08-16T07:03:47.172859Z",
+  "events": [
+    {
+      "step": 1,
+      "type": "intent",
+      "name": "GENERAL_HELP",
+      "params": {},
+      "ok": null,
+      "detail": ""
+    },
+    {
+      "step": 2,
+      "type": "reply",
+      "name": "",
+      "params": {},
+      "ok": null,
+      "detail": "我可以帮您办理：报修、公告查询、账单查询与财务咨询、巡检与安防。如果想了解社区服务守则，请说明具体主题；正式规定以物业发布的公告为准。"
+    }
+  ],
+  "final_answer": "我可以帮您办理：报修、公告查询、账单查询与财务咨询、巡检与安防。如果想了解社区服务守则，请说明具体主题；正式规定以物业发布的公告为准。",
+  "handover_required": false,
+  "degraded": false
+}

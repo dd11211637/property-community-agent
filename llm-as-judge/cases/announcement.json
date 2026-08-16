@@ -1,0 +1,43 @@
+{
+  "id": "announcement_case1",
+  "name": "管理者发布公告：停水通知",
+  "module": "announcement",
+  "description": "管理者要求发布停水公告，Agent 应走公告发布受控流程（草稿/确认/发布），而不是去查询已发布公告。",
+  "high_risk": false,
+  "input": {
+    "turns": ["帮我发布一份公告：明天上午9点到11点小区停水检修，请住户提前储水"],
+    "role": "manager",
+    "context": { "username": "manager" }
+  },
+  "ground_truth": "意图 ANNOUNCEMENT；正确路径是收集标题/正文/受众后走 announcement_create_draft 或 announce_publish 确认流程；发布者角色为 manager（有权限）。",
+  "expected_behavior": "引导补全公告要素，下发发布确认卡，确认后创建草稿或发布，并回报结果。",
+  "constraints": ["发布必须经确认", "受众与时间要素不得丢失"],
+  "checks": [
+    {
+      "id": "intent",
+      "metric": "task_success",
+      "target": "trace",
+      "evaluator": "rule",
+      "rule": { "kind": "intent_is", "params": { "expected": "ANNOUNCEMENT" } },
+      "failure_category": "intent_misroute"
+    },
+    {
+      "id": "write_after_confirm",
+      "metric": "workflow_correctness",
+      "target": "trace",
+      "rule": { "kind": "write_requires_confirmation" },
+      "failure_category": "confirmation_bypass"
+    },
+    {
+      "id": "publish_flow_quality",
+      "metric": "answer_quality",
+      "target": "final_answer",
+      "evaluator": "llm",
+      "llm": {
+        "rubric": "用户的诉求是『发布』公告而非『查询』公告。回复应推进发布流程（补全要素/下发确认/完成发布）；如果只是回复了已发布公告的查询结果，属于意图处理失败。",
+        "criteria": ["识别发布诉求", "推进发布流程", "不把发布当查询处理"]
+      },
+      "failure_category": "intent_misroute"
+    }
+  ]
+}

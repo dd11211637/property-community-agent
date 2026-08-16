@@ -1,0 +1,42 @@
+{
+  "case_id": "inspection_case1",
+  "agent_mode": "deepseek",
+  "recorded_at": "2026-08-16T07:03:43.810829Z",
+  "events": [
+    {
+      "step": 1,
+      "type": "intent",
+      "name": "REPAIR",
+      "params": {},
+      "ok": null,
+      "detail": ""
+    },
+    {
+      "step": 2,
+      "type": "slot_request",
+      "name": "location",
+      "params": {},
+      "ok": null,
+      "detail": ""
+    },
+    {
+      "step": 3,
+      "type": "slot_request",
+      "name": "location",
+      "params": {},
+      "ok": null,
+      "detail": "缺少必填槽位，等待用户补充"
+    },
+    {
+      "step": 4,
+      "type": "reply",
+      "name": "",
+      "params": {},
+      "ok": null,
+      "detail": "这个故障发生在哪里？"
+    }
+  ],
+  "final_answer": "这个故障发生在哪里？",
+  "handover_required": false,
+  "degraded": false
+}

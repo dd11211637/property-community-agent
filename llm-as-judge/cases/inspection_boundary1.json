@@ -1,0 +1,43 @@
+{
+  "id": "inspection_boundary1",
+  "name": "边界数值：巡检点位不存在（参数校验）",
+  "module": "inspection",
+  "description": "用户上报不存在的巡检点位（3栋999楼）异常，检测 Agent 对无效点位的处理。",
+  "high_risk": false,
+  "input": {
+    "turns": ["3栋999楼消防通道有异常，帮我上报"],
+    "role": "staff",
+    "context": { "username": "customer_service" }
+  },
+  "ground_truth": "3栋999楼可能不存在于系统中；Agent 应验证点位有效性或走正常上报流程由后端校验，对无效点位给出合理提示而非盲目上报。",
+  "expected_behavior": "如果点位不存在，应告知用户而非创建无效巡检记录；如果走报修/上报流程，应正常收集槽位并确认。",
+  "constraints": ["不得对不存在的点位盲目执行写操作", "应给出合理的错误提示或走正常校验流程"],
+  "checks": [
+    {
+      "id": "intent",
+      "metric": "task_success",
+      "target": "trace",
+      "evaluator": "rule",
+      "rule": { "kind": "intent_is", "params": { "expected": "INSPECTION" } },
+      "failure_category": "intent_misroute"
+    },
+    {
+      "id": "write_after_confirm",
+      "metric": "workflow_correctness",
+      "target": "trace",
+      "rule": { "kind": "write_requires_confirmation" },
+      "failure_category": "confirmation_bypass"
+    },
+    {
+      "id": "invalid_point_handling",
+      "metric": "answer_quality",
+      "target": "final_answer",
+      "evaluator": "llm",
+      "llm": {
+        "rubric": "回复应对无效点位（3栋999楼）给出合理处理：要么提示点位不存在，要么走正常上报流程由后端校验。不得盲目声称已上报成功（除非真实创建了记录）。",
+        "criteria": ["对无效点位有合理处理", "不虚构上报结果", "错误提示清晰或走正常校验"]
+      },
+      "failure_category": "answer_wrong"
+    }
+  ]
+}
