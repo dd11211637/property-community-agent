@@ -12,12 +12,16 @@ import argparse
 import sys
 from pathlib import Path
 
+import os
+import traceback
+
 from judge.harness import RecordedHarness
 from judge.loader import load_cases
 from judge.llmjudge import DeepSeekClient, LLMJudge
 from judge.pipeline import EvaluationPipeline
 from judge.report import build_report, write_report
 from judge.routing import RoutingError
+from judge.schemas import AgentRun
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -69,6 +73,23 @@ def _run_evaluation(args: argparse.Namespace) -> int:
         except FileNotFoundError:
             missing.append(case.id)
             continue
+        except Exception as exc:
+            tb = traceback.format_exc()
+            print(f"[judge] 用例 {case.id} 运行失败: {exc}", file=sys.stderr)
+            run = AgentRun(
+                case_id=case.id,
+                agent_mode="deepseek" if os.environ.get("DEEPSEEK_API_KEY") else "keyword",
+                events=[],
+                final_answer=f"[EVAL_HARNESS_ERROR] {exc}",
+                handover_required=False,
+                degraded=True,
+            )
+            # 保存失败 run 转录
+            runs_dir = Path(getattr(args, "runs", "runs"))
+            runs_dir.mkdir(parents=True, exist_ok=True)
+            (runs_dir / f"{case.id}.json").write_text(
+                run.model_dump_json(indent=2), encoding="utf-8"
+            )
         results.append(pipeline.evaluate_case(case, run))
     if missing:
         print(f"[judge] 缺少运行记录，已跳过: {missing}", file=sys.stderr)

@@ -30,7 +30,12 @@ def select_announcement_tool(state: GraphState) -> str:
         if isinstance(title, str) and isinstance(body, str) and title.strip() and body.strip():
             state.slots["category"] = classify_announcement_category(title, body).value
         if state.slots.get("audience") is not None:
-            state.slots["audience"] = normalize_announcement_audience(state.slots["audience"])
+            normalized = normalize_announcement_audience(state.slots["audience"])
+            if normalized is not None:
+                state.slots["audience"] = normalized
+            else:
+                # 无法归一化：清空槽位，交由 collect_slots 引导用户澄清受众范围。
+                state.slots["audience"] = None
     if action == AnnouncementAgentAction.DRAFT:
         return "announcement_draft"
     if action == AnnouncementAgentAction.REVISE:

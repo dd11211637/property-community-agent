@@ -16,6 +16,7 @@ from property_agent.agent.state import GraphState
 from property_agent.agent.tools.base import (
     ContextProvider,
     Tool,
+    ToolPreconditionError,
     assert_level,
     idempotency_key,
     ok,
@@ -33,6 +34,14 @@ from property_agent.announcement.domain.classification import (
 )
 from property_agent.announcement.domain.enums import AnnouncementAction, VersionSource
 from property_agent.platform.roles import Role
+
+
+def _require_audience(state: GraphState, tool: str) -> dict[str, object]:
+    """归一化公告受众槽位；无法解析时抛前置错误（由 execute_tool 转错误提示）。"""
+    audience = normalize_announcement_audience(require_slot(state, "audience", tool))
+    if audience is None:
+        raise ToolPreconditionError(f"{tool} 公告受众格式无效，请重新选择受众范围。")
+    return audience
 
 
 def _brief(announcement: Any) -> dict[str, Any]:
@@ -208,9 +217,7 @@ def build_announcement_tools(
     def announcement_draft(state: GraphState) -> dict[str, Any]:
         assert_level("announcement_draft", OperationLevel.READ)
         topic = str(require_slot(state, "topic", "announcement_draft")).strip()
-        audience = normalize_announcement_audience(
-            require_slot(state, "audience", "announcement_draft")
-        )
+        audience = _require_audience(state, "announcement_draft")
         requirements = str(state.slots.get("requirements") or state.slots.get("user_text") or "")
         time_guidance = temporal_writing_guidance(
             target_date=state.slots.get("target_date"),
@@ -244,9 +251,7 @@ def build_announcement_tools(
 
     def announcement_revise(state: GraphState) -> dict[str, Any]:
         assert_level("announcement_revise", OperationLevel.READ)
-        audience = normalize_announcement_audience(
-            require_slot(state, "audience", "announcement_revise")
-        )
+        audience = _require_audience(state, "announcement_revise")
         instruction = str(
             require_slot(state, "revision_instruction", "announcement_revise")
         ).strip()
@@ -305,9 +310,7 @@ def build_announcement_tools(
             "title": title,
             "body": body,
             "category": classify_announcement_category(title, body).value,
-            "audience": normalize_announcement_audience(
-                require_slot(state, "audience", "announcement_create_draft")
-            ),
+            "audience": _require_audience(state, "announcement_create_draft"),
         }
         announcement = service.create_draft(
             CreateAnnouncementCommand(
