@@ -85,7 +85,11 @@ def _normalize_existing_demo_rows(session) -> bool:
     changed = False
     work_order = session.get(WorkOrderModel, WORK_ORDER_ID)
     if work_order is not None:
-        expected = {"category": "WATER_PLUMBING", "status": "PENDING_ACCEPTANCE"}
+        expected = {
+            "category": "WATER_PLUMBING",
+            "status": "PENDING_ACCEPTANCE",
+            "business_no": "WX-20260101-A1B2C3D4",
+        }
         for field, value in expected.items():
             if getattr(work_order, field) != value:
                 setattr(work_order, field, value)
@@ -148,7 +152,7 @@ def _seed_business_flows(session, now: datetime) -> None:
             WorkOrderModel(
                 id=WORK_ORDER_ID,
                 community_id=COMMUNITY_A,
-                business_no="WO-DEMO-001",
+                business_no="WX-20260101-A1B2C3D4",
                 house_id=HOUSE_A_101,
                 reporter_id=RESIDENT_A_SINGLE,
                 category="WATER_PLUMBING",
