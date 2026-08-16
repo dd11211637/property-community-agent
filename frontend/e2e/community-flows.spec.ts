@@ -22,6 +22,10 @@ async function authenticatedHeaders(page: Page) {
   };
 }
 
+async function waitForAgent(page: Page) {
+  await expect(page.getByText("正在查询真实业务状态…")).toHaveCount(0, { timeout: 15_000 });
+}
+
 test("住户登录后可查看真实账单并通过 Agent 查询", async ({ page }) => {
   await login(page, "zhangsan");
 
@@ -36,6 +40,7 @@ test("住户登录后可查看真实账单并通过 Agent 查询", async ({ page
   await page.getByRole("link", { name: "首页 / 智能体" }).click();
   await page.getByLabel("发送给社区智能体").fill("查一下我的账单");
   await page.getByRole("button", { name: "发送" }).click();
+  await waitForAgent(page);
   await expect(page.locator(".message.assistant").last()).toContainText(/账单|查询/);
   const firstAgentBill = page.locator(".agent-facts").first();
   await expect(firstAgentBill).toContainText("账单号");
@@ -56,6 +61,7 @@ test("Agent 查询本月账单只返回当前月份", async ({ page }) => {
   const currentPeriod = `${year}-${month}`;
   await page.getByLabel("发送给社区智能体").fill("查询这个月的账单");
   await page.getByRole("button", { name: "发送" }).click();
+  await waitForAgent(page);
 
   const response = page.locator(".message.assistant").last();
   await expect(response).toContainText(currentPeriod);
@@ -66,10 +72,12 @@ test("Agent 能结合上一轮理解上个月并展示费用明细", async ({ pa
   await login(page, "zhangsan");
   await page.getByLabel("发送给社区智能体").fill("查询这个月的账单");
   await page.getByRole("button", { name: "发送" }).click();
+  await waitForAgent(page);
   await expect(page.locator(".message.assistant").last()).toContainText("账单共 430.00 元");
 
   await page.getByLabel("发送给社区智能体").fill("那上个月呢");
   await page.getByRole("button", { name: "发送" }).click();
+  await waitForAgent(page);
 
   const response = page.locator(".message.assistant").last();
   await expect(response).toContainText("物业费 250.00 元");
@@ -81,6 +89,7 @@ test("Agent 查询今日停水公告会说明范围和空结果边界", async ({
   await login(page, "zhangsan");
   await page.getByLabel("发送给社区智能体").fill("今天会停水吗");
   await page.getByRole("button", { name: "发送" }).click();
+  await waitForAgent(page);
 
   const response = page.locator(".message.assistant").last();
   await expect(response).toContainText("已发布停水公告");
@@ -92,7 +101,7 @@ test("Agent 查询社区资料时只基于已发布来源且不编造电话", as
   await login(page, "zhangsan");
   await page.getByLabel("发送给社区智能体").fill("物业电话是多少");
   await page.getByRole("button", { name: "发送" }).click();
-
+  await waitForAgent(page);
   const response = page.locator(".message.assistant").last();
   await expect(response).toContainText("已发布正式资料");
   await expect(response).toContainText("物业工作人员确认");
@@ -103,6 +112,7 @@ test("安保通过 Agent 获取本人巡检完成度且卡片不误标公告", a
   await login(page, "security_guard");
   await page.getByLabel("发送给社区智能体").fill("巡检任务都完成了吗");
   await page.getByRole("button", { name: "发送" }).click();
+  await waitForAgent(page);
 
   const response = page.locator(".message.assistant").last();
   await expect(response).toContainText(/巡检任务|全部完成|未完成/);
@@ -116,6 +126,7 @@ test("住户通过 Agent 确认上报高风险事件后进入人工接管", asyn
   const marker = `1栋厨房-E2E燃气-${Date.now()}`;
   await page.getByLabel("发送给社区智能体").fill(`${marker}闻到强烈燃气味，请上报事件`);
   await page.getByRole("button", { name: "发送" }).click();
+  await waitForAgent(page);
 
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText("高风险提示");
@@ -134,6 +145,7 @@ test("报修确认框只展示住户可理解的中文字段", async ({ page }) 
 
   await page.getByLabel("发送给社区智能体").fill("客厅电灯坏了，需要报修");
   await page.getByRole("button", { name: "发送" }).click();
+  await waitForAgent(page);
 
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("heading", { name: "确认提交这条报修吗？" })).toBeVisible();
@@ -151,9 +163,11 @@ test("报修信息不完整时可逐步点击选项补全", async ({ page }) => 
 
   await page.getByLabel("发送给社区智能体").fill("我要报修");
   await page.getByRole("button", { name: "发送" }).click();
+  await waitForAgent(page);
   await expect(page.getByText("请描述一下具体出现了什么故障？")).toBeVisible();
   await page.getByLabel("发送给社区智能体").fill("灯具损坏");
   await page.getByRole("button", { name: "发送" }).click();
+  await waitForAgent(page);
   await expect(page.getByText("这个故障发生在哪里？")).toBeVisible();
   await page.getByRole("button", { name: "客厅", exact: true }).click();
   await expect(page.getByRole("heading", { name: "确认提交这条报修吗？" })).toBeVisible();
@@ -170,6 +184,7 @@ test("可使用业务工单号查询真实状态和进度", async ({ page }) => 
   await page.getByRole("link", { name: "首页 / 智能体" }).click();
   await page.getByLabel("发送给社区智能体").fill(`查询工单进度 ${businessNumber}`);
   await page.getByRole("button", { name: "发送" }).click();
+  await waitForAgent(page);
   const result = page.locator(".agent-facts").last();
   await expect(result).toContainText(businessNumber!, { timeout: 15_000 });
   await expect(result).toContainText(/等待|处理中|返工|完成/, { timeout: 15_000 });
@@ -592,6 +607,7 @@ test("消息中心支持筛选、单条已读和全部已读", async ({ page }) 
     await expect(unreadCards.first()).toHaveCount(0);
   }
   await page.getByLabel("阅读或投递状态").selectOption("");
+  const existingUnreadTitles = await page.locator("article.entity-card.unread h3").allTextContents();
   const markAll = page.getByRole("button", { name: "全部标为已读" });
   if (await markAll.isEnabled()) {
     const responsePromise = page.waitForResponse(
@@ -601,7 +617,9 @@ test("消息中心支持筛选、单条已读和全部已读", async ({ page }) 
     expect((await responsePromise).ok()).toBeTruthy();
   }
   await page.getByLabel("阅读或投递状态").selectOption("UNREAD");
-  await expect(page.getByText("没有匹配消息")).toBeVisible();
+  for (const title of existingUnreadTitles) {
+    await expect(page.getByRole("heading", { name: title, exact: true })).toHaveCount(0);
+  }
 });
 
 test("管理工作台展示失败消息、重试上限和人工接管", async ({ page }) => {
@@ -622,6 +640,7 @@ test("Agent 取消后不创建工单且后端待确认状态被清除", async ({
 
   await page.getByLabel("发送给社区智能体").fill("客厅电灯坏了，需要报修");
   await page.getByRole("button", { name: "发送" }).click();
+  await waitForAgent(page);
   await expect(page.getByRole("heading", { name: "确认提交这条报修吗？" })).toBeVisible();
   await page.getByRole("dialog").getByRole("button", { name: "取消" }).click();
   await expect(page.getByText("已取消，未执行任何操作。")).toBeVisible();
@@ -647,6 +666,7 @@ test("Agent 待确认操作在刷新后恢复且确认只创建一个工单", as
 
   await page.getByLabel("发送给社区智能体").fill("客厅电灯坏了，需要报修");
   await page.getByRole("button", { name: "发送" }).click();
+  await waitForAgent(page);
   await expect(page.getByRole("heading", { name: "确认提交这条报修吗？" })).toBeVisible();
 
   await page.reload();

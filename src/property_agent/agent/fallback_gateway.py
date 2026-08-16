@@ -91,6 +91,9 @@ def _guard_repair_slots(
         slots["action"] = "create"
         slots.pop("work_order_id", None)
     if slots.get("action") == "create":
+        model_location = slots.get("location")
+        if model_location and not guarded.get("location") and str(model_location) not in text:
+            slots.pop("location", None)
         if not slots.get("location"):
             locations = ("厨房", "卫生间", "客厅", "卧室", "阳台", "玄关", "楼道", "车库")
             location = next((value for value in locations if value in text), None)

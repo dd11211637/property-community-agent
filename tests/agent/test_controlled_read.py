@@ -55,6 +55,29 @@ def test_single_step_guard_rejects_write_and_identity_arguments():
             raise AssertionError("guard must reject unsafe plan")
 
 
+def test_gateway_planner_rejects_final_before_required_fact_lookup():
+    class PrematureFinalGateway:
+        def plan_read(self, **_context):
+            return PlannerDecision(PlannerAction.FINAL, reason_code="ANSWER_READY")
+
+    planner = GatewayReadPlanner(PrematureFinalGateway())
+    context = {
+        "question": "物业电话是多少",
+        "intent": "GENERAL_HELP",
+        "slots": {"user_text": "物业电话是多少"},
+        "trusted_context": {},
+        "observations": [],
+        "tools": [],
+    }
+
+    first = planner.plan_read(**context)
+    context["observations"] = [{"tool": "get_current_context", "ok": True}]
+    second = planner.plan_read(**context)
+
+    assert first.tool == "get_current_context"
+    assert second.tool == "search_community_knowledge"
+
+
 def test_trajectory_queries_context_date_and_announcement_then_finishes():
     planner = GatewayReadPlanner(object())
     calls = []

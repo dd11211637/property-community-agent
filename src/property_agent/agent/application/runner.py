@@ -33,6 +33,7 @@ from property_agent.agent.graph_core import CompiledGraph
 from property_agent.agent.state import GraphState
 
 ConfirmationTokenProvider = Callable[[GraphState], str]
+TurnRecorder = Callable[[AgentContext, GraphState, str, str], None]
 
 _CONTEXTUAL_MARKERS = (
     "那",
@@ -224,11 +225,13 @@ class AgentSessionRunner:
         conversations: ConversationService,
         recovery: AgentRecoveryService,
         confirmation_token_provider: ConfirmationTokenProvider | None = None,
+        turn_recorder: TurnRecorder | None = None,
     ) -> None:
         self._graph = graph
         self._conversations = conversations
         self._recovery = recovery
         self._confirmation_token_provider = confirmation_token_provider
+        self._turn_recorder = turn_recorder
 
     def start(
         self,
@@ -307,7 +310,9 @@ class AgentSessionRunner:
         )
         state.add_message("user", user_text)
         result = self._graph.invoke(state, thread_id=conversation_id)
-        return self._finalize(result)
+        turn = self._finalize(result)
+        self._persist_turn(context, turn, user_text)
+        return turn
 
     @staticmethod
     def _build_continuation(
@@ -455,7 +460,10 @@ class AgentSessionRunner:
             {"confirmed": confirmed, "confirmation_token": confirmation_token},
             state=restored.state,
         )
-        return self._finalize(result)
+        turn = self._finalize(result)
+        action_text = "确认执行操作" if confirmed else "取消待确认操作"
+        self._persist_turn(context, turn, action_text)
+        return turn
 
     def status(
         self, *, conversation_id: str, context: AgentContext
@@ -484,3 +492,8 @@ class AgentSessionRunner:
             interrupt=result.get("interrupt"),
             done=done,
         )
+
+    def _persist_turn(self, context: AgentContext, turn: AgentTurn, user_text: str) -> None:
+        from property_agent.agent.application.transcript import record_turn
+
+        record_turn(self._turn_recorder, context, turn, user_text)

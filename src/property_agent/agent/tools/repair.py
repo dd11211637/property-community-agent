@@ -40,6 +40,8 @@ def _brief(work_order: Any) -> dict[str, Any]:
         "category": str(getattr(work_order, "category", "")),
         "location": getattr(work_order, "location", None),
         "urgency": str(getattr(work_order, "urgency", "")),
+        "assignee_id": str(work_order.assignee_id) if work_order.assignee_id else None,
+        "version": getattr(work_order, "version", None),
     }
 
 

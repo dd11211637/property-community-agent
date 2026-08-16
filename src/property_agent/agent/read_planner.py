@@ -17,7 +17,12 @@ class GatewayReadPlanner:
         method = getattr(self._gateway, "plan_read", None)
         if method is None:
             return self.deterministic_plan_read(**context)
-        return method(**context)
+        decision = method(**context)
+        if decision.action == PlannerAction.FINAL:
+            required = self.deterministic_plan_read(**context)
+            if required.action == PlannerAction.CALL_TOOL:
+                return required
+        return decision
 
     def deterministic_plan_read(
         self,

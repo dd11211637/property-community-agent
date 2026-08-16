@@ -21,7 +21,6 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Any
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI
 from sqlalchemy import text
@@ -33,6 +32,13 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from property_agent.agent.application.conversation_service import ConversationService
+from property_agent.agent.application.memory_runtime import (
+    _display_part as _display_part,
+)
+from property_agent.agent.application.memory_runtime import (
+    build_agent_context_loader,
+    build_turn_recorder,
+)
 from property_agent.agent.application.recovery import AgentRecoveryService
 from property_agent.agent.application.runner import AgentSessionRunner
 from property_agent.agent.graph import build_agent_graph
@@ -74,12 +80,9 @@ from property_agent.platform.infrastructure.database import (
     dispose_engine,
     get_session_factory,
 )
-from property_agent.platform.infrastructure.orm_models import (
-    CommunityModel,
-    HouseModel,
-    MessageRecordModel,
-)
+from property_agent.platform.infrastructure.orm_models import MessageRecordModel
 from property_agent.platform.infrastructure.outbox_dispatcher import OutboxDispatcher
+from property_agent.repair.application.auto_assignment import build_agent_work_order_service
 from property_agent.repair.application.service import WorkOrderService
 from property_agent.repair.domain.enums import Urgency
 from property_agent.repair.infrastructure.shared_ports import build_shared_ports
@@ -408,33 +411,12 @@ def build_agent_runner(app: FastAPI) -> AgentSessionRunner:
     def session_provider(state: GraphState) -> Any:
         return session_factory()
 
-    def context_loader(state: GraphState) -> GraphState:
-        """Load display-only, server-trusted context for dialogue understanding."""
-        trusted: dict[str, Any] = {
-            "business_date": datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
-        }
-        with session_factory() as session:
-            community = session.get(CommunityModel, state.community_id)
-            if community is not None:
-                trusted["community_name"] = community.name
-            if state.current_house_id is not None:
-                house = session.get(HouseModel, state.current_house_id)
-                if house is not None and house.community_id == state.community_id:
-                    building = _display_part(house.building, "栋")
-                    unit = _display_part(house.unit, "单元")
-                    room = _display_part(house.room_no, "室")
-                    trusted.update(
-                        {
-                            "building": house.building,
-                            "unit": house.unit,
-                            "room_no": house.room_no,
-                            "house_display": f"{building} {unit} {room}",
-                        }
-                    )
-        state.trusted_context = trusted
-        return state
+    context_loader = build_agent_context_loader(session_factory)
 
-    repair_tools = build_repair_tools(app.state.work_order_service, context_provider)
+    agent_work_orders = build_agent_work_order_service(
+        session_factory, app.state.work_order_service
+    )
+    repair_tools = build_repair_tools(agent_work_orders, context_provider)
     announcement_tools = build_announcement_tools(
         app.state.announcement_service, context_provider, gateway
     )
@@ -552,12 +534,8 @@ def build_agent_runner(app: FastAPI) -> AgentSessionRunner:
         conversations=conversations,
         recovery=recovery,
         confirmation_token_provider=confirmation_token_provider,
+        turn_recorder=build_turn_recorder(session_factory),
     )
-
-
-def _display_part(value: Any, suffix: str) -> str:
-    text = str(value or "").strip()
-    return text if text.endswith(suffix) else f"{text}{suffix}"
 
 
 def build_model_gateway() -> ModelGateway:

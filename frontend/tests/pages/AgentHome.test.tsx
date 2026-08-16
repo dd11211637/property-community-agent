@@ -10,6 +10,29 @@ function envelope(data: unknown) {
   });
 }
 
+function mockAgentApi(...turns: unknown[]) {
+  let turnIndex = 0;
+  return vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    if (method === "GET" && url.endsWith("/api/agent/conversations")) {
+      return Promise.resolve(envelope([]));
+    }
+    if (method === "GET" && url.endsWith("/api/agent/memories")) {
+      return Promise.resolve(envelope([]));
+    }
+    const turn = turns[turnIndex++];
+    if (turn === undefined) throw new Error(`Unexpected Agent request: ${method} ${url}`);
+    return Promise.resolve(envelope(turn));
+  });
+}
+
+function postedBodies(fetchMock: ReturnType<typeof vi.spyOn>) {
+  return fetchMock.mock.calls
+    .filter((call) => call[1]?.method === "POST")
+    .map((call) => JSON.parse(String(call[1]?.body)));
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   sessionStorage.clear();
@@ -18,15 +41,15 @@ afterEach(() => {
 describe("Agent home flow", () => {
   it("guides an incomplete repair one question at a time", async () => {
     sessionStorage.setItem("property_agent_token", "token");
-    const fetchMock = vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(envelope({
+    const fetchMock = mockAgentApi(
+      {
         reply: "请描述一下具体出现了什么故障？",
         slot_prompt: {
           field: "description", label: "故障现象", prompt: "请描述一下具体出现了什么故障？",
           allow_custom: true, step: 1, total_steps: 2, completed: [], options: [],
         },
-      }))
-      .mockResolvedValueOnce(envelope({
+      },
+      {
         reply: "这个故障发生在哪里？",
         slot_prompt: {
           field: "location", label: "发生地点", prompt: "这个故障发生在哪里？",
@@ -34,8 +57,8 @@ describe("Agent home flow", () => {
           completed: [{ field: "description", label: "故障现象", value: "插座频繁跳闸" }],
           options: [{ label: "阳台", value: "阳台" }],
         },
-      }))
-      .mockResolvedValueOnce(envelope({
+      },
+      {
         reply: "",
         pending_confirmation: {
           summary: "确认提交这条报修吗？",
@@ -43,7 +66,8 @@ describe("Agent home flow", () => {
           params: { category: "ELECTRICAL", location: "阳台", description: "跳闸停电" },
           action_hash: "guided-hash",
         },
-      }));
+      },
+    );
 
     render(<MemoryRouter><HomePage /></MemoryRouter>);
     fireEvent.change(screen.getByLabelText("发送给社区智能体"), { target: { value: "我要报修" } });
@@ -55,7 +79,7 @@ describe("Agent home flow", () => {
     fireEvent.click(screen.getByRole("button", { name: "阳台" }));
 
     expect(await screen.findByText("确认提交这条报修吗？")).toBeInTheDocument();
-    const bodies = fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)));
+    const bodies = postedBodies(fetchMock);
     expect(bodies[1].slots).toEqual({ description: "插座频繁跳闸" });
     expect(bodies[2].slots).toEqual({ location: "阳台" });
   });
@@ -63,16 +87,17 @@ describe("Agent home flow", () => {
   it("sends the selected house and renders the confirmed business result", async () => {
     sessionStorage.setItem("property_agent_token", "token");
     sessionStorage.setItem("property_agent_house_id", "house-101");
-    const fetchMock = vi.spyOn(globalThis, "fetch")
-      .mockResolvedValueOnce(envelope({
+    const fetchMock = mockAgentApi(
+      {
         reply: "请确认报修",
         pending_confirmation: {
           summary: "确认创建报修",
           params: { location: "厨房" },
           action_hash: "hash-1",
         },
-      }))
-      .mockResolvedValueOnce(envelope({ reply: "报修工单已创建" }));
+      },
+      { reply: "报修工单已创建" },
+    );
 
     render(<MemoryRouter><HomePage /></MemoryRouter>);
     fireEvent.change(screen.getByLabelText("发送给社区智能体"), {
@@ -81,20 +106,20 @@ describe("Agent home flow", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     expect(await screen.findByText("确认创建报修")).toBeInTheDocument();
-    const firstBody = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    const firstBody = postedBodies(fetchMock)[0];
     expect(firstBody.house_id).toBe("house-101");
 
     fireEvent.click(screen.getByRole("button", { name: "确认提交" }));
     expect(await screen.findByText("报修工单已创建")).toBeInTheDocument();
     await waitFor(() => {
-      const secondBody = JSON.parse(String(fetchMock.mock.calls[1][1]?.body));
+      const secondBody = postedBodies(fetchMock)[1];
       expect(secondBody).toEqual({ confirmed: true, action_hash: "hash-1" });
     });
   });
 
   it("renders inspection facts by entity_type without mislabeling them as announcements", async () => {
     sessionStorage.setItem("property_agent_token", "token");
-    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(envelope({
+    mockAgentApi({
       reply: "当前共有 2 项巡检任务，已完成 1 项，还有 1 项未完成。",
       facts: {
         total: 2,
@@ -122,7 +147,7 @@ describe("Agent home flow", () => {
           },
         ],
       },
-    }));
+    });
 
     render(<MemoryRouter><HomePage /></MemoryRouter>);
     fireEvent.change(screen.getByLabelText("发送给社区智能体"), {
