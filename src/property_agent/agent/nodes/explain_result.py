@@ -227,6 +227,8 @@ def _error_message(error: Any) -> str:
     text = str(error or "")
     if "Parameters have changed" in text:
         return "提交的信息已经发生变化，请重新核对并确认。"
+    if "发布公告的权限" in text or "没有发布公告" in text:
+        return text  # 越权拒绝等明确的权限提示原样返回
     if (
         "not configured" in text.lower()
         or "unavailable" in text.lower()

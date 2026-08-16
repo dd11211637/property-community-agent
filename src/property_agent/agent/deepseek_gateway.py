@@ -27,15 +27,21 @@ Use these slot names when explicitly present:
   list|get|draft|revise|create|publish|schedule. Use revise when recent context contains
   an active draft and the user asks to change it, including implicit feedback about time,
   wording, tone, title or audience. Use create when the user accepts the active draft,
-  including natural expressions such as "就用这版" or "按这个来". The application
+  including natural expressions such as "就用这版" or "按这个来". Use create (not
+  publish) when the user asks to publish a NEW announcement and supplies fresh content;
+  publish only confirms publishing an existing draft. The application
   derives the internal category; never ask for or invent a category.
 - BILLING: action, bill_id, query_type, period, fee_type, subject, description
 For billing period, return an absolute YYYY-MM value only when the user explicitly states
 one. The application will resolve relative expressions such as 本月 or 上个月 using its
-trusted business clock.
+trusted business clock. fee_type, when present, must be the enum code
+PROPERTY|UTILITY|PARKING, never a Chinese word such as 物业费.
 - INSPECTION: action, task_id, event_id, target, title, description, point, finding,
   location, note, record_type. Event type and minimum risk are application-derived
   from the reported facts; do not ask the user for internal enum values.
+Public-area safety problems found during patrol (e.g. 消防通道堵塞, 可疑人员,
+设施损坏, 巡检发现异常) belong to INSPECTION with action=report_event, not REPAIR;
+a security officer reporting such an issue is not a resident filing a repair order.
 """
 
 _READ_PLANNER_PROMPT = """You are a bounded read-only planner for a property assistant.

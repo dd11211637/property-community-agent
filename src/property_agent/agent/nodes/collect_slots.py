@@ -40,6 +40,8 @@ _FIELD_LABELS = {
 
 def collect_slots_node():
     def node(state):
+        if state.error:
+            return state  # 已有错误（如越权拒绝）时不再追问槽位
         if state.intent in (Intent.UNCERTAIN.value, Intent.GENERAL_HELP.value):
             return state
         tool = state.slots.get("tool")

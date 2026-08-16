@@ -32,7 +32,9 @@ def read_tool_specs() -> dict[str, ReadToolSpec]:
             frozenset({"query"}),
         ),
         "list_bills": ReadToolSpec(
-            "list_bills", "查询当前房屋账单", frozenset({"period", "fee_type"})
+            "list_bills",
+            "查询当前房屋账单；fee_type 取值仅 PROPERTY|UTILITY|PARKING（枚举码，不用中文）",
+            frozenset({"period", "fee_type"}),
         ),
         "get_bill": ReadToolSpec(
             "get_bill",

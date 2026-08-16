@@ -14,6 +14,11 @@ NAME = "inspection"
 
 def select_inspection_tool(state: GraphState) -> str:
     action = str(state.slots.get("action") or "").lower()
+    # 兜底：action 缺失但文本含明确的写信号时，不落入只读列表。
+    if not action:
+        text = str(state.slots.get("user_text") or "")
+        if any(marker in text for marker in ("上报", "报告")):
+            return "security_event_create"
     if action in ("create", "plan", "new_task"):
         return "inspection_create_task"
     if action in ("start", "start_task"):
