@@ -23,7 +23,6 @@ from property_agent.agent.tools.base import (
 )
 from property_agent.billing.errors import BillingError
 
-
 _FEE_TYPE_ALIASES = {
     "物业费": "PROPERTY",
     "物业管理费": "PROPERTY",
