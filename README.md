@@ -21,7 +21,7 @@ AI 负责意图识别、信息补全、只读查询、内容生成和操作建�
 | 报修、公告、Billing、巡检安防后端 | 已通过 Docker PostgreSQL 主流程联调 |
 | 统一 FastAPI 组合根与 Alembic 迁移 | 已实现并通过真实 PostgreSQL 测试 |
 | Web 四类业务页面与 API 客户端 | 已通过组件测试、lint、构建及 Playwright 浏览器 E2E |
-| Agent 编排、持久化确认与模型路由 | DeepSeek 网关、严格 JSON、重试、确定性语义保护和关键词降级已通过真实入口验收 |
+| Agent 编排、记忆、自动派单与模型路由 | 用户确认记忆、会话历史、维修角色自动派单、持久化确认、确定性语义保护和模型降级已通过真实入口验收 |
 | 消息中心与管理工作台 API | 已实现并使用真实表聚合 |
 | Docker Compose 真实 PostgreSQL 环境 | 已实现一键启动、迁移、种子和重置 |
 
@@ -53,9 +53,9 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-当前验收记录见 [`docs/ACCEPTANCE_STATUS.md`](docs/ACCEPTANCE_STATUS.md)。2026-08-13
+当前验收记录见 [`docs/ACCEPTANCE_STATUS.md`](docs/ACCEPTANCE_STATUS.md)。2026-08-15
 基于当前未提交工作区的回归结果为：默认 Playwright 26/26、前端 Vitest 27/27、
-真实 PostgreSQL 后端测试 439/439；本地快速套件 436 项通过、3 项 PostgreSQL 专项按设计跳过。
+真实 PostgreSQL 后端测试 446/446；本地快速套件 443 项通过、3 项 PostgreSQL 专项按设计跳过。
 这些数字只对应文档日期和当时工作区，代码变化后必须重新执行。
 
 ## 仓库结构

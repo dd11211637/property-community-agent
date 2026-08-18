@@ -1,5 +1,5 @@
 import {
-  Bell, Bot, Building2, ClipboardCheck, FileText, Gauge, Home, LogOut,
+  Bell, Bot, Building2, ClipboardCheck, FileText, Gauge, LogOut,
   Menu, ReceiptText, Settings, Wrench, X,
 } from "lucide-react";
 import { useState } from "react";
@@ -8,13 +8,10 @@ import { useAuth } from "../auth/AuthContext";
 import { EnvironmentBadge } from "./EnvironmentBadge";
 
 const navigation = [
-  ["/", "首页 / 智能体", Home],
-  ["/repairs", "报修服务", Wrench],
-  ["/announcements", "社区公告", FileText],
-  ["/billing", "账单费用", ReceiptText],
-  ["/inspection", "巡检与事件", ClipboardCheck],
-  ["/messages", "消息中心", Bell],
-  ["/admin", "管理工作台", Gauge],
+  { title: "Agent", items: [["/", "社区 Agent", Bot, "首页 / 智能体"]] },
+  { title: "我的事项", items: [["/repairs", "报修服务", Wrench], ["/billing", "账单费用", ReceiptText]] },
+  { title: "社区协作", items: [["/announcements", "社区公告", FileText], ["/inspection", "巡检与事件", ClipboardCheck], ["/messages", "消息中心", Bell]] },
+  { title: "运营", items: [["/admin", "管理工作台", Gauge]] },
 ] as const;
 
 export function AppShell() {
@@ -24,14 +21,17 @@ export function AppShell() {
     <div className="app-shell">
       <EnvironmentBadge />
       <aside className={open ? "sidebar open" : "sidebar"}>
-        <div className="brand"><span className="brand-mark"><Building2 /></span><div><b>栖邻</b><small>社区服务中枢</small></div></div>
+        <div className="brand"><span className="brand-mark"><Building2 /></span><div><b>栖邻</b><small>Agent 驱动的社区服务</small></div></div>
         <button className="mobile-close" aria-label="关闭菜单" onClick={() => setOpen(false)}><X /></button>
         <nav>
-          {navigation.map(([to, label, Icon]) => (
-            <NavLink key={to} to={to} end={to === "/"} onClick={() => setOpen(false)}>
-              <Icon size={19} /><span>{label}</span>
-            </NavLink>
-          ))}
+          {navigation.map((group) => <div className="nav-group" key={group.title}>
+            <span className="nav-section">{group.title}</span>
+            {group.items.map(([to, label, Icon, accessibleLabel]) => (
+              <NavLink className={to === "/" ? "agent-nav" : undefined} aria-label={accessibleLabel} key={to} to={to} end={to === "/"} onClick={() => setOpen(false)}>
+                <Icon size={19} /><span>{label}</span>
+              </NavLink>
+            ))}
+          </div>)}
         </nav>
         <div className="sidebar-foot"><Bot size={18} /><span>AI 只提供建议，业务结果以后端为准</span></div>
       </aside>

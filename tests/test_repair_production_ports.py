@@ -48,6 +48,10 @@ from property_agent.platform.infrastructure.orm_models import (
     UserModel,
     UserRoleModel,
 )
+from property_agent.repair.application.auto_assignment import (
+    AutoAssigningWorkOrderService,
+    AutoAssignmentService,
+)
 from property_agent.repair.application.commands import (
     CreateWorkOrderCommand,
     ExecuteActionCommand,
@@ -416,6 +420,25 @@ def test_token_minted_by_confirmation_service_is_accepted(sessions, seed, servic
 
     assert work_order.status == WorkOrderStatus.PENDING_ASSIGNMENT
     assert canonical_hash(params) == command_hash(command)
+
+
+def test_agent_create_automatically_assigns_active_repair_worker(sessions, seed, service) -> None:
+    command = confirmed_command(sessions, seed)
+    agent_service = AutoAssigningWorkOrderService(
+        service,
+        AutoAssignmentService(sessions, service),
+    )
+
+    work_order = agent_service.create(
+        command,
+        resident_ctx(seed),
+        idempotency_key="agent-auto-assignment",
+    )
+
+    assert work_order.status == WorkOrderStatus.PENDING_ACCEPTANCE
+    assert work_order.assignee_id == seed.repair_worker
+    timeline = service.timeline(work_order.id, staff_ctx(seed))
+    assert [entry.action for entry in timeline] == [ActionCode.CREATE, ActionCode.ASSIGN]
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -132,3 +132,31 @@ export type AdminDashboard = {
   high_risk_events: Array<{ id: string; business_no: string; location: string; risk_level: string; status: string; updated_at: string }>;
   integration_health: Record<string, string>;
 };
+export type AgentConversation = {
+  conversation_id: string;
+  title: string;
+  status: string;
+  current_house_id?: string | null;
+  last_intent?: string | null;
+  last_message_at?: string | null;
+};
+export type AgentMessage = {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  intent?: string | null;
+  house_id?: string | null;
+  created_at: string;
+};
+export type AgentMemory = {
+  id: string;
+  memory_type: "PREFERENCE" | "COMMUNICATION" | "ACCESSIBILITY" | "SERVICE_NOTE";
+  content: string;
+  house_id?: string | null;
+  source_conversation_id?: string | null;
+  confirmed_by_user: boolean;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  expires_at?: string | null;
+};

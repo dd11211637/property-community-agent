@@ -18,9 +18,11 @@ from sqlalchemy import (
     JSON,
     Boolean,
     DateTime,
+    ForeignKey,
     Index,
     Integer,
     String,
+    Text,
     Uuid,
     func,
 )
@@ -73,6 +75,10 @@ class ConversationModel(Base):
         Uuid(as_uuid=True), comment="关联接管单ID"
     )
     last_intent: Mapped[str | None] = mapped_column(String(32), comment="最近一次识别到的意图")
+    title: Mapped[str | None] = mapped_column(String(120), comment="会话标题，由首条用户消息生成")
+    last_message_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), comment="最近一条持久化消息时间"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=func.now(), comment="创建时间"
     )
@@ -122,3 +128,63 @@ class AgentCheckpointModel(Base):
         onupdate=func.now(),
         comment="更新时间",
     )
+
+
+class AgentMessageModel(Base):
+    """Append-only conversation transcript for history and human handover."""
+
+    __tablename__ = "agent_messages"
+    __table_args__ = (
+        Index("ix_agent_messages_conversation_created", "conversation_id", "created_at"),
+        Index("ix_agent_messages_actor_created", "actor_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    conversation_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("agent_conversations.conversation_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    actor_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    community_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    house_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    intent: Mapped[str | None] = mapped_column(String(32))
+    message_metadata: Mapped[dict] = mapped_column(
+        "metadata",
+        JSON().with_variant(JSONB(), "postgresql"),
+        nullable=False,
+        default=dict,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=func.now()
+    )
+
+
+class AgentMemoryModel(Base):
+    """User-controlled long-term memory; never an authorization or business fact source."""
+
+    __tablename__ = "agent_memories"
+    __table_args__ = (
+        Index("ix_agent_memories_owner_active", "actor_id", "community_id", "deleted_at"),
+        Index("ix_agent_memories_house_active", "house_id", "deleted_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    actor_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    community_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    house_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
+    memory_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    content: Mapped[str] = mapped_column(String(500), nullable=False)
+    source_conversation_id: Mapped[str | None] = mapped_column(String(64))
+    confirmed_by_user: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=func.now(), onupdate=func.now()
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

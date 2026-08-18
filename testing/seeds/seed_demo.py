@@ -152,7 +152,7 @@ def _seed_business_flows(session, now: datetime) -> None:
             WorkOrderModel(
                 id=WORK_ORDER_ID,
                 community_id=COMMUNITY_A,
-                business_no="WX-20260101-A1B2C3D4",
+                business_no="WX-20260813-DEMO001",
                 house_id=HOUSE_A_101,
                 reporter_id=RESIDENT_A_SINGLE,
                 category="WATER_PLUMBING",

@@ -378,6 +378,30 @@ def test_keyword_guard_fills_explicit_repair_slots_when_model_omits_them():
     assert result.slots["description"] == "客厅电灯坏了，需要报修"
 
 
+def test_keyword_guard_rejects_model_location_not_stated_by_user():
+    class ContextLeakingAnalysis:
+        def ready(self):
+            return True
+
+        def analyze(self, text):
+            return ModelAnalysis(
+                intent="REPAIR",
+                confidence=0.95,
+                slots={
+                    "action": "create",
+                    "location": "1栋 1单元 101室",
+                    "description": "灯具损坏",
+                },
+                provider="deepseek",
+            )
+
+    result = FallbackModelGateway(ContextLeakingAnalysis(), DeterministicModelGateway()).analyze(
+        "灯具损坏"
+    )
+
+    assert "location" not in result.slots
+
+
 def test_keyword_guard_fills_explicit_inspection_create_slots_when_model_omits_them():
     class SparseInspectionAnalysis:
         def ready(self):
