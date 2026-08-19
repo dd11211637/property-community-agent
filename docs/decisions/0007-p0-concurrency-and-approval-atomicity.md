@@ -31,12 +31,20 @@ PRD §6.5.8 / §6.5.10 已经定义了恢复守卫（会话所有权 / 房屋 / 
 
 * 每会话一个 lease 行：`thread_id` PK、`owner_run_id`、`lease_until`、`fence`、`updated_at`。
 * 抢占用便携 `INSERT … ON CONFLICT (thread_id) DO UPDATE … WHERE lease_until < now()
-  RETURNING fence`；0 行 → `AgentSessionError(CONVERSATION_BUSY)`（HTTP 409，
-  前端可安全重试）。
-* 释放只删自己持有的 lease（`WHERE thread_id=:tid AND owner_run_id=:run_id`），
-  避免误杀已抢占的新 run。
+  RETURNING fence, lease_until`；0 行 → `AgentSessionError(CONVERSATION_BUSY)`（HTTP 409，
+  前端可安全重试）。**acquire 返回 `Lease(thread_id, run_id, fence, lease_until)`**。
+* **Fencing（P0-4）**：`run_id + fence` 注入 trusted `RequestContext.agent_lease`，
+  业务写 UoW 在 mutation 前调用 `assert_run_fence(session, lease)` 校验当前
+  turn 仍拥有 conversation。stale worker 的业务写 100% 被拒绝
+  （`StaleAgentRunError`）。
+* **Heartbeat / renewal（P0-5）**：`renew(thread_id, run_id, fence)` 校验
+  `run_id + fence` 仍属于当前 lease；失败抛 `StaleAgentRunError`，调用方必须
+  终止当前 run。runner 在 graph.invoke/resume 前续期一次。
+* 释放把 `lease_until` 设为过去时间（**不删除行**），使 fence 持续递增——
+  stale worker 的旧 fence 永远不会被新 run 复用。
 * lease 与 checkpoint CAS 分工：lease 防止**同一 conversation 同时跑两个长
-  LLM turn**；CAS 防止 lease 过期后旧 worker 用过期版本覆盖新 checkpoint。
+  LLM turn**；CAS 防止 lease 过期后旧 worker 用过期版本覆盖新 checkpoint；
+  fence 防止 lease 过期后旧 worker 执行业务 mutation（CAS 只挡 checkpoint）。
 
 ### 3. Approval 原子化 — `agent_action_approvals`
 
@@ -44,13 +52,15 @@ PRD §6.5.8 / §6.5.10 已经定义了恢复守卫（会话所有权 / 房屋 / 
   REJECTED/CONSUMED/EXPIRED）。
 * 部分唯一索引 `(conversation_id, action, params_hash) WHERE status IN ('PENDING', 'APPROVED')`
   保证重复确认不产生第二个业务对象。
-* `ApprovalService.create_pending` 在服务端确认时**复用**已存在的开放审批
-  （同一会话/动作/参数指纹），返回 `approval.id` 写回 `state.approval_ref`。
+* **生命周期统一（P0-6）**：PENDING → APPROVED → CONSUMED 状态机严格强制。
+  `confirmation_token_provider` 在用户确认后 create_pending + 立即 approve
+  （PENDING → APPROVED）。`consume` **只接受 APPROVED**，拒绝 PENDING
+  （"签发即消费"反模式）。
 * `ApprovalService.consume` 接受调用方的 `Session`，在同一事务内 `FOR UPDATE`
-  后校验 actor/action/params_hash，将 status 置为 CONSUMED。
+  后校验 actor/action/params_hash + status==APPROVED，将 status 置为 CONSUMED。
 * 业务 Service 在 mutation 之前调用 `uow.confirmations.consume(approval_ref=...,
-  token=...)`，端口先消费审批（业务侧唯一信源），再消费 `confirmation_tokens`
-  作为传输层防伪造的纵深防御。
+  token=...)`，端口先 fence 校验 → 消费审批（业务侧唯一信源）→ 消费
+  `confirmation_tokens` 作为传输层防伪造的纵深防御。
 * 任一校验失败抛 `ApprovalError`，由调用方回滚同一事务：业务 mutation / 审计 /
   Outbox / 审批消费一起回滚，杜绝中间态。
 
@@ -59,13 +69,22 @@ PRD §6.5.8 / §6.5.10 已经定义了恢复守卫（会话所有权 / 房屋 / 
 * `agent_run_lease`、`agent_action_approvals` 表 + `runtime_version` 列
   （`alembic/versions/20260820_0002_add_concurrency_guards.py`）。
 * `agent_run_lease`、`agent_action_approvals` ORM 模型纳入 `Base.metadata`。
-* `runner.py` `_acquire_lease/_release_lease/_turn_start_version` 钩入
-  `start` / `resume`，整个 turn 持有 lease。
-* `container.py` 的 `confirmation_token_provider` 改为创建 PENDING 审批
-  并把 `approval_ref` 写回 state；停用 `AGENT_*` 的"签发即消费"。
+* **Lease 最外层（P0-2）**：`runner.py` 的 `start` / `resume` / `close` 都在
+  最外层 acquire lease，所有 conversation 级 mutation（ConversationService.start、
+  recovery.restore、confirmation_token_provider、graph.invoke/resume、
+  sync_from_state、close）都处于 lease ownership 下。
+* **expected_version 后读（P0-3）**：`_turn_start_version` 在 acquire lease
+  之后调用，避免读到被并发新 run 覆盖的版本。
+* `container.py` 的 `confirmation_token_provider` 在 lease 内 create_pending
+  + approve（PENDING → APPROVED）；停用 `AGENT_*` 的"签发即消费"。
+* **Production UoW factory wiring（P0-1）**：`build_work_order_service` /
+  `build_announcement_service` / `build_inspection_services` 用闭包绑定
+  `approval_service`，避免运行时 `TypeError`（审查报告 composition-root 错误）。
 * `PlatformConfirmationPort.consume`（repair / announcement / inspection / billing）
-  同形扩展：先消费审批，再消费令牌，错误码族 `CONFIRMATION_*`。
-* `billing/infrastructure.s` 新增 `PlatformBillingConfirmationPort` + UoW
+  同形扩展：fence 校验 → 消费审批 → 消费令牌，错误码族 `CONFIRMATION_*`。
+* **close race 修复（P0-7）**：`sync_from_state` 检查 `status == CLOSED` 并
+  拒绝旧 run 复活；`close` 在 lease 内执行。
+* `billing/infrastructure` 新增 `PlatformBillingConfirmationPort` + UoW
   `confirmations` 端口；`create_draft` 调用 `uow.confirmations.consume(...)`
   在 UoW 内提交。
 
@@ -107,6 +126,24 @@ PRD §6.5.8 / §6.5.10 已经定义了恢复守卫（会话所有权 / 房屋 / 
   * 部分既有测试只校验 token，需要同时携带 `approval_ref`；新增 helper
     `_make_consultation_approval(sessions, ctx, …)` 配套。
   * 关闭 `AGENT_CONCURRENCY_GUARD` 退回旧行为，**生产必须保持开启**。
+
+## 审查报告 P0 整改记录（2026-08-19）
+
+基于《审查报告.md》对 HEAD `4673caa` 的 P0 问题清单，本分支完成了以下整改：
+
+| P0 项 | 状态 | 代码位置 |
+| --- | --- | --- |
+| 1. 3 领域 UoW factory wiring | 已修复 | `container.py` build_work_order/announcement/inspection_service 闭包绑定 |
+| 2. lease 提升到 turn 最外层 | 已修复 | `runner.py` start/resume/close 最外层 acquire lease |
+| 3. expected_version 在 acquire 后读 | 已修复 | `runner.py` _turn_start_version 在 _acquire_lease 之后 |
+| 4. 真正 fencing | 已修复 | `run_lease.py` Lease dataclass + `assert_run_fence`；`RequestContext.agent_lease`；`PlatformConfirmationPort.consume` 内 fence 校验 |
+| 5. lease heartbeat / renewal | 已修复 | `run_lease.py` renew()；`turn_guard.py` heartbeat_turn_lease；runner 在 graph.invoke/resume 前 renew |
+| 6. approval 生命周期统一 | 已修复 | `approval_service.py` consume 只接受 APPROVED；`container.py` confirmation_token_provider 在 lease 内 create_pending + approve |
+| 7. close + active run race | 已修复 | `conversation_service.py` sync_from_state 拒绝 CLOSED；`runner.py` close 在 lease 内 |
+| 8. PostgreSQL 并发测试 | 已新增 | `tests/test_p0_postgres_concurrency.py`（11 场景，@pytest.mark.postgres） |
+
+验证结果：489 测试通过（SQLite）；11 PG 测试在 CI 运行（@pytest.mark.postgres）；
+ruff / structure / alembic 全通过。
 
 ## 关联代码
 

@@ -183,7 +183,7 @@ class ApprovalService:
         finally:
             s.close()
 
-    # ── 执行路径：APPROVED/PENDING → CONSUMED（与业务 mutation 同事务） ──
+    # ── 执行路径：APPROVED → CONSUMED（与业务 mutation 同事务） ──
 
     def consume(
         self,
@@ -195,6 +195,11 @@ class ApprovalService:
         session: Session,
     ) -> Approval:
         """在业务写**同一个 session** 内锁定、校验并消费审批。
+
+        生命周期严格遵循 PENDING → APPROVED → CONSUMED：
+        * 只有 APPROVED 状态的审批可以被消费（用户必须先点确认 approve）。
+        * CONSUMED 视为幂等重放：同事务内重复消费不产生第二个副作用。
+        * PENDING 状态的审批被拒绝（用户尚未确认），避免"签发即消费"反模式。
 
         ``params_hash`` 由调用方用与创建 PENDING 审批时**同一套**参数指纹传入
         （即业务 Service 计算给 ``confirmations.consume`` 的 ``parameter_hash``），
@@ -222,14 +227,25 @@ class ApprovalService:
             raise ApprovalError("APPROVAL_REJECTED", "该操作已被用户拒绝。")
         if model.status == ApprovalStatus.EXPIRED.value:
             raise ApprovalError("APPROVAL_EXPIRED", "确认已超时失效，请重新发起。")
-        if model.status == ApprovalStatus.PENDING.value and _is_expired(model.expires_at):
-            model.status = ApprovalStatus.EXPIRED.value
-            raise ApprovalError("APPROVAL_EXPIRED", "确认已超时失效，请重新发起。")
-        if model.status not in (ApprovalStatus.PENDING.value, ApprovalStatus.APPROVED.value):
+        if model.status == ApprovalStatus.PENDING.value:
+            # PENDING 必须先经用户 approve；不允许跳过确认直接消费。
+            if _is_expired(model.expires_at):
+                model.status = ApprovalStatus.EXPIRED.value
+                raise ApprovalError("APPROVAL_EXPIRED", "确认已超时失效，请重新发起。")
+            raise ApprovalError(
+                "APPROVAL_NOT_APPROVED",
+                "审批尚未经用户确认，拒绝执行（必须先 approve）。",
+                status_code=409,
+            )
+        if model.status != ApprovalStatus.APPROVED.value:
             raise ApprovalError(
                 "APPROVAL_NOT_APPROVED",
                 f"审批处于 {model.status} 状态，未获确认，拒绝执行。",
             )
+        # APPROVED → CONSUMED
+        if _is_expired(model.expires_at):
+            model.status = ApprovalStatus.EXPIRED.value
+            raise ApprovalError("APPROVAL_EXPIRED", "确认已超时失效，请重新发起。")
         model.status = ApprovalStatus.CONSUMED.value
         model.consumed_at = datetime.now(timezone.utc)
         return Approval.from_model(model)

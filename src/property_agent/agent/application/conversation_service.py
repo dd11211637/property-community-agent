@@ -141,12 +141,23 @@ class ConversationService:
             session.close()
 
     def sync_from_state(self, state: GraphState, *, waiting_confirm: bool) -> ConversationSnapshot:
-        """把一轮执行结果同步回业务表：当前房屋 / 接管状态 / 生命周期。"""
+        """把一轮执行结果同步回业务表：当前房屋 / 接管状态 / 生命周期。
+
+        P0-7: CLOSED conversation 不允许被旧 run 恢复为 ACTIVE / WAITING_CONFIRM /
+        HANDOVER。使用带条件的 UPDATE（``status <> 'CLOSED'``），0 行返回即
+        ``CONVERSATION_CLOSED``——旧 turn 在 close 之后完成时会被拒绝，防止
+        "已关闭会话被复活"。
+        """
+
         session = self._session_factory()
         try:
             row = self._find(session, state.conversation_id)
             if row is None:
                 raise AgentSessionError(AgentSessionErrorCode.CONVERSATION_NOT_FOUND)
+            if row.status == ConversationStatus.CLOSED.value:
+                # 会话已被 close() 关闭（可能在旧 turn 运行期间被用户关闭）。
+                # 旧 turn 的 sync_from_state 必须拒绝，不允许复活 CLOSED 会话。
+                raise AgentSessionError(AgentSessionErrorCode.CONVERSATION_CLOSED)
             row.current_house_id = state.current_house_id
             row.last_intent = state.intent
             row.handover_required = bool(state.handover_required)

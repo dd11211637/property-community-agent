@@ -1,15 +1,19 @@
-"""P0 正确性底座测试 —— Checkpoint CAS / Run Lease / Approval 原子性。
+"""P0 正确性底座测试 —— Checkpoint CAS / Run Lease / Fencing / Approval 原子性。
 
-涵盖（deep-research-report.md §3 + §Approval 原子化）：
+涵盖（deep-research-report.md §3 + §Approval 原子化 + 审查报告 P0）：
 
 * Checkpoint CAS — stale worker 用过期 expected_version 写不进去，抛
   ``CheckpointVersionConflict``（runner 终止本 run）。
 * Run Lease — 同一 conversation 两个并发 run 抢占 lease，第二个抛
   ``CONVERSATION_BUSY``（409）；持租者释放后第三个能抢到；同 fence 不会误杀。
-* Approval 原子性 — 同事务内消费 + 业务 mutation；过期/wrong actor/wrong
-  params_hash 拒绝；重复消费幂等。
+* Fencing — acquire 返回 Lease(thread_id, run_id, fence, lease_until)；
+  assert_run_fence 在业务 UoW session 内校验 lease ownership；stale fence 被拒绝；
+  heartbeat/renew 校验 run_id + fence。
+* Approval 原子性 — PENDING→APPROVED→CONSUMED 状态机；consume 只接受 APPROVED；
+  同事务内消费 + 业务 mutation；过期/wrong actor/wrong params_hash 拒绝；重复消费幂等。
 
-所有测试使用 SQLite in-memory + StaticPool；不依赖外部 PostgreSQL。
+所有测试使用 SQLite in-memory + StaticPool；PostgreSQL 并发语义由
+``tests/test_p0_postgres_concurrency.py`` 覆盖（@pytest.mark.postgres）。
 """
 
 from __future__ import annotations
@@ -34,7 +38,12 @@ from property_agent.agent.infrastructure.models import (
     AgentActionApprovalModel,
     AgentCheckpointModel,
 )
-from property_agent.agent.infrastructure.run_lease import RunLeaseService
+from property_agent.agent.infrastructure.run_lease import (
+    Lease,
+    RunLeaseService,
+    StaleAgentRunError,
+    assert_run_fence,
+)
 from property_agent.agent.state import GraphState
 from property_agent.platform.application.approval_service import (
     ApprovalError,
@@ -96,12 +105,9 @@ def _make_state(conversation_id: str = "conv-1") -> GraphState:
 def test_checkpoint_cas_rejects_stale_expected_version(checkpointer, session_factory):
     """Stale worker 拿到的 expected_version 已过期，CAS 应当冲突。"""
     state = _make_state()
-    # 第一次 save 创建 version=1
     checkpointer.save("conv-1", state)
-    # 第二次 save 不传 expected_version（run lease 守的单写者语义），version 递增到 2
     state.slots["description"] = "y"
     checkpointer.save("conv-1", state)
-    # 第三个 worker 用过期的 expected_version=1 写入 → 冲突
     state.slots["description"] = "z"
     with pytest.raises(CheckpointVersionConflict) as exc:
         checkpointer.save("conv-1", state, expected_version=1)
@@ -133,13 +139,14 @@ def test_checkpoint_legacy_path_works_without_expected_version(checkpointer):
     assert checkpointer.version_of("conv-1") == 3
 
 
-# ── Run Lease ─────────────────────────────────────────────
+# ── Run Lease + Fencing ───────────────────────────────────
 
 
 def test_run_lease_blocks_concurrent_run(run_lease):
     """同一 conversation 第二次 acquire 在 lease 期内抛 CONVERSATION_BUSY。"""
     run_a = run_lease.acquire("conv-1")
-    assert run_a is not None
+    assert isinstance(run_a, Lease)
+    assert run_a.fence == 1
     with pytest.raises(AgentSessionError) as exc:
         run_lease.acquire("conv-1")
     assert exc.value.code == AgentSessionErrorCode.CONVERSATION_BUSY.value
@@ -154,9 +161,10 @@ def test_run_lease_releases_only_owner(run_lease):
     with pytest.raises(AgentSessionError):
         run_lease.acquire("conv-1")
     # 自己释放后能再次抢占
-    run_lease.release("conv-1", run_a)
+    run_lease.release("conv-1", run_a.run_id)
     run_b = run_lease.acquire("conv-1")
-    assert run_b is not None
+    assert isinstance(run_b, Lease)
+    assert run_b.fence == 2  # fence 递增
 
 
 def test_run_lease_is_held_reflects_state(run_lease):
@@ -168,25 +176,83 @@ def test_run_lease_is_held_reflects_state(run_lease):
     run_lease.release("conv-x", uuid4())
     assert run_lease.is_held("conv-x") is True
     # 持租者释放后无人持有。
-    run_lease.release("conv-x", owner)
+    run_lease.release("conv-x", owner.run_id)
     assert run_lease.is_held("conv-x") is False
 
 
 def test_run_lease_expires_and_can_be_reacquired(session_factory):
     """TTL=1s 后另一个 run 能抢占（验证 fencing 不永久阻塞）。"""
     lease = RunLeaseService(session_factory, lease_seconds=1)
-    run_lease.acquire("conv-1") if False else None  # noqa: avoid unbound on first branch
     first = lease.acquire("conv-1")
     import time as time_mod
 
     time_mod.sleep(1.1)
     second = lease.acquire("conv-1")
-    assert second is not None
-    assert first != second
-    lease.release("conv-1", second)
+    assert second.fence > first.fence  # fence 递增
+    lease.release("conv-1", second.run_id)
 
 
-# ── Approval 原子性 ───────────────────────────────────────
+def test_run_lease_renew_extends_lease(run_lease):
+    """heartbeat/renew 必须校验 run_id + fence；成功则 lease_until 延后。"""
+    lease = run_lease.acquire("conv-renew")
+    original_until = lease.lease_until
+    renewed = run_lease.renew(lease.thread_id, lease.run_id, lease.fence)
+    assert renewed.fence == lease.fence  # fence 不变
+    assert renewed.lease_until >= original_until  # lease 延后
+
+
+def test_run_lease_renew_rejects_stale_fence(run_lease):
+    """renew 用错误的 fence 必须失败（StaleAgentRunError）。"""
+    lease = run_lease.acquire("conv-stale")
+    wrong_fence = lease.fence + 999
+    with pytest.raises(StaleAgentRunError):
+        run_lease.renew(lease.thread_id, lease.run_id, wrong_fence)
+
+
+def test_run_lease_renew_rejects_wrong_run_id(run_lease):
+    """renew 用错误的 run_id 必须失败（StaleAgentRunError）。"""
+    lease = run_lease.acquire("conv-wrong-rid")
+    with pytest.raises(StaleAgentRunError):
+        run_lease.renew(lease.thread_id, uuid4(), lease.fence)
+
+
+def test_assert_run_fence_accepts_valid_lease(run_lease, session_factory):
+    """业务 UoW 内 assert_run_fence 校验当前 lease 仍属于本次 run——合法 lease 通过。"""
+    lease = run_lease.acquire("conv-fence-ok")
+    with session_factory() as session:
+        assert_run_fence(session, lease)
+        session.rollback()
+
+
+def test_assert_run_fence_rejects_stale_fence(run_lease, session_factory):
+    """stale fence（被抢占后旧 fence）的业务写必须被拒绝。"""
+    lease_a = run_lease.acquire("conv-fence-stale")
+    # 模拟 lease 过期后 B 抢占（fence +1）
+    import time as time_mod
+
+    time_mod.sleep(2.1)  # 等 lease_a 过期（ttl=2s）
+    run_lease.acquire("conv-fence-stale")  # B 抢占，fence=2
+    # A 用旧 fence 做 assert_run_fence → 必须失败
+    with session_factory() as session, pytest.raises(StaleAgentRunError):
+        assert_run_fence(session, lease_a)
+        session.rollback()
+
+
+def test_assert_run_fence_rejects_wrong_run_id(run_lease, session_factory):
+    """错误的 run_id 业务写必须被拒绝。"""
+    lease = run_lease.acquire("conv-fence-rid")
+    fake_lease = Lease(
+        thread_id=lease.thread_id,
+        run_id=uuid4(),  # 错误的 run_id
+        fence=lease.fence,
+        lease_until=lease.lease_until,
+    )
+    with session_factory() as session, pytest.raises(StaleAgentRunError):
+        assert_run_fence(session, fake_lease)
+        session.rollback()
+
+
+# ── Approval 状态机（PENDING → APPROVED → CONSUMED） ────
 
 
 def test_approval_create_pending_returns_open_approval(approval_service):
@@ -203,9 +269,11 @@ def test_approval_create_pending_returns_open_approval(approval_service):
         params={"a": 1},
     )
     assert a.id == b.id  # 同 (conv, action, params_hash) 复用
+    assert a.status == ApprovalStatus.PENDING
 
 
-def test_approval_consume_marks_consumed_in_caller_session(approval_service, session_factory):
+def test_approval_consume_rejects_pending_without_approve(approval_service, session_factory):
+    """PENDING 状态的审批不能直接消费——必须先 approve（P0-6 状态机）。"""
     actor = uuid4()
     approval = approval_service.create_pending(
         conversation_id="conv-1",
@@ -213,6 +281,27 @@ def test_approval_consume_marks_consumed_in_caller_session(approval_service, ses
         action="CREATE_WORK_ORDER",
         params={"a": 1},
     )
+    with session_factory() as session, pytest.raises(ApprovalError) as exc:
+        approval_service.consume(
+            approval_id=approval.id,
+            actor_id=actor,
+            action="CREATE_WORK_ORDER",
+            params_hash=canonical_hash({"a": 1}),
+            session=session,
+        )
+    assert exc.value.code == "APPROVAL_NOT_APPROVED"
+
+
+def test_approval_consume_accepts_approved(approval_service, session_factory):
+    """APPROVED 状态的审批可以被消费（PENDING → APPROVED → CONSUMED）。"""
+    actor = uuid4()
+    approval = approval_service.create_pending(
+        conversation_id="conv-1",
+        actor_id=actor,
+        action="CREATE_WORK_ORDER",
+        params={"a": 1},
+    )
+    approval_service.approve(approval_id=approval.id, actor_id=actor)
     with session_factory() as session:
         consumed = approval_service.consume(
             approval_id=approval.id,
@@ -224,7 +313,26 @@ def test_approval_consume_marks_consumed_in_caller_session(approval_service, ses
         assert consumed.status == ApprovalStatus.CONSUMED
         session.commit()
 
-    # 已提交：从独立连接读到的状态应该是 CONSUMED，且 consumed_at 非空。
+
+def test_approval_consume_marks_consumed_in_caller_session(approval_service, session_factory):
+    actor = uuid4()
+    approval = approval_service.create_pending(
+        conversation_id="conv-1",
+        actor_id=actor,
+        action="CREATE_WORK_ORDER",
+        params={"a": 1},
+    )
+    approval_service.approve(approval_id=approval.id, actor_id=actor)
+    with session_factory() as session:
+        consumed = approval_service.consume(
+            approval_id=approval.id,
+            actor_id=actor,
+            action="CREATE_WORK_ORDER",
+            params_hash=canonical_hash({"a": 1}),
+            session=session,
+        )
+        assert consumed.status == ApprovalStatus.CONSUMED
+        session.commit()
     with session_factory() as session:
         record = session.execute(
             select(AgentActionApprovalModel).where(AgentActionApprovalModel.id == approval.id)
@@ -259,6 +367,7 @@ def test_approval_consume_rejects_wrong_action(approval_service, session_factory
         action="CREATE_WORK_ORDER",
         params={"a": 1},
     )
+    approval_service.approve(approval_id=approval.id, actor_id=actor)
     with session_factory() as session, pytest.raises(ApprovalError) as exc:
         approval_service.consume(
             approval_id=approval.id,
@@ -278,6 +387,7 @@ def test_approval_consume_rejects_wrong_params_hash(approval_service, session_fa
         action="CREATE_WORK_ORDER",
         params={"a": 1},
     )
+    approval_service.approve(approval_id=approval.id, actor_id=actor)
     with session_factory() as session, pytest.raises(ApprovalError) as exc:
         approval_service.consume(
             approval_id=approval.id,
@@ -298,6 +408,7 @@ def test_approval_consume_is_idempotent_within_same_session(approval_service, se
         action="CREATE_WORK_ORDER",
         params={"a": 1},
     )
+    approval_service.approve(approval_id=approval.id, actor_id=actor)
     params_hash = canonical_hash({"a": 1})
     with session_factory() as session:
         approval_service.consume(
@@ -307,7 +418,6 @@ def test_approval_consume_is_idempotent_within_same_session(approval_service, se
             params_hash=params_hash,
             session=session,
         )
-        # 重复 consume 不抛错（避免嵌套在 retry 中的服务抛异常）
         again = approval_service.consume(
             approval_id=approval.id,
             actor_id=actor,
@@ -318,15 +428,15 @@ def test_approval_consume_is_idempotent_within_same_session(approval_service, se
         assert again.status == ApprovalStatus.CONSUMED
 
 
-def test_approval_consume_marks_expired_when_pending_past_ttl(approval_service, session_factory):
+def test_approval_consume_marks_expired_when_approved_past_ttl(approval_service, session_factory):
     actor = uuid4()
-    approval_service_with_short_ttl = ApprovalService(session_factory, ttl_minutes=0)
-    approval = approval_service_with_short_ttl.create_pending(
+    approval = approval_service.create_pending(
         conversation_id="conv-1",
         actor_id=actor,
         action="CREATE_WORK_ORDER",
         params={"a": 1},
     )
+    approval_service.approve(approval_id=approval.id, actor_id=actor)
     # 强制将 expires_at 改成过去
     with session_factory() as session:
         record = session.execute(
@@ -335,7 +445,7 @@ def test_approval_consume_marks_expired_when_pending_past_ttl(approval_service, 
         record.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
         session.commit()
     with session_factory() as session, pytest.raises(ApprovalError) as exc:
-        approval_service_with_short_ttl.consume(
+        approval_service.consume(
             approval_id=approval.id,
             actor_id=actor,
             action="CREATE_WORK_ORDER",
@@ -354,10 +464,10 @@ def test_approval_consume_atomic_with_business_mutation(approval_service, sessio
         action="CREATE_WORK_ORDER",
         params={"a": 1},
     )
+    approval_service.approve(approval_id=approval.id, actor_id=actor)
     params_hash = canonical_hash({"a": 1})
 
     # 场景 1：consume 失败（不存在的 approval）→ 业务侧什么也不该落。
-    # 这里用一块"业务表"代理：通过一个简单的本地变量计数应该被提交的行数。
     committed_business_rows: list[str] = []
     try:
         with session_factory() as session:
@@ -372,12 +482,11 @@ def test_approval_consume_atomic_with_business_mutation(approval_service, sessio
             session.commit()
     except ApprovalError:
         pass
-    # 关键断言：approval 行没被消费
     with session_factory() as session:
         record = session.execute(
             select(AgentActionApprovalModel).where(AgentActionApprovalModel.id == approval.id)
         ).scalar_one()
-        assert record.status == ApprovalStatus.PENDING.value
+        assert record.status == ApprovalStatus.APPROVED.value  # 未被消费
     assert committed_business_rows == []
 
     # 场景 2：consume 成功 + 业务 mutation 成功 → 一起 commit

@@ -268,6 +268,8 @@ def _make_consultation_approval(sessions, ctx, *, subject, description, bill_id=
         action=action,
         params=params,
     )
+    # P0-6: approval 生命周期 PENDING → APPROVED → CONSUMED；consume 只接受 APPROVED。
+    ApprovalService(sessions).approve(approval_id=approval.id, actor_id=ctx.actor_id)
     return token, str(approval.id)
 
 

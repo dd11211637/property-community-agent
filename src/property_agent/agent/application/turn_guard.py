@@ -4,11 +4,13 @@
 
 * :func:`read_turn_start_version` — turn 开始时读取 expected checkpoint 版本，
   严禁在 ``checkpointer.save`` 内部现读（否则 stale worker 读到最新版本，
-  CAS 失效）。
-* :func:`acquire_turn_lease` — 抢占会话 lease；被另一 live run 持有时抛
-  ``AgentSessionError(CONVERSATION_BUSY)``。
+  CAS 失效）。**必须在 acquire lease 之后调用**，避免读到被新 run 覆盖的版本。
+* :func:`acquire_turn_lease` — 抢占会话 lease，返回包含 fence 的 ``Lease``；
+  被另一 live run 持有时抛 ``AgentSessionError(CONVERSATION_BUSY)``。
 * :func:`release_turn_lease` — 仅释放自己持有的 lease（防止误杀被新 run
   抢占的 lease）。
+* :func:`heartbeat_turn_lease` — 续期 lease（必须校验 run_id + fence）；
+  失败抛 ``StaleAgentRunError``，调用方必须立即终止当前 run。
 
 三个函数都接受 ``enforce_concurrency`` 开关；关闭时全部空操作，
   退回 legacy 单写者语义。
@@ -17,14 +19,17 @@
 from __future__ import annotations
 
 from logging import getLogger
-from uuid import UUID
+from typing import TYPE_CHECKING, Any
 
 from property_agent.agent.application.errors import (
     AgentSessionError,
     AgentSessionErrorCode,
 )
 from property_agent.agent.infrastructure.checkpointer import SqlAlchemyCheckpointer
-from property_agent.agent.infrastructure.run_lease import RunLeaseService
+from property_agent.agent.infrastructure.run_lease import Lease, RunLeaseService
+
+if TYPE_CHECKING:
+    from uuid import UUID
 
 logger = getLogger(__name__)
 
@@ -39,6 +44,9 @@ def read_turn_start_version(
 
     绝不能在 ``checkpointer.save`` 内部现读——否则 stale worker 会读到最新版本
     导致 CAS 失效。护栏关闭或无 checkpointer 时返回 ``None``（退化为 legacy 保存）。
+
+    **必须在 ``acquire_turn_lease`` 之后调用**：先拿到 lease ownership 再读版本，
+    避免读到被并发新 run 覆盖的版本（审查报告 P0-3）。
     """
     if not enforce_concurrency or checkpointer is None:
         return None
@@ -51,11 +59,34 @@ def acquire_turn_lease(
     enforce_concurrency: bool,
     thread_id: str,
     run_id: UUID,
-) -> None:
-    """抢占会话 lease；被另一 live run 持有时抛 ``AgentSessionError(CONVERSATION_BUSY)``。"""
+) -> Lease | None:
+    """抢占会话 lease，返回 ``Lease``（含 fence）；被另一 live run 持有时抛
+    ``AgentSessionError(CONVERSATION_BUSY)``。
+
+    返回的 ``Lease`` 携带 ``run_id`` + ``fence``，必须原样注入 trusted runtime
+    context（``RequestContext.agent_lease``），供业务写 UoW 在 mutation 前校验
+    （``assert_run_fence``）。
+    """
     if not enforce_concurrency or run_lease is None:
-        return
-    run_lease.acquire(thread_id, run_id=run_id)
+        return None
+    return run_lease.acquire(thread_id, run_id=run_id)
+
+
+def heartbeat_turn_lease(
+    run_lease: RunLeaseService | None,
+    *,
+    lease: Lease | None,
+) -> Lease | None:
+    """续期 lease（heartbeat）：必须校验 ``run_id + fence`` 仍属于当前 lease。
+
+    无返回行（lease 已被抢占或过期）抛 ``StaleAgentRunError``，调用方必须立即
+    取消当前 agent run——后续业务写也会被 ``assert_run_fence`` 拒绝。
+
+    续期失败意味着当前 worker 已失去 ownership，不能继续执行任何 mutation。
+    """
+    if lease is None or run_lease is None:
+        return lease
+    return run_lease.renew(lease.thread_id, lease.run_id, lease.fence)
 
 
 def release_turn_lease(
@@ -73,10 +104,41 @@ def release_turn_lease(
         logger.warning("failed to release run lease for %s: %s", thread_id, exc)
 
 
+def activate_lease_context(context: Any, lease: Lease | None) -> Any:
+    """把 ``run_id + fence`` 注入 trusted ``RequestContext``（P0-4 fencing）。
+
+    业务写 UoW 通过 ``RequestContext.current().agent_lease`` 拿到 lease，
+    在 mutation 前调用 ``assert_run_fence(session, lease)`` 校验当前 turn
+    仍拥有 conversation。非 ``RequestContext`` 实例（测试 mock）不注入，
+    业务 UoW 的 fence check 退化为跳过（仅在测试环境）。
+    """
+    if lease is None:
+        return context
+    from dataclasses import replace
+
+    from property_agent.platform.context import AgentLeaseContext, RequestContext
+
+    if not isinstance(context, RequestContext):
+        return context
+    new_context = replace(
+        context,
+        agent_lease=AgentLeaseContext(
+            thread_id=lease.thread_id,
+            run_id=lease.run_id,
+            fence=lease.fence,
+            lease_until=lease.lease_until,
+        ),
+    )
+    new_context.activate()
+    return new_context
+
+
 __all__ = [
     "AgentSessionError",
     "AgentSessionErrorCode",
     "acquire_turn_lease",
+    "activate_lease_context",
+    "heartbeat_turn_lease",
     "read_turn_start_version",
     "release_turn_lease",
 ]

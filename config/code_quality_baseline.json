@@ -33,7 +33,7 @@
     "src/property_agent/billing/infrastructure/orm_models.py": 526,
     "src/property_agent/billing/infrastructure/repositories.py": 979,
     "src/property_agent/inspection/application/service.py": 1114,
-    "src/property_agent/platform/container.py": 663,
+    "src/property_agent/platform/container.py": 678,
     "src/property_agent/platform/infrastructure/orm_models.py": 580,
     "src/property_agent/repair/application/service.py": 823
   }

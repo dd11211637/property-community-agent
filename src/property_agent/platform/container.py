@@ -317,7 +317,13 @@ def build_work_order_service(approval_service: ApprovalService) -> WorkOrderServ
     session_factory = get_session_factory()
 
     def unit_of_work_factory() -> SqlAlchemyRepairUnitOfWork:
-        return SqlAlchemyRepairUnitOfWork(session_factory, build_shared_ports)
+        # P0-1: 显式闭包绑定 approval_service，避免运行时
+        # ``build_shared_ports(session)`` 缺参 TypeError（审查报告 composition-root
+        # 错误）。测试 fixture 已手工绑定，生产路径必须同样绑定。
+        return SqlAlchemyRepairUnitOfWork(
+            session_factory,
+            lambda session: build_shared_ports(session, approval_service),
+        )
 
     return WorkOrderService(unit_of_work_factory)
 
@@ -335,7 +341,10 @@ def build_announcement_service(approval_service: ApprovalService) -> Announcemen
     session_factory = get_session_factory()
 
     def unit_of_work_factory() -> SqlAlchemyAnnouncementUnitOfWork:
-        return SqlAlchemyAnnouncementUnitOfWork(session_factory, build_announcement_ports)
+        return SqlAlchemyAnnouncementUnitOfWork(
+            session_factory,
+            lambda session: build_announcement_ports(session, approval_service),
+        )
 
     return AnnouncementService(unit_of_work_factory)
 
@@ -383,7 +392,10 @@ def build_inspection_services(
     session_factory = get_session_factory()
 
     def unit_of_work_factory() -> SqlAlchemyInspectionUnitOfWork:
-        return SqlAlchemyInspectionUnitOfWork(session_factory, build_inspection_ports)
+        return SqlAlchemyInspectionUnitOfWork(
+            session_factory,
+            lambda session: build_inspection_ports(session, approval_service),
+        )
 
     return InspectionTaskService(unit_of_work_factory), SecurityEventService(unit_of_work_factory)
 
@@ -513,13 +525,16 @@ def _make_confirmation_token_provider(
     approval_service: ApprovalService,
     announcement_service: Any,
 ) -> str:
-    """服务端签发确认令牌 + PENDING 审批引用（P0 正确性底座）。
+    """服务端签发确认令牌 + APPROVED 审批引用（P0 正确性底座）。
 
-    返回的 token 是传输层防伪造凭据；同时创建 ``agent_action_approvals``
-    PENDING 审批并把 ``approval_ref`` 写回 ``state.approval_ref``，由工具层
-    透传到业务 Service，在业务 UoW 内与 mutation / 审计 / Outbox 同事务
-    消费（CONSUMED）。真实业务侧消费由业务 Service 在 UoW 内原子完成——
-    本函数不再"签发即消费"令牌（deep-research-report.md §3.2）。
+    用户点击确认后（resume confirmed=True）由 runner 在 **lease ownership 内** 调用：
+    1. 服务端签发确认令牌（传输层防伪造凭据）；
+    2. 创建 PENDING 审批（部分唯一索引保证幂等，重复确认不产生第二条）；
+    3. 立即 approve（PENDING → APPROVED）—— 用户已明确确认，审批进入可执行态；
+    4. ``approval_ref`` 写回 ``state.approval_ref``，由工具层透传到业务 Service。
+
+    业务 UoW 的 ``consume`` 只接受 APPROVED，杜绝"签发即消费"反模式
+    （deep-research-report.md §3.2 / 审查报告 P0-6）。
     """
     from property_agent.platform.application.confirm_params import (
         derive_confirmation_params,
@@ -538,7 +553,7 @@ def _make_confirmation_token_provider(
         )
         session.commit()
 
-    # 2) 创建 PENDING 审批并把 approval_ref 写回 state，供工具层透传。
+    # 2) 创建 PENDING 审批（幂等：同 conversation+action+params_hash 复用现有开放审批）。
     conversation_id = str(state.conversation_id or "")
     if conversation_id:
         approval = approval_service.create_pending(
@@ -547,6 +562,8 @@ def _make_confirmation_token_provider(
             action=action,
             params=parameters,
         )
+        # 3) 用户已确认 → PENDING → APPROVED。业务 UoW consume 只接受 APPROVED。
+        approval_service.approve(approval_id=approval.id, actor_id=state.actor_id)
         state.approval_ref = str(approval.id)
     return token
 
