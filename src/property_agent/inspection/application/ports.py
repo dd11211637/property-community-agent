@@ -135,7 +135,14 @@ class IdempotencyPort(Protocol):
 
 class ConfirmationPort(Protocol):
     def consume(
-        self, *, token: str, actor_id: UUID, action: str, parameter_hash: str, request_id: str
+        self,
+        *,
+        approval_ref: str | None,
+        token: str,
+        actor_id: UUID,
+        action: str,
+        parameter_hash: str,
+        request_id: str,
     ) -> None: ...
 
 

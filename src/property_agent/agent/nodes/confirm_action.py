@@ -47,13 +47,19 @@ def confirm_action_node():
                 if not token:
                     raise RuntimeError("server-issued confirmation token is required")
                 state.confirmation_token = token
+                # approval_ref 已由服务端在签发令牌时写回 state，本节点保持不动；
+                # 工具层将把它透传到业务 Service，在业务 UoW 内同事务消费。
                 state.add_message("assistant", "已确认，正在为您办理。")
             else:
                 state.pending_action = None
                 state.confirmation_token = None
+                state.approval_ref = None
                 state.add_message("assistant", "已取消，未执行任何操作。")
             return state
 
+        # 新一轮构造待确认操作：清空上一轮可能残留在检查点里的审批引用，
+        # 避免被误用为本次确认的凭据（真正的值由服务端在确认时重新签发）。
+        state.approval_ref = None
         pending = _build_pending(state)
         state.pending_action = pending
         level = classify_operation_level(state.intent, pending.get("tool"))

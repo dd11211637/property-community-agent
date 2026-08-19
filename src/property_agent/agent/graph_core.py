@@ -35,7 +35,9 @@ def interrupt(payload: Any) -> None:
 
 
 class Checkpointer(Protocol):
-    def save(self, thread_id: str, state: GraphState) -> None: ...
+    def save(
+        self, thread_id: str, state: GraphState, *, expected_version: int | None = None
+    ) -> None: ...
 
     def load(self, thread_id: str) -> GraphState | None: ...
 
@@ -48,7 +50,10 @@ class MemoryCheckpointer:
     def __init__(self) -> None:
         self._store: dict[str, GraphState] = {}
 
-    def save(self, thread_id: str, state: GraphState) -> None:
+    def save(
+        self, thread_id: str, state: GraphState, *, expected_version: int | None = None
+    ) -> None:
+        # 内存实现不做 CAS：单写者由调用方（run lease）保证。
         self._store[thread_id] = state
 
     def load(self, thread_id: str) -> GraphState | None:
@@ -101,9 +106,15 @@ class CompiledGraph:
         self._g = graph
         self._cp = checkpointer
 
-    def invoke(self, state: GraphState, *, thread_id: str | None = None) -> dict[str, Any]:
+    def invoke(
+        self,
+        state: GraphState,
+        *,
+        thread_id: str | None = None,
+        expected_version: int | None = None,
+    ) -> dict[str, Any]:
         thread_id = thread_id or state.conversation_id or str(uuid4())
-        return self._run(self._g._entry, state, thread_id)
+        return self._run(self._g._entry, state, thread_id, expected_version)
 
     def resume(
         self,
@@ -111,12 +122,17 @@ class CompiledGraph:
         resume_value: Any,
         *,
         state: GraphState | None = None,
+        expected_version: int | None = None,
     ) -> dict[str, Any]:
         """从中断点恢复。
 
         ``state`` 显式传入时以它为准——恢复守卫（PRD §6.5.8 的会话/房屋/有效期
         三项校验）会先加载并校正快照身份，直接复用其结果可避免二次读取
         导致校验后的状态被旧快照覆盖。
+
+        ``expected_version`` 为调用方在 **turn 开始** 时读取的检查点版本，用于
+        checkpoint CAS：若本 run 拿到的快照已 stale（例如 lease 过期后被新 run
+        覆盖），CAS 失败抛 ``CheckpointVersionConflict``，由 runner 终止本 run。
         """
         if state is None:
             if self._cp is None:
@@ -125,10 +141,18 @@ class CompiledGraph:
         if state is None:
             raise RuntimeError(f"No checkpoint found for thread {thread_id}.")
         state._resume = resume_value
-        return self._run(state._interrupt_node or self._g._entry, state, thread_id)
+        return self._run(
+            state._interrupt_node or self._g._entry, state, thread_id, expected_version
+        )
 
     # ---- 内部执行 ----
-    def _run(self, start: str | None, state: GraphState, thread_id: str) -> dict[str, Any]:
+    def _run(
+        self,
+        start: str | None,
+        state: GraphState,
+        thread_id: str,
+        expected_version: int | None = None,
+    ) -> dict[str, Any]:
         current = start
         while current is not None:
             node = self._g._nodes.get(current)
@@ -139,7 +163,7 @@ class CompiledGraph:
             except Interrupt as intr:
                 state._interrupt_node = current
                 if self._cp is not None:
-                    self._cp.save(thread_id, state)
+                    self._cp.save(thread_id, state, expected_version=expected_version)
                 return {
                     "state": state,
                     "interrupt": intr.payload,
@@ -150,22 +174,24 @@ class CompiledGraph:
             if current in self._g._conditional:
                 nxt = self._g._conditional[current](state)
                 if nxt is None or nxt == self._g._finish:
-                    return self._finish(state, thread_id)
+                    return self._finish(state, thread_id, expected_version)
                 current = nxt
             elif current in self._g._edges:
                 current = self._g._edges[current]
                 if current == self._g._finish:
-                    return self._finish(state, thread_id)
+                    return self._finish(state, thread_id, expected_version)
             else:
                 if current == self._g._finish:
-                    return self._finish(state, thread_id)
+                    return self._finish(state, thread_id, expected_version)
                 break
-        return self._finish(state, thread_id)
+        return self._finish(state, thread_id, expected_version)
 
-    def _finish(self, state: GraphState, thread_id: str) -> dict[str, Any]:
+    def _finish(
+        self, state: GraphState, thread_id: str, expected_version: int | None = None
+    ) -> dict[str, Any]:
         # 本轮结束即清理恢复态，避免下一轮从检查点恢复时被误判为"已确认"
         state._resume = None
         state._interrupt_node = None
         if self._cp is not None:
-            self._cp.save(thread_id, state)
+            self._cp.save(thread_id, state, expected_version=expected_version)
         return {"state": state, "interrupt": None, "thread_id": thread_id, "done": True}

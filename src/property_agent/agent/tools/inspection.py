@@ -292,6 +292,7 @@ class InspectionToolSet:
             record_type=record_type,
             point=str(require_slot(state, "point", tool)),
             confirmation_token=token if final else None,
+            approval_ref=state.approval_ref if final else None,
         )
         key = idempotency_key(
             state,
@@ -332,6 +333,7 @@ class InspectionToolSet:
             description=str(require_slot(state, "description", "security_event_create")),
             confirmation_token=token,
             report_source="AI",
+            approval_ref=state.approval_ref,
         )
         key = idempotency_key(
             state,
@@ -395,6 +397,7 @@ class InspectionToolSet:
             actual_time=_as_datetime(state.slots.get("actual_time")),
             supplement_reason=state.slots.get("supplement_reason"),
             confirmation_token=token,
+            approval_ref=state.approval_ref,
         )
         key = idempotency_key(
             state,

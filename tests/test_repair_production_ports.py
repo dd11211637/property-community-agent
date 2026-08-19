@@ -168,7 +168,19 @@ def seed(sessions: sessionmaker[Session]) -> Seed:
 
 @pytest.fixture
 def service(sessions: sessionmaker[Session]) -> WorkOrderService:
-    return WorkOrderService(lambda: SqlAlchemyRepairUnitOfWork(sessions, build_shared_ports))
+    return WorkOrderService(
+        lambda: SqlAlchemyRepairUnitOfWork(
+            sessions,
+            lambda s: build_shared_ports(s, _approval_service(sessions)),
+        )
+    )
+
+
+def _approval_service(sessions):
+    """构造测试用 ApprovalService：与业务 UoW 共用一个 SQLite 引擎。"""
+    from property_agent.platform.application.approval_service import ApprovalService
+
+    return ApprovalService(sessions)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -217,7 +229,9 @@ def make_command(
 
 def command_hash(command: CreateWorkOrderCommand) -> str:
     payload = asdict(command)
-    payload.pop("confirmation_token")
+    payload.pop("confirmation_token", None)
+    # P0：approval_ref 是服务端签发的审批锁指针，不参与业务参数指纹。
+    payload.pop("approval_ref", None)
     return canonical_hash(payload)
 
 
@@ -407,7 +421,9 @@ def test_token_minted_by_confirmation_service_is_accepted(sessions, seed, servic
     """
     draft = make_command(seed)
     params = asdict(draft)
-    params.pop("confirmation_token")
+    params.pop("confirmation_token", None)
+    # P0：approval_ref 不参与业务参数指纹（见 command_hash 注释）。
+    params.pop("approval_ref", None)
 
     with sessions() as session:
         token = ConfirmationService(session).generate_token(

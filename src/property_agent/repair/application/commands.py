@@ -18,6 +18,9 @@ class CreateWorkOrderCommand:
     description: str
     urgency: Urgency
     confirmation_token: str
+    # P0 审批原子化：服务端在确认时创建 PENDING 审批的引用；业务 UoW
+    # 内消费审批（CONSUMED）与 mutation / 审计 / Outbox 同事务提交。
+    approval_ref: str | None = None
     attachment_ids: tuple[UUID, ...] = ()
 
 

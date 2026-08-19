@@ -61,6 +61,15 @@ class Settings(BaseSettings):
     deepseek_read_timeout_seconds: float = 12.0
     deepseek_total_timeout_seconds: float = 6.0
 
+    # ── Agent concurrency guards (P0 正确性底座) ──────────────────
+    # 关闭后回退到「单凭 confirmation token」旧行为，便于回滚/排错；
+    # 默认开启。生产环境必须保持开启，避免同会话并发 lost-update。
+    agent_concurrency_guard: bool = True
+    # 审批有效窗口：与 ConfirmationService 的 5 分钟 TTL 对齐（PF-04）。
+    agent_approval_ttl_minutes: int = 5
+    # 单 turn lease 时长：足够覆盖一次 LLM 调用，又短到过期后能快速抢占。
+    agent_run_lease_seconds: int = 30
+
     def validate_runtime_security(self) -> None:
         """Reject development credentials when the production profile is selected."""
         if self.env.strip().lower() != "production":

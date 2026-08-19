@@ -35,6 +35,9 @@ class ReviewActionCommand:
     expected_version: int
     reason: str | None = None
     confirmation_token: str | None = None
+    # P0 审批原子化：服务端确认时生成的 PENDING 审批引用，业务 UoW
+    # 内消费（CONSUMED）与 publish mutation / 审计 / Outbox 同事务提交。
+    approval_ref: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +45,8 @@ class ScheduleAnnouncementCommand:
     expected_version: int
     scheduled_at: datetime
     confirmation_token: str
+    # P0 审批原子化：见 ``ReviewActionCommand.approval_ref`` 注释。
+    approval_ref: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

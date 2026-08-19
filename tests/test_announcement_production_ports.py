@@ -214,8 +214,15 @@ def _user(
 
 @pytest.fixture
 def service(sessions: sessionmaker[Session]) -> AnnouncementService:
+    from property_agent.platform.application.approval_service import ApprovalService
+
+    approval_service = ApprovalService(sessions)
+
     def unit_of_work_factory() -> SqlAlchemyAnnouncementUnitOfWork:
-        return SqlAlchemyAnnouncementUnitOfWork(sessions, build_announcement_ports)
+        return SqlAlchemyAnnouncementUnitOfWork(
+            sessions,
+            lambda s: build_announcement_ports(s, approval_service),
+        )
 
     return AnnouncementService(unit_of_work_factory)
 

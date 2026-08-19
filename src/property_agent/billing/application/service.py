@@ -131,6 +131,83 @@ class BillingService:
         return rule
 
 
+# ── 财务咨询 P0 原子化助手 ──────────────────────────────────────
+
+
+def require_consultation_confirmation(confirmation_token: str | None) -> None:
+    """咨询草稿是受控写：必须带服务端签发的确认令牌才能继续。"""
+    if not confirmation_token or not confirmation_token.strip():
+        raise ConsultationError(
+            "CONFIRMATION_REQUIRED",
+            "创建财务咨询草稿需要确认令牌。",
+            422,
+        )
+
+
+def consume_consultation_approval(
+    uow: BillingUnitOfWorkPort,
+    *,
+    ctx: RequestContext,
+    approval_ref: str | None,
+    confirmation_token: str,
+    subject: str,
+    description: str,
+    bill_id: str | None,
+) -> None:
+    """P0：在 caller 的 UoW session 内消费审批 + 令牌（同一事务）。"""
+    param_hash = canonical_hash(
+        {"subject": subject, "description": description, "bill_id": bill_id}
+    )
+    uow.confirmations.consume(
+        approval_ref=approval_ref,
+        token=confirmation_token,
+        actor_id=ctx.actor_id,
+        action="CREATE_CONSULTATION",
+        parameter_hash=param_hash,
+        request_id=ctx.request_id,
+    )
+
+
+def validate_consultation_bill(
+    uow: BillingUnitOfWorkPort,
+    ctx: RequestContext,
+    *,
+    bill_id: str | None,
+    community_code: str,
+) -> None:
+    """若带 bill_id，验证账单属于当前社区与当前房屋（R-02）。"""
+    if bill_id is None:
+        return
+    bill = uow.source.get_bill(bill_id=bill_id)
+    if (
+        ctx.current_house_id is None
+        or bill is None
+        or bill.community_id != community_code
+        or bill.house_id != str(ctx.current_house_id)
+    ):
+        raise BillingError("BILL_NOT_FOUND", "关联账单不存在或无权访问", 404)
+
+
+def _maybe_idempotent_replay(
+    service: ConsultationService,
+    uow: BillingUnitOfWorkPort,
+    *,
+    ctx: RequestContext,
+    transaction: object,
+    idempotency_key: str,
+    request_hash: str,
+) -> ConsultationTicket | None:
+    """幂等检查：同一键命中且参数一致则返回原 ticket，否则抛冲突。"""
+    existing = uow.idempotency.get(ctx.actor_id, "CREATE_CONSULTATION", idempotency_key)
+    if existing is None:
+        return None
+    if existing.request_hash != request_hash:
+        raise ConsultationError("IDEMPOTENCY_CONFLICT", "该幂等键已用于不同的咨询内容", 409)
+    snapshot_id = (existing.response_snapshot or {}).get("id")
+    consultation_id = snapshot_id or existing.resource_id.hex
+    return service.get(ctx, transaction, consultation_id)
+
+
 class ConsultationService:
     """财务咨询单全生命周期（PRD 6.3）。AI 只写文本答复，绝不改性账单。"""
 
@@ -148,32 +225,42 @@ class ConsultationService:
         description: str,
         bill_id: str | None = None,
         idempotency_key: str,
+        confirmation_token: str | None = None,
+        approval_ref: str | None = None,
     ) -> ConsultationTicket:
-        """提交财务咨询草稿（幂等）。源不可用也不影响草稿保存（R-02）。"""
+        """提交财务咨询草稿（幂等）。源不可用也不影响草稿保存（R-02）。
+
+        P0 原子化：消费审批 + 令牌与本方法后续 mutation / 审计 / 幂等同事务提交。
+        """
+        require_consultation_confirmation(confirmation_token)
         uow = self._uow_factory(transaction)
-        community_code = uow.community_code(ctx.community_id)
         request_hash = canonical_hash(
             {"subject": subject, "description": description, "bill_id": bill_id}
         )
-        idem = uow.idempotency
-        existing = idem.get(ctx.actor_id, "CREATE_CONSULTATION", idempotency_key)
-        if existing is not None:
-            if existing.request_hash != request_hash:
-                raise ConsultationError("IDEMPOTENCY_CONFLICT", "该幂等键已用于不同的咨询内容", 409)
-            snapshot_id = (existing.response_snapshot or {}).get("id")
-            consultation_id = snapshot_id or existing.resource_id.hex
-            return self.get(ctx, transaction, consultation_id)
+        replay = _maybe_idempotent_replay(
+            self,
+            uow,
+            ctx=ctx,
+            transaction=transaction,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+        )
+        if replay is not None:
+            return replay
 
-        if bill_id is not None:
-            source = uow.source
-            bill = source.get_bill(bill_id=bill_id)
-            if (
-                ctx.current_house_id is None
-                or bill is None
-                or bill.community_id != community_code
-                or bill.house_id != str(ctx.current_house_id)
-            ):
-                raise BillingError("BILL_NOT_FOUND", "关联账单不存在或无权访问", 404)
+        consume_consultation_approval(
+            uow,
+            ctx=ctx,
+            approval_ref=approval_ref,
+            confirmation_token=confirmation_token,
+            subject=subject,
+            description=description,
+            bill_id=bill_id,
+        )
+        community_code = uow.community_code(ctx.community_id)
+        validate_consultation_bill(
+            uow, ctx, bill_id=bill_id, community_code=community_code
+        )
 
         ticket = ConsultationTicket(
             id=uuid4().hex,
@@ -188,7 +275,7 @@ class ConsultationService:
         )
         uow.consultations.add(ticket)
 
-        idem.add(
+        uow.idempotency.add(
             IdempotencyRecord(
                 actor_id=ctx.actor_id,
                 operation="CREATE_CONSULTATION",

@@ -300,6 +300,7 @@ class InspectionTaskService:
             {"note": command.note, "record_type": command.record_type, "point": command.point}
         )
         uow.confirmations.consume(
+            approval_ref=command.approval_ref,
             token=command.confirmation_token,
             actor_id=context.actor_id,
             action="INSPECTION_TASK_SUBMIT_RECORDS",
@@ -673,7 +674,19 @@ class SecurityEventService:
         if not command.confirmation_token or not command.confirmation_token.strip():
             raise confirmation_required()
         operation = "SECURITY_EVENT_CREATE"
-        request_hash = canonical_hash(asdict(command))
+        # 幂等请求哈希只覆盖业务参数；服务端在确认时生成的 confirmation_token /
+        # approval_ref 不参与（每次确认都是新值，重复确认不应被判为幂等冲突）。
+        request_hash = canonical_hash(
+            {
+                "source_task_id": command.source_task_id,
+                "event_type": command.event_type,
+                "risk_level": command.risk_level,
+                "location": command.location,
+                "description": command.description,
+                "report_source": command.report_source,
+                "attachment_ids": list(command.attachment_ids),
+            }
+        )
         with self._unit_of_work_factory() as uow:
             replay = self._idempotent_replay(uow, context, operation, idempotency_key, request_hash)
             if replay is not None:
@@ -687,6 +700,7 @@ class SecurityEventService:
                 }
             )
             uow.confirmations.consume(
+                approval_ref=command.approval_ref,
                 token=command.confirmation_token,
                 actor_id=context.actor_id,
                 action="SECURITY_EVENT_CREATE",

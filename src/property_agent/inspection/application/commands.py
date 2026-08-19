@@ -34,6 +34,8 @@ class ExecuteTaskActionCommand:
     actual_time: datetime | None = None
     supplement_reason: str | None = None
     confirmation_token: str | None = None
+    # P0 审批原子化：见 CreateWorkOrderCommand.approval_ref 注释。
+    approval_ref: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +61,8 @@ class CreateSecurityEventCommand:
     confirmation_token: str
     report_source: str = "MANUAL"
     attachment_ids: tuple[UUID, ...] = ()
+    # P0 审批原子化：见 CreateWorkOrderCommand.approval_ref 注释。
+    approval_ref: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

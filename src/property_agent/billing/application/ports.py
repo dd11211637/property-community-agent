@@ -531,6 +531,26 @@ class BillingAuditPort(Protocol):
     def add(self, **event: object) -> None: ...
 
 
+class BillingConfirmationPort(Protocol):
+    """原子化消费确认令牌 + 审批（P0 正确性底座）。
+
+    ``create_draft``（写入财务咨询草稿）属于受控写操作，必须在同一 UoW
+    内消费审批 + 令牌。``approval_ref`` 缺失时按旧规则只消费令牌（兼容
+    未升级调用方，但生产部署时所有受控写工具都应在命令里带上）。
+    """
+
+    def consume(
+        self,
+        *,
+        approval_ref: str | None,
+        token: str,
+        actor_id: UUID,
+        action: str,
+        parameter_hash: str,
+        request_id: str,
+    ) -> None: ...
+
+
 class BillingUnitOfWorkPort(Protocol):
     """Application-facing transaction boundary for billing operations."""
 
@@ -539,6 +559,7 @@ class BillingUnitOfWorkPort(Protocol):
     consultations: ConsultationRepository
     idempotency: BillingIdempotencyPort
     audit: BillingAuditPort
+    confirmations: BillingConfirmationPort
 
     def community_code(self, community_id: UUID) -> str: ...
 

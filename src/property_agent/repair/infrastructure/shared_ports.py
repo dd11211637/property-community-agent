@@ -34,9 +34,8 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from property_agent.platform.application.approval_service import ApprovalService
 from property_agent.platform.application.audit_service import AuditService
-from property_agent.platform.application.confirmation_service import ConfirmationService
-from property_agent.platform.domain.exceptions import InvalidConfirmationTokenException
 from property_agent.platform.infrastructure.orm_models import (
     ATTACHMENT_ALLOWED_CONTENT_TYPES,
     ATTACHMENT_MAX_SIZE_BYTES,
@@ -148,48 +147,9 @@ class SqlAlchemyIdempotencyPort:
 
 
 # ═══════════════════════════════════════════════════════════════
-# ConfirmationPort
+# ConfirmationPort — 复用 platform.application.PlatformConfirmationPort
+# （P0 原子化消费：审批 + 令牌在同一 UoW session 内）
 # ═══════════════════════════════════════════════════════════════
-
-
-class PlatformConfirmationPort:
-    """Consume a platform confirmation token, translating platform errors.
-
-    The token is bound to (actor, action, parameter_hash). Because every module
-    now hashes through ``platform.application.hashing.canonical_hash``, a token
-    minted by ``POST /api/confirmations`` matches the hash the repair service
-    derives from its parsed command — and stops matching the moment any
-    parameter changes (PRD 12.2).
-    """
-
-    def __init__(self, session: Session) -> None:
-        self._service = ConfirmationService(session)
-
-    def consume(
-        self,
-        *,
-        token: str,
-        actor_id: UUID,
-        action: str,
-        parameter_hash: str,
-        request_id: str,
-    ) -> None:
-        if not token or not token.strip():
-            raise BusinessError(
-                "CONFIRMATION_REQUIRED",
-                "This operation requires a confirmation token.",
-                422,
-            )
-        try:
-            self._service.consume(
-                token=token,
-                actor_id=actor_id,
-                action=action,
-                parameter_hash=parameter_hash,
-                request_id=request_id,
-            )
-        except InvalidConfirmationTokenException as exc:
-            raise BusinessError("CONFIRMATION_INVALID", exc.message, 422) from exc
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -486,11 +446,22 @@ class SqlAlchemyHandoverPort:
 # ═══════════════════════════════════════════════════════════════
 
 
-def build_shared_ports(session: Session) -> SharedPorts:
-    """Create every production shared port bound to one SQLAlchemy session."""
+def build_shared_ports(session: Session, approval_service: ApprovalService) -> SharedPorts:
+    """Create every production shared port bound to one SQLAlchemy session.
+
+    ``approval_service`` 由容器装配后传入；端口内部用它做 P0 审批原子消费。
+    """
+    from property_agent.platform.application.platform_confirmation_port import (
+        PlatformConfirmationPort,
+    )
+
     return SharedPorts(
         idempotency=SqlAlchemyIdempotencyPort(session),
-        confirmations=PlatformConfirmationPort(session),
+        confirmations=PlatformConfirmationPort(
+            session,
+            approval_service,
+            error_factory=BusinessError,
+        ),
         house_access=SqlAlchemyHouseAccessPort(session),
         staff_directory=SqlAlchemyStaffDirectoryPort(session),
         attachments=SqlAlchemyAttachmentPort(session),

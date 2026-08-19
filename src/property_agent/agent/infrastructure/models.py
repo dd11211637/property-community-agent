@@ -26,6 +26,7 @@ from sqlalchemy import (
     Uuid,
     func,
 )
+from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -90,6 +91,12 @@ class ConversationModel(Base):
         comment="更新时间",
     )
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), comment="关闭时间")
+    runtime_version: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="v1",
+        comment="钉住的 runtime 版本（v1 legacy）；LangGraph 切换后用于分钟级回退",
+    )
 
 
 class AgentCheckpointModel(Base):
@@ -159,6 +166,97 @@ class AgentMessageModel(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=func.now()
+    )
+
+
+class AgentRunLeaseModel(Base):
+    """运行 lease / fencing（P0 正确性底座）。
+
+    一个 ``conversation_id`` 同一时刻只允许一个 live run（防止同会话并发
+    lost-update）。``RunLeaseService`` 通过便携 ``INSERT … ON CONFLICT …``
+    抢占 lease，``fence`` 单调递增；lease 过期后下一个 run 抢占时 fence
+    +1，旧 worker 用过期 fence 写入会被 checkpoint CAS 拒绝。
+    """
+
+    __tablename__ = "agent_run_leases"
+
+    thread_id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, comment="线程标识（= conversation_id）"
+    )
+    owner_run_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), nullable=False, comment="当前持租的 run_id"
+    )
+    lease_until: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, comment="lease 过期时间"
+    )
+    fence: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, comment="fencing token，每次抢占 +1"
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=func.now(),
+        onupdate=func.now(),
+        comment="最后更新时间",
+    )
+
+
+class AgentActionApprovalModel(Base):
+    """受控写操作的审批记录 — P0 原子性（deep-research-report.md §Approval 原子化）。
+
+    生命周期 PENDING → APPROVED → CONSUMED（REJECTED / EXPIRED 为终态）。
+    与业务 mutation / 审计 / Outbox **同事务**消费：``consume`` 必须在业务写
+    的同一个 Session/UnitOfWork 内完成，要么全部提交，要么全部回滚，杜绝
+    "已确认但未落库" 或 "已落库但未确认" 的中间态。
+    """
+
+    __tablename__ = "agent_action_approvals"
+    __table_args__ = (
+        Index("ix_agent_action_approvals_conversation", "conversation_id"),
+        Index("ix_agent_action_approvals_actor", "actor_id"),
+        # 同一会话 + 同一动作 + 同一参数指纹，至多一个开放（PENDING/APPROVED）审批，
+        # 重复确认不会凭空产生第二个业务对象。
+        Index(
+            "ux_agent_approval_open_action",
+            "conversation_id",
+            "action",
+            "params_hash",
+            unique=True,
+            sqlite_where=sa_text("status IN ('PENDING', 'APPROVED')"),
+            postgresql_where=sa_text("status IN ('PENDING', 'APPROVED')"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid4, comment="审批记录ID"
+    )
+    conversation_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="稳定会话标识（= thread_id）"
+    )
+    actor_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), nullable=False, comment="发起/确认操作的人"
+    )
+    action: Mapped[str] = mapped_column(String(128), nullable=False, comment="动作类型")
+    params_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False, comment="参数指纹（canonical_hash）"
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="PENDING", comment="审批状态"
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, comment="确认有效期起点"
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), comment="审批通过时间"
+    )
+    consumed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), comment="业务消费时间"
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, comment="行版本，乐观锁"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=func.now(), comment="创建时间"
     )
 
 

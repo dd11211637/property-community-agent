@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session
 
 from property_agent.inspection.application.ports import IdempotencyRecord
 from property_agent.inspection.domain.errors import BusinessError, forbidden, validation_error
+from property_agent.platform.application.approval_service import ApprovalError, ApprovalService
 from property_agent.platform.application.audit_service import AuditService
 from property_agent.platform.application.confirmation_service import ConfirmationService
 from property_agent.platform.domain.exceptions import InvalidConfirmationTokenException
@@ -136,22 +137,52 @@ class SqlAlchemyIdempotencyPort:
 
 
 class PlatformConfirmationPort:
-    """Consume a platform confirmation token, translating platform errors."""
+    """原子化消费确认令牌 + 审批（P0 正确性底座）。
 
-    def __init__(self, session: Session) -> None:
+    与 repair / announcement 同形：先消费审批（同一 UoW 内 ``FOR UPDATE``，
+    校验 actor/action/params_hash 后置 ``CONSUMED``），再消费令牌作为纵深防御。
+    巡检任务提交、安防事件上报等受控写操作均走这条路径。
+    """
+
+    def __init__(
+        self,
+        session: Session,
+        approval_service: ApprovalService,
+        *,
+        error_factory: Any,
+    ) -> None:
+        self._session = session
+        self._approval_service = approval_service
         self._service = ConfirmationService(session)
+        self._error_factory = error_factory
 
     def consume(
         self,
         *,
+        approval_ref: str | None,
         token: str,
         actor_id: UUID,
         action: str,
         parameter_hash: str,
         request_id: str,
     ) -> None:
+        if approval_ref:
+            try:
+                self._approval_service.consume(
+                    approval_id=UUID(approval_ref),
+                    actor_id=actor_id,
+                    action=action,
+                    params_hash=parameter_hash,
+                    session=self._session,
+                )
+            except ApprovalError as exc:
+                raise self._error_factory(
+                    f"CONFIRMATION_{exc.code}",
+                    exc.message,
+                    exc.status_code,
+                ) from exc
         if not token or not token.strip():
-            raise BusinessError(
+            raise self._error_factory(
                 "CONFIRMATION_REQUIRED",
                 "This operation requires a confirmation token.",
                 422,
@@ -165,7 +196,7 @@ class PlatformConfirmationPort:
                 request_id=request_id,
             )
         except InvalidConfirmationTokenException as exc:
-            raise BusinessError("CONFIRMATION_INVALID", exc.message, 422) from exc
+            raise self._error_factory("CONFIRMATION_INVALID", exc.message, 422) from exc
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -402,13 +433,15 @@ class SqlAlchemyEscalationPort:
 # ═══════════════════════════════════════════════════════════════
 
 
-def build_inspection_ports(session: Session):
+def build_inspection_ports(session: Session, approval_service: ApprovalService):
     """Create every production shared port bound to one SQLAlchemy session."""
     from property_agent.inspection.application.ports import SharedPorts
 
     return SharedPorts(
         idempotency=SqlAlchemyIdempotencyPort(session),
-        confirmations=PlatformConfirmationPort(session),
+        confirmations=PlatformConfirmationPort(
+            session, approval_service, error_factory=BusinessError
+        ),
         staff_directory=SqlAlchemyStaffDirectoryPort(session),
         attachments=SqlAlchemyAttachmentPort(session),
         audit=PlatformAuditPort(session),

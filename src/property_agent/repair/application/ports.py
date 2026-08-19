@@ -99,6 +99,7 @@ class ConfirmationPort(Protocol):
     def consume(
         self,
         *,
+        approval_ref: str | None,
         token: str,
         actor_id: UUID,
         action: str,
