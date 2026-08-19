@@ -122,14 +122,40 @@ _CHINESE_BUILDING_NUMBERS = {
 }
 
 
-def normalize_announcement_audience(value: object) -> dict[str, object]:
-    """Convert chat/display audience values to the business object contract."""
+_ALL_AUDIENCE_ALIASES = frozenset(
+    {
+        "全社区",
+        "所有住户",
+        "全体住户",
+        "全部住户",
+        "所有业主",
+        "全体业主",
+        "全部业主",
+        "所有居民",
+        "全体居民",
+        "全部居民",
+        "全小区",
+        "整个小区",
+        "小区住户",
+        "住户",
+        "业主",
+        "居民",
+    }
+)
+
+
+def normalize_announcement_audience(value: object) -> dict[str, object] | None:
+    """Convert chat/display audience values to the business object contract.
+
+    Returns ``None`` when the value cannot be interpreted as a valid audience,
+    so callers can fall back to clarification instead of raising.
+    """
 
     if isinstance(value, dict):
         return value
     if isinstance(value, str):
         compact = value.strip()
-        if compact in {"全社区", "所有住户", "全体住户"}:
+        if compact in _ALL_AUDIENCE_ALIASES:
             return {}
         try:
             decoded = json.loads(compact)
@@ -141,17 +167,14 @@ def normalize_announcement_audience(value: object) -> dict[str, object]:
         if matches:
             building_ids = [f"{_CHINESE_BUILDING_NUMBERS.get(item, item)}栋" for item in matches]
             return {"building_ids": list(dict.fromkeys(building_ids))}
-    raise ValueError("公告受众格式无效，请重新选择受众范围。")
+    return None
 
 
 def _explicit_audience_update(text: str) -> dict[str, object]:
     if not any(marker in text for marker in ("受众", "对象", "范围")):
         return {}
-    if any(marker in text for marker in ("全社区", "所有住户", "全体住户")):
-        return {"audience": {}}
-    try:
-        audience = normalize_announcement_audience(text)
-    except ValueError:
+    audience = normalize_announcement_audience(text)
+    if audience is None:
         return {}
     return {"audience": audience}
 

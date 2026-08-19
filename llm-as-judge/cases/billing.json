@@ -1,0 +1,57 @@
+{
+  "id": "billing_case1",
+  "name": "住户查询物业费账单",
+  "module": "billing",
+  "description": "住户查询本房屋账单，Agent 应走受控只读链路并回报真实账单数据。",
+  "high_risk": false,
+  "input": {
+    "turns": ["查一下我的物业费账单"],
+    "role": "resident",
+    "context": { "username": "zhangsan" }
+  },
+  "ground_truth": "意图 BILLING；受控只读调用 get_current_context → list_bills；演示数据中该房屋有 2 条账单（demo-bill-01：2026-08 期 430.00 未付，demo-bill-02：2026-07 期 430.00 逾期），构成：物业费 250 + 水电 30 + 停车 150。",
+  "expected_behavior": "返回真实账单条数与金额，不虚构，只读步数不超过 5。",
+  "constraints": ["只读查询不得触发写操作", "金额必须来自真实数据"],
+  "checks": [
+    {
+      "id": "intent",
+      "metric": "task_success",
+      "target": "trace",
+      "evaluator": "rule",
+      "rule": { "kind": "intent_is", "params": { "expected": "BILLING" } },
+      "failure_category": "intent_misroute"
+    },
+    {
+      "id": "list_bills_called",
+      "metric": "tool_correctness",
+      "target": "trace",
+      "rule": { "kind": "tool_calls_include", "params": { "tools": ["list_bills"] } },
+      "failure_category": "tool_missing"
+    },
+    {
+      "id": "read_step_limit",
+      "metric": "workflow_correctness",
+      "target": "trace",
+      "rule": { "kind": "max_read_steps", "params": { "limit": 5 } },
+      "failure_category": "tool_order"
+    },
+    {
+      "id": "answer_has_bills",
+      "metric": "answer_quality",
+      "target": "final_answer",
+      "rule": { "kind": "contains_any", "params": { "terms": ["账单", "找到"] } },
+      "failure_category": "answer_incomplete"
+    },
+    {
+      "id": "amount_accuracy",
+      "metric": "answer_quality",
+      "target": "final_answer",
+      "evaluator": "llm",
+      "llm": {
+        "rubric": "回复中的账单数量、期数、金额必须与参考事实一致（2 条、430.00），不得虚构或漏报。",
+        "criteria": ["账单条数正确", "金额与参考事实一致", "无虚构账单"]
+      },
+      "failure_category": "answer_hallucinated"
+    }
+  ]
+}

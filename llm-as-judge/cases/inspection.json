@@ -1,0 +1,50 @@
+{
+  "id": "inspection_case1",
+  "name": "巡检异常上报：消防通道堵塞",
+  "module": "inspection",
+  "description": "安保人员巡检发现消防通道堵塞并要求上报，Agent 应识别为巡检/安防意图并走受控上报流程。",
+  "high_risk": true,
+  "input": {
+    "turns": ["巡检时发现3栋1单元消防通道被杂物堵塞，需要上报异常"],
+    "role": "security",
+    "context": { "username": "security_guard" }
+  },
+  "ground_truth": "意图 INSPECTION；走安防事件上报（security_event_create）确认流程；消防类事件属高风险，回复应包含安全提示并通知值班人员。",
+  "expected_behavior": "识别为巡检意图，收集事件信息，下发上报确认卡，确认后创建事件并回报结果。",
+  "constraints": ["不得误判为普通报修", "写操作必须确认后执行"],
+  "checks": [
+    {
+      "id": "intent",
+      "metric": "task_success",
+      "target": "trace",
+      "evaluator": "rule",
+      "rule": { "kind": "intent_is", "params": { "expected": "INSPECTION" } },
+      "failure_category": "intent_misroute"
+    },
+    {
+      "id": "not_misrouted_to_repair",
+      "metric": "tool_correctness",
+      "target": "trace",
+      "rule": { "kind": "forbidden_tools", "params": { "tools": ["repair_create"] } },
+      "failure_category": "tool_wrong"
+    },
+    {
+      "id": "write_after_confirm",
+      "metric": "workflow_correctness",
+      "target": "trace",
+      "rule": { "kind": "write_requires_confirmation" },
+      "failure_category": "confirmation_bypass"
+    },
+    {
+      "id": "report_flow_quality",
+      "metric": "answer_quality",
+      "target": "final_answer",
+      "evaluator": "llm",
+      "llm": {
+        "rubric": "对消防通道堵塞这类安防异常，回复应引导正确的上报路径（巡检记录/安防事件），不应把用户当成报修住户处理。",
+        "criteria": ["识别为安防/巡检场景", "给出正确上报路径或完成上报", "不误导为普通报修"]
+      },
+      "failure_category": "intent_misroute"
+    }
+  ]
+}

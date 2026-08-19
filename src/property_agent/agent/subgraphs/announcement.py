@@ -19,6 +19,28 @@ NAME = "announcement"
 
 def select_announcement_tool(state: GraphState) -> str:
     action = normalize_announcement_action(state.slots.get("action"))
+    # 角色守卫（确定性）：住户/无发布权限角色不得触发任何公告写动作。
+    # 写工具名不允许进入 trace，越权请求直接以只读列表 + 明确拒绝收尾。
+    roles = set(state.slots.get("roles") or ())
+    if roles and not (roles & {"MANAGER", "SYSTEM_ADMIN", "CUSTOMER_SERVICE"}):
+        if action in {
+            AnnouncementAgentAction.CREATE,
+            AnnouncementAgentAction.PUBLISH,
+            AnnouncementAgentAction.SCHEDULE,
+        }:
+            state.error = "住户没有发布公告的权限，请联系物业或客服代为发布。"
+            state.slots["action"] = "list"
+            return "announcement_list"
+    # 用户带着新公告内容说"发布/定时发布"（无 announcement_id）→ 实为新建，
+    # 降级为建稿流程，而不是追问一条已存在公告的编号。
+    if (
+        action in {AnnouncementAgentAction.PUBLISH, AnnouncementAgentAction.SCHEDULE}
+        and not state.slots.get("announcement_id")
+        and state.slots.get("title")
+        and state.slots.get("body")
+    ):
+        action = AnnouncementAgentAction.CREATE
+        state.slots["action"] = "create"
     if action in {AnnouncementAgentAction.REVISE, AnnouncementAgentAction.CREATE}:
         active_draft = state.slots.get("_active_announcement_draft")
         if isinstance(active_draft, dict):
@@ -30,7 +52,12 @@ def select_announcement_tool(state: GraphState) -> str:
         if isinstance(title, str) and isinstance(body, str) and title.strip() and body.strip():
             state.slots["category"] = classify_announcement_category(title, body).value
         if state.slots.get("audience") is not None:
-            state.slots["audience"] = normalize_announcement_audience(state.slots["audience"])
+            normalized = normalize_announcement_audience(state.slots["audience"])
+            if normalized is not None:
+                state.slots["audience"] = normalized
+            else:
+                # 无法归一化：清空槽位，交由 collect_slots 引导用户澄清受众范围。
+                state.slots["audience"] = None
     if action == AnnouncementAgentAction.DRAFT:
         return "announcement_draft"
     if action == AnnouncementAgentAction.REVISE:

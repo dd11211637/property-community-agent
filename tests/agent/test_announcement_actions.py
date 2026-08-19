@@ -62,6 +62,27 @@ def test_natural_audience_revision_is_structured_before_confirmation():
     assert followup.slot_updates == {"audience": {"building_ids": ["1栋"]}}
 
 
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("住户", {}),
+        ("业主", {}),
+        ("全体住户", {}),
+        ("小区住户", {}),
+        ("3栋和5栋", {"building_ids": ["3栋", "5栋"]}),
+    ],
+)
+def test_unparseable_audience_degrades_gracefully(value, expected):
+    """无法识别的受众词归一化为全社区，不抛 ValueError（修复 500 回归）。"""
+    assert normalize_announcement_audience(value) == expected
+
+
+def test_unparseable_audience_returns_none_instead_of_raising():
+    assert normalize_announcement_audience("随便什么乱七八糟") is None
+    assert normalize_announcement_audience("") is None
+    assert normalize_announcement_audience(None) is None
+
+
 def test_adopt_this_draft_wording_routes_to_create():
     followup = resolve_announcement_followup("采用该稿件", has_active_draft=False)
 

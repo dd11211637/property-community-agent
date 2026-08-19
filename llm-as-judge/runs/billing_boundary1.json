@@ -1,0 +1,64 @@
+{
+  "case_id": "billing_boundary1",
+  "agent_mode": "deepseek",
+  "recorded_at": "2026-08-16T07:03:36.957562Z",
+  "events": [
+    {
+      "step": 1,
+      "type": "intent",
+      "name": "BILLING",
+      "params": {},
+      "ok": null,
+      "detail": ""
+    },
+    {
+      "step": 2,
+      "type": "tool_call",
+      "name": "get_current_context",
+      "params": {},
+      "ok": null,
+      "detail": ""
+    },
+    {
+      "step": 3,
+      "type": "tool_result",
+      "name": "get_current_context",
+      "params": {
+        "record_count": 0,
+        "error_code": null
+      },
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "step": 4,
+      "type": "tool_call",
+      "name": "list_bills",
+      "params": {},
+      "ok": null,
+      "detail": ""
+    },
+    {
+      "step": 5,
+      "type": "tool_result",
+      "name": "list_bills",
+      "params": {
+        "record_count": 2,
+        "error_code": null
+      },
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "step": 6,
+      "type": "reply",
+      "name": "",
+      "params": {},
+      "ok": null,
+      "detail": "已为您找到 2 条账单。"
+    }
+  ],
+  "final_answer": "已为您找到 2 条账单。",
+  "handover_required": false,
+  "degraded": false
+}

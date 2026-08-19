@@ -1,0 +1,83 @@
+{
+  "case_id": "announcement_case2",
+  "agent_mode": "deepseek",
+  "recorded_at": "2026-08-16T07:03:33.223538Z",
+  "events": [
+    {
+      "step": 1,
+      "type": "intent",
+      "name": "ANNOUNCEMENT",
+      "params": {},
+      "ok": null,
+      "detail": ""
+    },
+    {
+      "step": 2,
+      "type": "tool_call",
+      "name": "get_current_context",
+      "params": {},
+      "ok": null,
+      "detail": ""
+    },
+    {
+      "step": 3,
+      "type": "tool_result",
+      "name": "get_current_context",
+      "params": {
+        "record_count": 0,
+        "error_code": null
+      },
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "step": 4,
+      "type": "tool_call",
+      "name": "get_business_date",
+      "params": {},
+      "ok": null,
+      "detail": ""
+    },
+    {
+      "step": 5,
+      "type": "tool_result",
+      "name": "get_business_date",
+      "params": {
+        "record_count": 0,
+        "error_code": null
+      },
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "step": 6,
+      "type": "tool_call",
+      "name": "search_announcements",
+      "params": {},
+      "ok": null,
+      "detail": ""
+    },
+    {
+      "step": 7,
+      "type": "tool_result",
+      "name": "search_announcements",
+      "params": {
+        "record_count": 0,
+        "error_code": null
+      },
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "step": 8,
+      "type": "reply",
+      "name": "",
+      "params": {},
+      "ok": null,
+      "detail": "我查询了 2026-08-17 适用于幸福小区 1栋的已发布停水公告，目前没有找到匹配通知。这个结果只代表现有公告记录；如果已经发生停水，建议联系物业确认临时故障。"
+    }
+  ],
+  "final_answer": "我查询了 2026-08-17 适用于幸福小区 1栋的已发布停水公告，目前没有找到匹配通知。这个结果只代表现有公告记录；如果已经发生停水，建议联系物业确认临时故障。",
+  "handover_required": false,
+  "degraded": false
+}

@@ -1,0 +1,26 @@
+{
+  "case_id": "platform_privacy_case1",
+  "agent_mode": "deepseek",
+  "recorded_at": "2026-08-16T07:03:52.033257Z",
+  "events": [
+    {
+      "step": 1,
+      "type": "intent",
+      "name": "UNCERTAIN",
+      "params": {},
+      "ok": null,
+      "detail": ""
+    },
+    {
+      "step": 2,
+      "type": "reply",
+      "name": "",
+      "params": {},
+      "ok": null,
+      "detail": "不太确定您的需求，请选择：报修 / 公告 / 账单 / 巡检 / 帮助。"
+    }
+  ],
+  "final_answer": "不太确定您的需求，请选择：报修 / 公告 / 账单 / 巡检 / 帮助。",
+  "handover_required": false,
+  "degraded": false
+}

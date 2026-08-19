@@ -167,6 +167,9 @@ def build_repair_tools(service: Any, context_provider: ContextProvider) -> dict[
                     **(exc.details or {}),
                 )
             raise
+        # 回写工单号到会话槽位：后续"改口/回归"轮次据此识别已有活跃工单，
+        # 避免对同一报修反复建单。
+        state.slots["work_order_id"] = str(work_order.business_no)
         return ok("repair_create", work_order=_brief(work_order), idempotency_key=key)
 
     return {

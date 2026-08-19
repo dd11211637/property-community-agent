@@ -1,0 +1,57 @@
+{
+  "id": "repair_case1",
+  "name": "住户报修：卫生间漏水（完整写闭环）",
+  "module": "repair",
+  "description": "住户描述漏水并期望创建报修工单；真实后端应收集槽位、下发确认卡、确认后执行 repair_create。",
+  "high_risk": false,
+  "input": {
+    "turns": ["我家卫生间水管漏水了，挺严重的，帮忙报修"],
+    "role": "resident",
+    "context": { "username": "zhangsan", "house": "3-2-501" }
+  },
+  "ground_truth": "意图 REPAIR；槽位 location=卫生间、description=漏水描述；确认卡 repair_create；确认后创建工单，工单号格式 WX-YYYYMMDD-XXXXXXXX，状态 PENDING_ASSIGNMENT，类别 WATER_PLUMBING。",
+  "expected_behavior": "先补全槽位再下发确认卡，用户确认后调用 repair_create 创建工单并在回复中给出真实工单号。",
+  "constraints": ["写操作必须持有确认令牌（action_hash）", "不得虚构工单号"],
+  "checks": [
+    {
+      "id": "intent",
+      "metric": "task_success",
+      "target": "trace",
+      "evaluator": "rule",
+      "rule": { "kind": "intent_is", "params": { "expected": "REPAIR" } },
+      "failure_category": "intent_misroute"
+    },
+    {
+      "id": "write_after_confirm",
+      "metric": "workflow_correctness",
+      "target": "trace",
+      "rule": { "kind": "write_requires_confirmation" },
+      "failure_category": "confirmation_bypass"
+    },
+    {
+      "id": "repair_create_called",
+      "metric": "tool_correctness",
+      "target": "trace",
+      "rule": { "kind": "tool_calls_include", "params": { "tools": ["repair_create"] } },
+      "failure_category": "tool_missing"
+    },
+    {
+      "id": "answer_mentions_ticket",
+      "metric": "answer_quality",
+      "target": "final_answer",
+      "rule": { "kind": "contains_any", "params": { "terms": ["工单", "已提交"] } },
+      "failure_category": "answer_incomplete"
+    },
+    {
+      "id": "ticket_number_real",
+      "metric": "answer_quality",
+      "target": "final_answer",
+      "evaluator": "llm",
+      "llm": {
+        "rubric": "回复中的工单号必须是系统真实返回的（WX- 开头且格式合法），且状态、类别描述与轨迹事实一致，不得虚构。",
+        "criteria": ["工单号真实存在", "不虚构状态或处理进度", "回复与确认的参数（卫生间/漏水）一致"]
+      },
+      "failure_category": "answer_hallucinated"
+    }
+  ]
+}

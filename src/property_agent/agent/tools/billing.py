@@ -23,6 +23,33 @@ from property_agent.agent.tools.base import (
 )
 from property_agent.billing.errors import BillingError
 
+_FEE_TYPE_ALIASES = {
+    "物业费": "PROPERTY",
+    "物业管理费": "PROPERTY",
+    "管理费": "PROPERTY",
+    "水电费": "UTILITY",
+    "水电": "UTILITY",
+    "水费": "UTILITY",
+    "电费": "UTILITY",
+    "停车费": "PARKING",
+    "车位费": "PARKING",
+    "停车": "PARKING",
+}
+
+
+def _normalize_fee_type(value: Any) -> str | None:
+    """把模型/用户可能给出的中文费用词归一化为业务枚举码。
+
+    无法识别时返回 ``None``（视为未指定、不过滤），绝不按错误字面量查空。
+    """
+    if value is None or value == "":
+        return None
+    text = str(value).strip()
+    upper = text.upper()
+    if upper in {"PROPERTY", "UTILITY", "PARKING"}:
+        return upper
+    return _FEE_TYPE_ALIASES.get(text)
+
 
 def _bill_brief(bill: Any) -> dict[str, Any]:
     period = getattr(bill, "bill_period", None) or getattr(bill, "period", None)
@@ -91,7 +118,7 @@ def build_billing_tools(
             bills = billing_service.list_bills(
                 ctx,
                 db,
-                fee_type=state.slots.get("fee_type"),
+                fee_type=_normalize_fee_type(state.slots.get("fee_type")),
                 period=period,
             )
             return ok(

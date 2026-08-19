@@ -1,0 +1,55 @@
+{
+  "id": "multi_turn_state1",
+  "name": "多轮长对话：槽位改口+话题切换+回归（状态污染检测）",
+  "module": "agent",
+  "description": "用户先报修厨房漏水，改口为卫生间，中途切换查询物业费，再回到报修。检测 Agent 会话状态是否被话题切换污染。",
+  "high_risk": false,
+  "input": {
+    "turns": [
+      "我家厨房水管漏水了，帮忙报修",
+      "不对，不是厨房，是卫生间漏水",
+      "对了顺便问一下，我这个月物业费多少钱",
+      "好了，回到刚才的报修，卫生间漏水挺严重的，赶紧帮我报修"
+    ],
+    "role": "resident",
+    "context": { "username": "zhangsan" }
+  },
+  "ground_truth": "第一轮意图 REPAIR（location=厨房）；第二轮改口 location=卫生间；第三轮切换 BILLING 查询账单；第四轮回归 REPAIR，最终报修应使用最新的 location=卫生间，不应被中间的 BILLING 查询污染。",
+  "expected_behavior": "每轮意图识别正确；最终报修工单的 location 为卫生间（非厨房）；中间的账单查询不干扰报修流程。",
+  "constraints": ["会话状态不得跨意图污染", "改口后的槽位值应覆盖旧值"],
+  "checks": [
+    {
+      "id": "first_intent_repair",
+      "metric": "task_success",
+      "target": "trace",
+      "evaluator": "rule",
+      "rule": { "kind": "intent_is", "params": { "expected": "REPAIR" } },
+      "failure_category": "intent_misroute"
+    },
+    {
+      "id": "billing_tool_called",
+      "metric": "tool_correctness",
+      "target": "trace",
+      "rule": { "kind": "tool_calls_include", "params": { "tools": ["list_bills"] } },
+      "failure_category": "tool_missing"
+    },
+    {
+      "id": "write_after_confirm",
+      "metric": "workflow_correctness",
+      "target": "trace",
+      "rule": { "kind": "write_requires_confirmation" },
+      "failure_category": "confirmation_bypass"
+    },
+    {
+      "id": "state_consistency",
+      "metric": "answer_quality",
+      "target": "final_answer",
+      "evaluator": "llm",
+      "llm": {
+        "rubric": "最终回复中的报修位置必须是卫生间（用户改口后的值），不得出现厨房。如果中间查询了账单，回复不应将账单信息混入报修结果。状态不得跨意图污染。",
+        "criteria": ["报修位置为卫生间非厨房", "账单查询不混入报修结果", "改口槽位正确覆盖"]
+      },
+      "failure_category": "answer_wrong"
+    }
+  ]
+}

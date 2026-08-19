@@ -30,6 +30,7 @@ from property_agent.agent.application.conversation_service import (
 )
 from property_agent.agent.application.recovery import AgentRecoveryService
 from property_agent.agent.graph_core import CompiledGraph
+from property_agent.agent.policies import Intent
 from property_agent.agent.state import GraphState
 
 ConfirmationTokenProvider = Callable[[GraphState], str]
@@ -110,6 +111,30 @@ def _explicit_inspection_action(text: str) -> str | None:
                 continue
             return action
     return None
+
+
+_FIRST_TURN_INSPECTION_MARKERS = ("巡检", "消防通道", "安防", "巡检发现", "检查发现")
+
+_INSPECTION_WRITE_MARKERS = ("上报异常", "上报事件", "上报", "报告异常", "异常上报")
+
+
+def _first_turn_inspection_signal(user_text: str, roles: tuple[str, ...]) -> dict[str, str]:
+    """首轮确定性巡检信号：命中则锁定 INSPECTION 并走安防事件上报。
+
+    仅靠 LLM 分类会把"消防通道堵塞上报"这类公共区域安防问题误判成住户报修；
+    这里对巡检/安防写信号做确定性兜底（安全优先于模型判断）。``roles`` 只取
+    可信请求上下文中的角色，不允许来自模型输出。
+    """
+    text = str(user_text or "")
+    if any(marker in text for marker in _FIRST_TURN_INSPECTION_MARKERS) and any(
+        marker in text for marker in _INSPECTION_WRITE_MARKERS
+    ):
+        return {"action": "report_event"}
+    if "SECURITY_GUARD" in roles and any(
+        marker in text for marker in ("堵塞", "异常", "可疑", "上报")
+    ):
+        return {"action": "report_event"}
+    return {}
 
 
 def _inspection_group(action: str, text: str) -> str:
@@ -255,6 +280,10 @@ class AgentSessionRunner:
             else {}
         )
         explicit_corrections.update(_explicit_inspection_corrections(user_text, previous))
+        roles = tuple(str(role) for role in getattr(context, "roles", ()))
+        inspection_override = _first_turn_inspection_signal(user_text, roles)
+        if inspection_override:
+            explicit_corrections.update(inspection_override)
         inspection_action = _explicit_inspection_action(user_text)
         has_active_draft = bool(
             previous is not None
@@ -286,22 +315,50 @@ class AgentSessionRunner:
             announcement_action,
             announcement_followup,
         )
+        # 已有活跃报修工单 + 用户改口/回归：不再重复建单，直接说明已有工单。
+        repair_followup: dict[str, Any] = {}
+        repair_followup_message: str | None = None
+        repair_created_before = previous is not None and bool(
+            previous.slots.get("work_order_id")
+        )
+        correction_or_return = any(
+            marker in user_text for marker in ("不是", "改成", "换成", "回到", "刚才")
+        )
+        if repair_created_before and correction_or_return:
+            business_no = str(previous.slots["work_order_id"])
+            location = explicit_corrections.get("location") or previous.slots.get("location") or ""
+            description = explicit_corrections.get("description") or previous.slots.get(
+                "description"
+            ) or ""
+            repair_followup = {
+                "work_order_id": business_no,
+                "location": location,
+                "description": description,
+            }
+            repair_followup_message = (
+                f"您的报修工单 {business_no} 已提交（位置：{location}），"
+                "正在处理中；如需正式修改地点或补充说明，请致电物业。"
+            )
         state = GraphState(
             conversation_id=conversation_id,
             actor_id=context.actor_id,
             community_id=context.community_id,
             current_house_id=current_house_id,
-            intent=continuation.previous_intent,
+            intent=(
+                Intent.INSPECTION.value if inspection_override else continuation.previous_intent
+            ),
             slots={
                 **continuation.previous_slots,
                 **explicit_corrections,
                 **continuation.single_slot_reply,
+                "roles": list(roles),
                 "_user_corrected_fields": sorted(
                     set(explicit_corrections)
                     | set((announcement_followup.slot_updates or {}).keys())
                 ),
                 "_active_announcement_draft": active_draft,
                 "user_text": user_text,
+                **repair_followup,
                 **(slots or {}),
             },
             messages=continuation.previous_messages,
@@ -309,6 +366,17 @@ class AgentSessionRunner:
             _contextual_followup=continuation.contextual_followup,
         )
         state.add_message("user", user_text)
+        if repair_followup_message:
+            state.add_message("assistant", repair_followup_message)
+            result = {
+                "state": state,
+                "interrupt": None,
+                "thread_id": conversation_id,
+                "done": True,
+            }
+            turn = self._finalize(result)
+            self._persist_turn(context, turn, user_text)
+            return turn
         result = self._graph.invoke(state, thread_id=conversation_id)
         turn = self._finalize(result)
         self._persist_turn(context, turn, user_text)
