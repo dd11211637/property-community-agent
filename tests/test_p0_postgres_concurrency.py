@@ -42,6 +42,10 @@ from property_agent.agent.infrastructure.run_lease import (
     StaleAgentRunError,
     assert_run_fence,
 )
+from property_agent.agent.application.conversation_service import (
+    ConversationService,
+    ConversationStatus,
+)
 from property_agent.agent.state import GraphState
 from property_agent.platform.application.approval_service import (
     ApprovalError,
@@ -542,3 +546,54 @@ def test_memory_double_writer_cas(session_factory):
     assert results.count("VERSION_CONFLICT") == 1, (
         f"exactly one should conflict, got {results}"
     )
+
+
+# ── Close / Sync 原子性竞态 (P0-7) ───────────────────────
+
+
+def test_close_and_run_race_keeps_conversation_closed(session_factory):
+    """已关闭会话在 100 个并发 sync 下不被复活（原子 UPDATE 兜底，P0-7）。
+
+    模拟审查报告 P0-7 的竞态：close() 在旧 turn 运行期间发生，旧 turn 的
+    sync_from_state 必须被原子 ``WHERE status <> 'CLOSED'`` UPDATE 拦截，
+    CLOSED → ACTIVE 的复活次数必须为 0。真实并发由 PostgreSQL 行锁保证。
+    """
+    from types import SimpleNamespace
+
+    actor_id = uuid4()
+    community_id = uuid4()
+    context = SimpleNamespace(actor_id=actor_id, community_id=community_id, house_ids=frozenset())
+
+    service = ConversationService(session_factory)
+    service.start(conversation_id="race-1", context=context, current_house_id=None)
+    # 关闭会话
+    service.close("race-1")
+    assert service.get("race-1").is_closed is True
+
+    state = _make_state("race-1")
+    resurrected: list[int] = []
+    errors: list[str] = []
+    barrier = threading.Barrier(100)
+
+    def worker() -> None:
+        barrier.wait()
+        try:
+            snapshot = service.sync_from_state(state, waiting_confirm=False)
+            if not snapshot.is_closed:
+                resurrected.append(1)
+        except AgentSessionError as exc:
+            if exc.code != AgentSessionErrorCode.CONVERSATION_CLOSED.value:
+                errors.append(exc.code)
+
+    threads = [threading.Thread(target=worker) for _ in range(100)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=20)
+
+    assert errors == [], f"unexpected errors during race: {errors}"
+    assert resurrected == [], (
+        f"CLOSED conversation was resurrected {len(resurrected)} times"
+    )
+    # 关闭状态保持稳定。
+    assert service.get("race-1").is_closed is True

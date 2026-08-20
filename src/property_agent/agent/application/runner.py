@@ -67,7 +67,7 @@ from property_agent.agent.application.turn_guard import (
 )
 from property_agent.agent.graph_core import CompiledGraph
 from property_agent.agent.infrastructure.checkpointer import CheckpointVersionConflict
-from property_agent.agent.infrastructure.run_lease import Lease, StaleAgentRunError
+from property_agent.agent.infrastructure.run_lease import Lease, LeaseHeartbeat, StaleAgentRunError
 from property_agent.agent.observability import AgentObservability
 from property_agent.agent.state import GraphState
 
@@ -133,6 +133,7 @@ class _TurnPlan:
     conversation: Any
     expected_version: int | None
     repair_followup_message: str | None
+    heartbeat: "LeaseHeartbeat | None" = None
 
 
 class AgentSessionRunner:
@@ -149,6 +150,7 @@ class AgentSessionRunner:
         approval_service: Any | None = None,
         enforce_concurrency: bool = True,
         observability: AgentObservability | None = None,
+        heartbeat_interval_seconds: int = 10,
     ) -> None:
         self._graph = graph
         self._conversations = conversations
@@ -160,6 +162,8 @@ class AgentSessionRunner:
         self._approval_service = approval_service
         # P0 并发护栏总开关：关闭时不做 lease/CAS（兼容未升级库或回滚场景）。
         self._enforce = enforce_concurrency
+        # P0-5 heartbeat：后台续期间隔（默认 10s，覆盖 30s lease TTL）。
+        self._heartbeat_interval = heartbeat_interval_seconds
         # P1 观测与流式：4 关键指标 + agent.turn root span（缺省进程内实现）。
         self._observability = observability or AgentObservability.in_memory()
 
@@ -194,6 +198,7 @@ class AgentSessionRunner:
                     thread_id=conversation_id,
                     expected_version=plan.expected_version,
                 )
+                self._assert_heartbeat_alive(plan)
                 turn = self._finalize(result)
                 self._persist_turn(plan.ctx, turn, user_text)
                 span.set_attribute("agent.intent", turn.state.intent)
@@ -214,6 +219,7 @@ class AgentSessionRunner:
             raise
         finally:
             if plan is not None:
+                self._stop_heartbeat(plan)
                 self._release_lease(conversation_id, plan.lease)
 
     def stream_start(
@@ -263,6 +269,7 @@ class AgentSessionRunner:
                         yield ("tool_finished", {"node": payload["node"]})
                     elif kind == "__final__":
                         turn = self._finalize(payload)
+                        self._assert_heartbeat_alive(plan)
                         self._persist_turn(plan.ctx, turn, user_text)
                         span.set_attribute("agent.intent", turn.state.intent)
                         span.set_attribute("agent.degraded", self._observability.degraded)
@@ -280,6 +287,7 @@ class AgentSessionRunner:
             raise
         finally:
             if plan is not None:
+                self._stop_heartbeat(plan)
                 self._release_lease(conversation_id, plan.lease)
 
     def _plan_start(
@@ -350,8 +358,10 @@ class AgentSessionRunner:
         # P0-3: expected_version 必须在成功 acquire lease 后读取，避免读到
         # 被并发新 run 覆盖的版本导致不必要 stale CAS。
         expected_version = self._turn_start_version(conversation_id)
-        # P0-5: heartbeat——graph.invoke 前续期一次，覆盖长 LLM turn。
+        # P0-5: heartbeat——graph.invoke 前先单次续期确认 lease 仍有效，
+        # 成功后再启动后台周期续租（失败则不会启动后台线程，避免泄漏）。
         self._heartbeat(lease)
+        heartbeat = self._start_heartbeat(lease)
         return _TurnPlan(
             lease=lease,
             ctx=ctx,
@@ -359,6 +369,7 @@ class AgentSessionRunner:
             conversation=conversation,
             expected_version=expected_version,
             repair_followup_message=repair_followup_message,
+            heartbeat=heartbeat,
         )
 
     def _collect_explicit_corrections(
@@ -410,6 +421,35 @@ class AgentSessionRunner:
         if lease is None:
             return
         release_turn_lease(self._run_lease, thread_id=thread_id, run_id=lease.run_id)
+
+    def _start_heartbeat(self, lease: Lease | None) -> "LeaseHeartbeat | None":
+        """在后台线程启动 lease 周期续租（P0-5 heartbeat）。
+
+        仅当 lease 与 run_lease 服务均存在时启动；否则（_enforce=False 的测试/
+        退化路径）返回 None，调用方跳过。
+        """
+        if lease is None or self._run_lease is None:
+            return None
+        heartbeat = LeaseHeartbeat(
+            self._run_lease, lease, interval_seconds=self._heartbeat_interval
+        )
+        heartbeat.start()
+        return heartbeat
+
+    def _stop_heartbeat(self, plan: "_TurnPlan") -> None:
+        """停止后台续租循环（必须在 release 之前调用，避免续租复活已释放的 lease）。"""
+        if plan.heartbeat is not None:
+            plan.heartbeat.stop()
+
+    def _assert_heartbeat_alive(self, plan: "_TurnPlan") -> None:
+        """若后台续租检测到失租（lease 过期/被抢占），立即中止当前 turn。
+
+        与 ``assert_run_fence`` 形成双保险：业务写路径在 mutation 前校验 fence，
+        此处则在 turn 结束后、持久化前再次确认 lease 仍有效。
+        """
+        if plan.heartbeat is not None and plan.heartbeat.stale:
+            thread_id = plan.lease.thread_id if plan.lease is not None else "<unknown>"
+            raise StaleAgentRunError(thread_id, reason="lease heartbeat detected stale run; aborting turn")
 
     def _activate_lease_context(self, context: AgentContext, lease: Lease | None) -> AgentContext:
         """委托 turn_guard.activate_lease_context（P0-4 fencing 注入）。"""
@@ -585,6 +625,7 @@ class AgentSessionRunner:
                     state=plan.state,
                     expected_version=plan.expected_version,
                 )
+                self._assert_heartbeat_alive(plan)
                 turn = self._finalize(result)
                 action_text = "确认执行操作" if confirmed else "取消待确认操作"
                 self._persist_turn(plan.ctx, turn, action_text)
@@ -608,6 +649,7 @@ class AgentSessionRunner:
             raise
         finally:
             if plan is not None:
+                self._stop_heartbeat(plan)
                 self._release_lease(conversation_id, plan.lease)
 
     def stream_resume(
@@ -653,6 +695,7 @@ class AgentSessionRunner:
                         yield ("tool_finished", {"node": payload["node"]})
                     elif kind == "__final__":
                         turn = self._finalize(payload)
+                        self._assert_heartbeat_alive(plan)
                         action_text = "确认执行操作" if confirmed else "取消待确认操作"
                         self._persist_turn(plan.ctx, turn, action_text)
                         span.set_attribute("agent.intent", turn.state.intent)
@@ -675,6 +718,7 @@ class AgentSessionRunner:
             raise
         finally:
             if plan is not None:
+                self._stop_heartbeat(plan)
                 self._release_lease(conversation_id, plan.lease)
 
     def _plan_resume(
@@ -700,8 +744,10 @@ class AgentSessionRunner:
             raise RuntimeError("confirmation token provider is not configured")
         # P0-3: expected_version 在 acquire lease 后读取。
         expected_version = self._turn_start_version(conversation_id)
-        # P0-5: heartbeat——graph.resume 前续期一次。
+        # P0-5: heartbeat——graph.resume 前先单次续期确认 lease 仍有效，
+        # 成功后再启动后台周期续租（失败则不会启动后台线程，避免泄漏）。
         self._heartbeat(lease)
+        heartbeat = self._start_heartbeat(lease)
         plan = _TurnPlan(
             lease=lease,
             ctx=ctx,
@@ -709,6 +755,7 @@ class AgentSessionRunner:
             conversation=None,
             expected_version=expected_version,
             repair_followup_message=None,
+            heartbeat=heartbeat,
         )
         return plan, confirmation_token
 

@@ -343,13 +343,17 @@ def build_announcement_service(approval_service: ApprovalService) -> Announcemen
     def unit_of_work_factory() -> SqlAlchemyAnnouncementUnitOfWork:
         return SqlAlchemyAnnouncementUnitOfWork(
             session_factory,
-            lambda session: build_announcement_ports(session, approval_service),
+            lambda session: build_announcement_ports(
+                session, approval_service, enforce_fence=settings.agent_concurrency_guard
+            ),
         )
 
     return AnnouncementService(unit_of_work_factory)
 
 
-def build_billing_service(approval_service: ApprovalService) -> BillingService:
+def build_billing_service(
+    approval_service: ApprovalService, *, enforce_fence: bool = False
+) -> BillingService:
     """Assemble the production billing service (PRD 6.3).
 
     The billing read path is isolated behind ``BillingSourcePort`` (the local
@@ -360,12 +364,16 @@ def build_billing_service(approval_service: ApprovalService) -> BillingService:
     """
 
     def uow_factory(transaction: Any) -> SqlAlchemyBillingUnitOfWork:
-        return SqlAlchemyBillingUnitOfWork(transaction, approval_service)
+        return SqlAlchemyBillingUnitOfWork(
+            transaction, approval_service, enforce_fence=enforce_fence
+        )
 
     return BillingService(uow_factory)
 
 
-def build_consultation_service(approval_service: ApprovalService) -> ConsultationService:
+def build_consultation_service(
+    approval_service: ApprovalService, *, enforce_fence: bool = False
+) -> ConsultationService:
     """Assemble the production financial-consultation service (PRD 6.3).
 
     Persists the consultation lifecycle, idempotency record and audit event in
@@ -373,7 +381,9 @@ def build_consultation_service(approval_service: ApprovalService) -> Consultatio
     """
 
     def uow_factory(transaction: Any) -> SqlAlchemyBillingUnitOfWork:
-        return SqlAlchemyBillingUnitOfWork(transaction, approval_service)
+        return SqlAlchemyBillingUnitOfWork(
+            transaction, approval_service, enforce_fence=enforce_fence
+        )
 
     return ConsultationService(uow_factory)
 
@@ -396,7 +406,9 @@ def build_inspection_services(
     def unit_of_work_factory() -> SqlAlchemyInspectionUnitOfWork:
         return SqlAlchemyInspectionUnitOfWork(
             session_factory,
-            lambda session: build_inspection_ports(session, approval_service),
+            lambda session: build_inspection_ports(
+                session, approval_service, enforce_fence=settings.agent_concurrency_guard
+            ),
         )
 
     return InspectionTaskService(unit_of_work_factory), SecurityEventService(unit_of_work_factory)
@@ -670,11 +682,15 @@ def _build_services(app: FastAPI) -> dict[str, Any]:
     app.state.announcement_service = announcement_service
     services["announcement_service"] = announcement_service
 
-    billing_service = build_billing_service(approval_service)
+    billing_service = build_billing_service(
+        approval_service, enforce_fence=settings.agent_concurrency_guard
+    )
     app.state.billing_service = billing_service
     services["billing_service"] = billing_service
 
-    consultation_service = build_consultation_service(approval_service)
+    consultation_service = build_consultation_service(
+        approval_service, enforce_fence=settings.agent_concurrency_guard
+    )
     app.state.consultation_service = consultation_service
     services["consultation_service"] = consultation_service
 

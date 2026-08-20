@@ -57,8 +57,10 @@ jobs:
       - run: python -m pip install ".[dev]"
       - run: alembic upgrade head
       - run: alembic check
-      - name: Run PostgreSQL suite without skips
-        run: python -m pytest -rs | tee pytest-postgres.log && ! grep -q "SKIPPED \[" pytest-postgres.log
+      - name: Run PostgreSQL concurrency suite (no skips allowed)
+        run: python -m pytest -m postgres -rs --junitxml=pytest-postgres.xml
+      - name: Enforce zero skips
+        run: python scripts/check_postgres_no_skip.py pytest-postgres.xml
 
   frontend:
     runs-on: ubuntu-latest

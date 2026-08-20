@@ -19,7 +19,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from property_agent.agent.infrastructure.run_lease import Lease, assert_run_fence
+from property_agent.agent.infrastructure.run_lease import Lease, StaleAgentRunError, assert_run_fence
 from property_agent.platform.application.approval_service import ApprovalError, ApprovalService
 from property_agent.platform.application.confirmation_service import ConfirmationService
 from property_agent.platform.context import RequestContext
@@ -44,11 +44,15 @@ class PlatformConfirmationPort:
         approval_service: ApprovalService,
         *,
         error_factory: ErrorFactory,
+        enforce_fence: bool = False,
     ) -> None:
         self._session = session
         self._approval_service = approval_service
         self._token_service = ConfirmationService(session)
         self._error_factory = error_factory
+        # 生产 fencing 失败关闭开关：开启时若当前 turn 没有有效 lease（未经 runner
+        # 注入），任何业务 mutation 都禁止落地。测试环境保持 False（mock 放行）。
+        self._enforce_fence = enforce_fence
 
     def consume(
         self,
@@ -64,6 +68,13 @@ class PlatformConfirmationPort:
         # lease（fencing）。lease 从 trusted RequestContext 取，不由模型 slots 传入。
         # stale worker（lease 过期或被抢占）的业务写在此被拒绝。
         lease = _current_agent_lease()
+        if self._enforce_fence and lease is None:
+            # 生产强制 fencing 模式：缺失 lease 意味着本次 turn 未经 lease 注入，
+            # 任何业务 mutation 都不允许落地——失败关闭，禁止静默放行。
+            raise StaleAgentRunError(
+                "<production-fence>",
+                reason="fencing enforced but no active lease present in production",
+            )
         if lease is not None:
             assert_run_fence(self._session, lease)
         if approval_ref:

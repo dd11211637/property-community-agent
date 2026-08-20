@@ -21,6 +21,8 @@ lease 与 checkpoint CAS 分工不同：
   fence       → 防止 lease 过期后的旧 worker 执行业务 mutation（CAS 只挡 checkpoint）。
 """
 
+import logging
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -29,6 +31,8 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 # 延迟导入 AgentSessionError / AgentSessionErrorCode 以避免循环 import：
 # run_lease → agent.application.errors → agent.application.__init__ → runner
@@ -331,9 +335,86 @@ def assert_run_fence(session: Session, lease: Lease) -> None:
         )
 
 
+class LeaseHeartbeat:
+    """后台 lease 续期（P0-5 heartbeat）。
+
+    长 LLM turn 期间在后台线程每 ``interval_seconds`` 调用 ``RunLeaseService.renew``
+    续期一次，防止 lease TTL 到期后被另一 run 抢占。若某次续期失败（lease 已过期
+    或被抢占），标记 ``stale`` 并停止循环——持有该 lease 的 worker 必须在
+    ``stale`` 变为 True 后立即中止当前 run（``StaleAgentRunError``），其后续业务写
+    也会被 ``assert_run_fence`` 拒绝。
+
+    生命周期：runner 在 ``_plan_start`` / ``_plan_resume`` 拿到 lease 后 ``start()``，
+    turn 结束（或异常）时在 ``finally`` 中 ``stop()`` 释放后再 ``release``。
+    """
+
+    def __init__(
+        self,
+        run_lease: RunLeaseService,
+        lease: Lease,
+        *,
+        interval_seconds: int = 10,
+        on_stale: Callable[[BaseException], None] | None = None,
+    ) -> None:
+        self._run_lease = run_lease
+        self._lease = lease
+        self._interval = interval_seconds
+        self._on_stale = on_stale
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+        self._stale = False
+        self._error: BaseException | None = None
+
+    @property
+    def stale(self) -> bool:
+        with self._lock:
+            return self._stale
+
+    @property
+    def error(self) -> BaseException | None:
+        with self._lock:
+            return self._error
+
+    def start(self) -> None:
+        self._thread = threading.Thread(
+            target=self._renew_loop, daemon=True, name="lease-heartbeat"
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=self._interval + 5)
+
+    def _renew_loop(self) -> None:
+        while not self._stop.wait(self._interval):
+            try:
+                self._lease = self._run_lease.renew(
+                    self._lease.thread_id, self._lease.run_id, self._lease.fence
+                )
+            except StaleAgentRunError as exc:
+                self._mark_stale(exc)
+                return
+            except Exception as exc:  # pragma: no cover - 任何续期异常都视为失租
+                self._mark_stale(exc)
+                return
+
+    def _mark_stale(self, exc: BaseException) -> None:
+        with self._lock:
+            self._stale = True
+            self._error = exc
+        if self._on_stale is not None:
+            try:
+                self._on_stale(exc)
+            except Exception:
+                logger.exception("on_stale callback raised")
+
+
 __all__ = [
     "DEFAULT_LEASE_SECONDS",
     "Lease",
+    "LeaseHeartbeat",
     "RunLeaseService",
     "SessionFactory",
     "StaleAgentRunError",

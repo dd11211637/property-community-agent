@@ -446,10 +446,14 @@ class SqlAlchemyHandoverPort:
 # ═══════════════════════════════════════════════════════════════
 
 
-def build_shared_ports(session: Session, approval_service: ApprovalService) -> SharedPorts:
+def build_shared_ports(
+    session: Session, approval_service: ApprovalService, *, enforce_fence: bool = False
+) -> SharedPorts:
     """Create every production shared port bound to one SQLAlchemy session.
 
     ``approval_service`` 由容器装配后传入；端口内部用它做 P0 审批原子消费。
+    ``enforce_fence`` 由生产容器注入（= settings.agent_concurrency_guard），开启时
+    缺失 lease 的受控写会被端口拒绝（fencing 失败关闭）。
     """
     from property_agent.platform.application.platform_confirmation_port import (
         PlatformConfirmationPort,
@@ -461,6 +465,7 @@ def build_shared_ports(session: Session, approval_service: ApprovalService) -> S
             session,
             approval_service,
             error_factory=BusinessError,
+            enforce_fence=enforce_fence,
         ),
         house_access=SqlAlchemyHouseAccessPort(session),
         staff_directory=SqlAlchemyStaffDirectoryPort(session),

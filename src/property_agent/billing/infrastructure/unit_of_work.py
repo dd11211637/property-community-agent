@@ -21,12 +21,14 @@ from property_agent.platform.infrastructure.orm_models import CommunityModel
 class SqlAlchemyBillingUnitOfWork:
     """Bind billing repositories, audit, idempotency and confirmation to one Session."""
 
-    def __init__(self, session: Session, approval_service: ApprovalService) -> None:
+    def __init__(
+        self, session: Session, approval_service: ApprovalService, *, enforce_fence: bool = False
+    ) -> None:
         self._session = session
         self.source = LocalBillingSourcePort(SqlAlchemyBillRepository(session))
         self.rules = SqlAlchemyBillingRuleRepository(session)
         self.consultations = SqlAlchemyConsultationRepository(session)
-        ports = build_billing_ports(session, approval_service)
+        ports = build_billing_ports(session, approval_service, enforce_fence=enforce_fence)
         self.idempotency = ports["idempotency"]
         self.audit = ports["audit"]
         self.confirmations = ports["confirmations"]

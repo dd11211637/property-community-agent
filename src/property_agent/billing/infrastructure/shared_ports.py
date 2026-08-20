@@ -23,6 +23,12 @@ from property_agent.platform.application.confirmation_service import Confirmatio
 from property_agent.platform.domain.exceptions import InvalidConfirmationTokenException
 from property_agent.platform.infrastructure.orm_models import IdempotencyRecordModel
 
+from property_agent.agent.infrastructure.run_lease import (
+    StaleAgentRunError,
+    assert_run_fence,
+)
+from property_agent.platform.application.platform_confirmation_port import _current_agent_lease
+
 
 class SqlAlchemyBillingIdempotencyPort:
     """两阶段幂等于平台 ``idempotency_records`` 表（与 announcement 同构）。"""
@@ -101,10 +107,13 @@ class PlatformBillingConfirmationPort:
     ``FOR UPDATE``，校验后置 ``CONSUMED``），再消费令牌作为纵深防御。
     """
 
-    def __init__(self, session: Session, approval_service: ApprovalService) -> None:
+    def __init__(
+        self, session: Session, approval_service: ApprovalService, *, enforce_fence: bool = False
+    ) -> None:
         self._session = session
         self._approval_service = approval_service
         self._token_service = ConfirmationService(session)
+        self._enforce_fence = enforce_fence
 
     def consume(
         self,
@@ -116,6 +125,16 @@ class PlatformBillingConfirmationPort:
         parameter_hash: str,
         request_id: str,
     ) -> None:
+        lease = _current_agent_lease()
+        if self._enforce_fence and lease is None:
+            # 生产强制 fencing 模式：缺失 lease 意味着本次 turn 未经 lease 注入，
+            # 任何业务 mutation 都不允许落地——失败关闭。
+            raise StaleAgentRunError(
+                "<production-fence>",
+                reason="fencing enforced but no active lease present in production",
+            )
+        if lease is not None:
+            assert_run_fence(self._session, lease)
         if approval_ref:
             try:
                 self._approval_service.consume(
@@ -150,11 +169,13 @@ class PlatformBillingConfirmationPort:
 
 
 def build_billing_ports(
-    session: Session, approval_service: ApprovalService
+    session: Session, approval_service: ApprovalService, *, enforce_fence: bool = False
 ) -> dict[str, Any]:
     """组装 billing UoW 需要的全部生产端口（approval_service 由容器装配后传入）。"""
     return {
         "idempotency": SqlAlchemyBillingIdempotencyPort(session),
         "audit": PlatformBillingAuditPort(session),
-        "confirmations": PlatformBillingConfirmationPort(session, approval_service),
+        "confirmations": PlatformBillingConfirmationPort(
+            session, approval_service, enforce_fence=enforce_fence
+        ),
     }

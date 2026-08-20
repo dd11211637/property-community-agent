@@ -59,6 +59,13 @@ from property_agent.platform.infrastructure.orm_models import (
     UserHouseBindingModel,
     UserModel,
 )
+from property_agent.agent.infrastructure.run_lease import (
+    StaleAgentRunError,
+    assert_run_fence,
+)
+from property_agent.platform.application.platform_confirmation_port import (
+    _current_agent_lease,
+)
 from property_agent.platform.infrastructure.outbox_dispatcher import MessageOutboxService
 
 #: Number of recipient examples returned with an audience preview.
@@ -168,11 +175,15 @@ class PlatformConfirmationPort:
         approval_service: ApprovalService,
         *,
         error_factory: Any,
+        enforce_fence: bool = False,
     ) -> None:
         self._session = session
         self._approval_service = approval_service
         self._service = ConfirmationService(session)
         self._error_factory = error_factory
+        # 生产 fencing 失败关闭开关：开启时若当前 turn 没有有效 lease（未经 runner
+        # 注入），任何业务 mutation 都禁止落地。测试环境保持 False（mock 放行）。
+        self._enforce_fence = enforce_fence
 
     def consume(
         self,
@@ -184,6 +195,16 @@ class PlatformConfirmationPort:
         parameter_hash: str,
         request_id: str,
     ) -> None:
+        # P0-4: 在任何 mutation / 审批消费之前校验当前 turn 仍拥有 conversation
+        # lease（fencing）。lease 从 trusted RequestContext 取，不由模型 slots 传入。
+        lease = _current_agent_lease()
+        if self._enforce_fence and lease is None:
+            raise StaleAgentRunError(
+                "<production-fence>",
+                reason="fencing enforced but no active lease present in production",
+            )
+        if lease is not None:
+            assert_run_fence(self._session, lease)
         if approval_ref:
             try:
                 self._approval_service.consume(
@@ -387,13 +408,13 @@ class AnnouncementSharedPorts:
 
 
 def build_announcement_ports(
-    session: Session, approval_service: ApprovalService
+    session: Session, approval_service: ApprovalService, *, enforce_fence: bool = False
 ) -> AnnouncementSharedPorts:
     """Create every production shared port bound to one SQLAlchemy session."""
     return AnnouncementSharedPorts(
         idempotency=SqlAlchemyIdempotencyPort(session),
         confirmations=PlatformConfirmationPort(
-            session, approval_service, error_factory=BusinessError
+            session, approval_service, error_factory=BusinessError, enforce_fence=enforce_fence
         ),
         audiences=SqlAlchemyAudienceResolverPort(session),
         audit=PlatformAuditPort(session),

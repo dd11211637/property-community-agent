@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -40,6 +41,7 @@ from property_agent.agent.infrastructure.models import (
 )
 from property_agent.agent.infrastructure.run_lease import (
     Lease,
+    LeaseHeartbeat,
     RunLeaseService,
     StaleAgentRunError,
     assert_run_fence,
@@ -51,6 +53,10 @@ from property_agent.platform.application.approval_service import (
     ApprovalStatus,
 )
 from property_agent.platform.application.hashing import canonical_hash
+from property_agent.platform.application.platform_confirmation_port import (
+    PlatformConfirmationPort,
+)
+from property_agent.platform.errors import BusinessError
 from property_agent.platform.infrastructure.orm_models import Base
 
 # ── Fixtures ──────────────────────────────────────────────
@@ -507,3 +513,143 @@ def test_approval_consume_atomic_with_business_mutation(approval_service, sessio
             select(AgentActionApprovalModel).where(AgentActionApprovalModel.id == approval.id)
         ).scalar_one()
         assert record.status == ApprovalStatus.CONSUMED.value
+
+
+# ── Lease Heartbeat (P0-5) ───────────────────────────────
+
+
+def test_long_running_turn_keeps_lease(session_factory):
+    """长 turn 期间后台 heartbeat 周期续租，lease 不会过期（P0-5）。
+
+    用 TTL=2s + interval=1s 时间加速：等效跑 ~6s（=3 个续租周期），期间 lease
+    本应过期 3 次，但 heartbeat 续租使其始终有效。等价于「90s 长 turn，lease
+    不过期」的运行时保证。
+    """
+    run_lease = RunLeaseService(session_factory, lease_seconds=2)
+    lease = run_lease.acquire("conv-hb")
+    heartbeat = LeaseHeartbeat(run_lease, lease, interval_seconds=1)
+    heartbeat.start()
+    try:
+        # 模拟 6s 长 LLM turn（90s 的时间加速版）。
+        time.sleep(6)
+        # turn 结束后 heartbeat 仍应报告 alive（未失租）。
+        assert heartbeat.stale is False
+        # 且 lease 在 DB 中仍有效（未被抢占、未过期）。
+        assert run_lease.is_held("conv-hb") is True
+    finally:
+        heartbeat.stop()
+    # 停止后 lease 应可被释放并重新抢占。
+    run_lease.release("conv-hb", lease.run_id)
+    assert run_lease.is_held("conv-hb") is False
+
+
+def test_heartbeat_stops_on_renew_failure(session_factory):
+    """续租失败（lease 过期未被及时续租）时 heartbeat 必须标记 stale 并自停。"""
+    run_lease = RunLeaseService(session_factory, lease_seconds=1)
+    lease = run_lease.acquire("conv-hb-stale")
+    # 不启动 heartbeat，让 lease 自然过期（TTL=1s）。
+    time.sleep(1.2)
+    assert run_lease.is_held("conv-hb-stale") is False  # 已过期
+    # 过期后启动 heartbeat，首次续租必然失败 → 标记 stale 并自停。
+    heartbeat = LeaseHeartbeat(run_lease, lease, interval_seconds=1)
+    heartbeat.start()
+    for _ in range(20):
+        if heartbeat.stale:
+            break
+        time.sleep(0.1)
+    assert heartbeat.stale is True
+    heartbeat.stop()
+
+
+# ── Fence fail-closed (P0-4 生产护栏) ─────────────────────
+
+
+def test_fence_fail_closed_blocks_without_lease(approval_service, session_factory):
+    """生产 enforce_fence=True 时，未经 lease 注入的业务 mutation 必须被拒绝。"""
+    port = PlatformConfirmationPort(
+        session_factory(),
+        approval_service,
+        error_factory=BusinessError,
+        enforce_fence=True,
+    )
+    with pytest.raises(StaleAgentRunError):
+        port.consume(
+            approval_ref=None,
+            token="unused",
+            actor_id=uuid4(),
+            action="CREATE_WORK_ORDER",
+            parameter_hash="x",
+            request_id="r",
+        )
+
+
+def test_fence_fail_closed_disabled_allows_mock(approval_service, session_factory):
+    """测试环境 enforce_fence=False 时，缺失 lease 不会触发 fencing 拒绝（mock 兼容）。
+
+    注意：fence 关闭后 consume 仍会执行正常的 token/approval 校验，这里只验证
+    fencing 这一道闸不会在缺失 lease 时误杀（绝不应抛 StaleAgentRunError）。
+    """
+    port = PlatformConfirmationPort(
+        session_factory(),
+        approval_service,
+        error_factory=BusinessError,
+        enforce_fence=False,
+    )
+    try:
+        port.consume(
+            approval_ref=None,
+            token="unused",
+            actor_id=uuid4(),
+            action="CREATE_WORK_ORDER",
+            parameter_hash="x",
+            request_id="r",
+        )
+    except StaleAgentRunError:
+        pytest.fail("enforce_fence=False must NOT raise StaleAgentRunError without a lease")
+    except Exception:
+        pass  # 预期的 token/approval 校验错误，与 fencing 无关。
+
+
+# ── Close / Sync 原子性 (P0-7) ────────────────────────────
+
+
+def test_closed_conversation_not_resurrected_by_sync(session_factory):
+    """已关闭会话的 sync_from_state（旧 turn 收尾）必须被拒绝，不复活（P0-7）。"""
+    from types import SimpleNamespace
+
+    from property_agent.agent.application.conversation_service import (
+        ConversationService,
+    )
+
+    actor_id = uuid4()
+    community_id = uuid4()
+    context = SimpleNamespace(actor_id=actor_id, community_id=community_id, house_ids=frozenset())
+    service = ConversationService(session_factory)
+    service.start(conversation_id="conv-resurrect", context=context, current_house_id=None)
+    service.close("conv-resurrect")
+    assert service.get("conv-resurrect").is_closed is True
+
+    state = _make_state("conv-resurrect")
+    with pytest.raises(AgentSessionError) as exc:
+        service.sync_from_state(state, waiting_confirm=False)
+    assert exc.value.code == AgentSessionErrorCode.CONVERSATION_CLOSED.value
+    # 关闭状态保持稳定。
+    assert service.get("conv-resurrect").is_closed is True
+
+
+def test_close_is_idempotent(session_factory):
+    """重复 close 幂等：第二次 close 命中 0 行也不报错。"""
+    from types import SimpleNamespace
+
+    from property_agent.agent.application.conversation_service import (
+        ConversationService,
+    )
+
+    actor_id = uuid4()
+    community_id = uuid4()
+    context = SimpleNamespace(actor_id=actor_id, community_id=community_id, house_ids=frozenset())
+    service = ConversationService(session_factory)
+    service.start(conversation_id="conv-close-idem", context=context, current_house_id=None)
+    service.close("conv-close-idem")
+    service.close("conv-close-idem")  # 幂等，不抛
+    assert service.get("conv-close-idem").is_closed is True
