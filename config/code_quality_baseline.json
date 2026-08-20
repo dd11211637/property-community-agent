@@ -4,7 +4,8 @@
     "src/property_agent/inspection/application/service.py:InspectionTaskService": 576,
     "src/property_agent/inspection/application/service.py:SecurityEventService": 455,
     "src/property_agent/inspection/infrastructure/repository.py:SqlAlchemyInspectionRepository": 436,
-    "src/property_agent/repair/application/service.py:WorkOrderService": 775
+    "src/property_agent/repair/application/service.py:WorkOrderService": 775,
+    "src/property_agent/agent/application/runner.py:AgentSessionRunner": 617
   },
   "functions": {
     "src/property_agent/agent/adapters/api/presentation.py:_generic_slot_prompt": 87,
@@ -33,8 +34,9 @@
     "src/property_agent/billing/infrastructure/orm_models.py": 526,
     "src/property_agent/billing/infrastructure/repositories.py": 979,
     "src/property_agent/inspection/application/service.py": 1114,
-    "src/property_agent/platform/container.py": 678,
+    "src/property_agent/platform/container.py": 687,
     "src/property_agent/platform/infrastructure/orm_models.py": 580,
-    "src/property_agent/repair/application/service.py": 823
+    "src/property_agent/repair/application/service.py": 823,
+    "src/property_agent/agent/application/runner.py": 754
   }
 }

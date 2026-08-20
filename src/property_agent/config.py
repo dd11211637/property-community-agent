@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     # 单 turn lease 时长：足够覆盖一次 LLM 调用，又短到过期后能快速抢占。
     agent_run_lease_seconds: int = 30
 
+    # ── OpenTelemetry 可观测性（P1 观测与流式） ──────────────────
+    # 不安装 opentelemetry 依赖时自动降级为进程内计数器 + NullTracer，不影响业务；
+    # 生产建议安装 ``opentelemetry-api``/``opentelemetry-sdk`` 并设好导出端点。
+    otel_enabled: bool = True
+    otel_service_name: str = "property-agent"
+
     def validate_runtime_security(self) -> None:
         """Reject development credentials when the production profile is selected."""
         if self.env.strip().lower() != "production":

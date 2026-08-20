@@ -358,6 +358,7 @@ def build_billing_service(approval_service: ApprovalService) -> BillingService:
     Billing tables, audit and idempotency rows share the request transaction on
     the unified application database.
     """
+
     def uow_factory(transaction: Any) -> SqlAlchemyBillingUnitOfWork:
         return SqlAlchemyBillingUnitOfWork(transaction, approval_service)
 
@@ -370,6 +371,7 @@ def build_consultation_service(approval_service: ApprovalService) -> Consultatio
     Persists the consultation lifecycle, idempotency record and audit event in
     the same request transaction. The service is stateless and stores no session.
     """
+
     def uow_factory(transaction: Any) -> SqlAlchemyBillingUnitOfWork:
         return SqlAlchemyBillingUnitOfWork(transaction, approval_service)
 
@@ -408,6 +410,10 @@ def build_agent_runner(
 ) -> AgentSessionRunner:
     """Assemble the production agent session runner (PRD §6.5).
 
+    P1 观测与流式：注入 ``AgentObservability``（4 关键指标 + ``agent.turn`` root
+    span）。未安装 opentelemetry 时自动降级为进程内计数器 + NullTracer，不影响
+    正确性底座。
+
     Wires the compiled agent graph with the real business services already on
     ``app.state`` (repair / announcement / billing / inspection), a persistent
     ``SqlAlchemyCheckpointer`` so pending-confirmation flows survive restarts,
@@ -425,6 +431,10 @@ def build_agent_runner(
       * Runner 在 turn 开始读取 checkpoint 版本作为 CAS 期望值，并在长 turn
         期间持有 run lease 防止同会话并发 lost-update。
     """
+    from property_agent.agent.observability import AgentObservability
+
+    observability = AgentObservability.build(settings)
+
     session_factory = get_session_factory()
     checkpointer = SqlAlchemyCheckpointer(session_factory)
     gateway = build_model_gateway()
@@ -459,6 +469,7 @@ def build_agent_runner(
         run_lease=run_lease_service,
         approval_service=approval_service,
         enforce_concurrency=settings.agent_concurrency_guard,
+        observability=observability,
     )
 
 
@@ -471,6 +482,7 @@ def _build_agent_tooling(
     checkpointer: SqlAlchemyCheckpointer,
 ) -> tuple:
     """拼装 agent graph 与四个业务工具集，返回 ``(graph, repair, ... )``。"""
+
     def context_provider(state: GraphState) -> RequestContext:
         return resolve_agent_request_context(state)
 
@@ -515,7 +527,14 @@ def _build_agent_tooling(
         read_tool_specs=read_tool_specs(),
         read_tools=controlled_read_tools,
     )
-    return graph, repair_tools, announcement_tools, billing_tools, inspection_tools, controlled_read_tools  # noqa: E501
+    return (
+        graph,
+        repair_tools,
+        announcement_tools,
+        billing_tools,
+        inspection_tools,
+        controlled_read_tools,
+    )  # noqa: E501
 
 
 def _make_confirmation_token_provider(

@@ -210,5 +210,82 @@ P0 合并后，针对审查报告 P1 中两项低风险、验收明确的安全�
 ### 验证（P1）
 
 * `pytest tests/agent/test_agent_memory.py tests/platform/test_runtime_config.py`：全绿。
+
+## P1 观测与流式（后续迭代）
+
+P0 合并后，在 `feat/p0-concurrency-and-approval-atomicity` 分支继续提交审查报告
+P1 中的「观测与流式」三项（OTel tracing + 4 关键指标、SSE 真流式、Agent eval
+PR gate）。三项均低风险、验收明确，可随 P0 分支一同合并（L 级架构改造按报告
+顺序延后到 P0 合并后）。
+
+### 1. OTel tracing + 4 关键指标
+
+新增 `agent/observability.py`，在 runner 的 `start` / `resume` / `stream_start` /
+`stream_resume` 四个入口各包一层 `agent.turn` root span，并精确递增 4 个验证指标：
+
+| 指标 | 触发路径 |
+| --- | --- |
+| `agent_conversation_busy_total` | 同会话并发被拒（`AgentSessionError(CONVERSATION_BUSY)` / 409） |
+| `agent_checkpoint_conflict_total` | checkpoint CAS 命中 stale 版本（`CheckpointVersionConflict`） |
+| `agent_stale_fence_rejected_total` | 旧 worker 凭旧 fence 的业务写被 fencing 拒绝（`StaleAgentRunError` / 409） |
+| `agent_approval_rollback_total` | 已确认（审批已被业务 UoW 消费）却因后续业务失败整体回滚 |
+
+**不记录 PII**：span 只带 `conversation_id` / `run_id` / `lease.fence` /
+`checkpoint.expected_version` / `confirmed` / `intent` / `degraded` / `runtime.version`
+等元数据，绝不携带 prompt / 住户聊天 / 地址 / 电话 / tool 参数 / 业务结果。
+
+**可选依赖 + 优雅降级**：`opentelemetry-api` / `opentelemetry-sdk` 为
+`[otel]` 可选依赖组。`AgentObservability.build(settings)` 在 `otel_enabled=False`
+或 SDK 未安装时自动降级为进程内计数器（`InMemoryCounter`）+ `NullTracer`
+（`degraded=True`），正确性底座完全不受影响，本地 / CI（SQLite）亦可断言指标递增。
+
+### 2. SSE 真流式
+
+原 SSE 接口是「graph 跑完 → 回放 `__turn__` 事件」，首事件延迟等于整轮耗时。
+改为**真流式**：
+
+* `graph_core._run` 改造为生成器，逐节点 yield
+  `("node_enter"|"node_exit"|"interrupt"|"__final__", payload)`；非流式
+  `invoke` / `resume` 仍消费该生成器取 `__final__`，语义不变（且修复了中断路径
+  原本误把 turn 标记为 `done`、丢失 `confirmation` 的 bug）。
+* runner 新增 `stream_start` / `stream_resume`：先 yield `("run_started", ...)`
+  （graph 完成前即下发，降低 time-to-first-event），再按节点生命周期 yield
+  `("tool_started"|"tool_finished", ...)`，最后在 `__final__` 处 `_finalize` 并
+  yield `("__turn__", turn)` 由 API 层展开为 intent / message / confirmation /
+  facts / done。
+* API 层 `send_message_stream` 直接透传 `run_started` / `tool_started` /
+  `tool_finished`，并把 `__turn__` 展开为既有 SSE 子事件序列。
+
+### 3. Agent eval PR gate
+
+`testing/agent_harness.py` 是基于确定性场景工具 + 生产 planner/guard/runtime
+契约的离线评测台，覆盖 controlled-read 单步 / 轨迹 / 安全用例。任一用例失败即
+返回 exit 1。在 `quality.yml` 的 `backend` job 末尾新增步骤，PR / push 时运行
+`tests/agent/data/controlled_read_cases.json`，失败则阻断合并。
+
+### 关联代码（P1 观测与流式）
+
+| 组件 | 路径 |
+| --- | --- |
+| 观测模块 | `agent/observability.py`（`AgentObservability`、`Metrics`、4 指标、root span、降级） |
+| 配置 | `config.py`（`otel_enabled`、`otel_service_name`） |
+| 可选依赖 | `pyproject.toml`（`[otel]` 组） |
+| 图内核流式 | `agent/graph_core.py`（`_run` 生成器、`_emit_finish` 透传 interrupt） |
+| Runner 接入 | `agent/application/runner.py`（`stream_start` / `stream_resume` / `_plan_start` / `_plan_resume` / `_TurnPlan` / observability 注入） |
+| API 透传 | `agent/adapters/api/router.py`（`send_message_stream`） |
+| 装配 | `platform/container.py`（`AgentObservability.build(settings)` 注入 runner） |
+| CI gate | `.github/workflows/quality.yml`（`backend` job 末尾 eval 步骤） |
+| 测试 | `tests/agent/test_p1_observability.py`（4 指标递增 + span 无 PII + 图流式）、`tests/agent/test_agent_api.py::test_sse_stream_emits_run_started_first_then_node_lifecycle` |
+
+### 验证（P1 观测与流式）
+
+* `pytest tests/agent/test_p1_observability.py tests/agent/test_agent_api.py`：全绿
+  （4 指标在正确错误路径精确递增、root span 无 PII、`invoke_stream` 逐节点 yield
+  生命周期、`run_started` 为 SSE 首事件且早于 intent/done）。
+* `pytest tests/agent/` + 全量（非 postgres/performance）：全绿。
+* `ruff check` / `scripts/check_code_structure.py`：通过（runner 因 P1 流式新增
+  方法，已在 `config/code_quality_baseline.json` 登记历史债务）。
+* `python testing/agent_harness.py tests/agent/data/controlled_read_cases.json`：
+  exit 0（确定性 eval gate 本地通过）。
 * 全量 `pytest`：通过（PG 用例本地 skip，CI 在 PostgreSQL 16 上运行）。
 * `ruff check` / `ruff format --check` / `scripts/check_code_structure.py`：全部通过。

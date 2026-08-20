@@ -29,6 +29,7 @@ from property_agent.agent.application.conversation_service import (
     ConversationService,
     ConversationSnapshot,
 )
+from property_agent.agent.application.errors import AgentSessionError, AgentSessionErrorCode
 from property_agent.agent.application.recovery import AgentRecoveryService
 from property_agent.agent.application.runner_signals import (
     ContinuationState as _ContinuationState,
@@ -65,7 +66,9 @@ from property_agent.agent.application.turn_guard import (
     release_turn_lease,
 )
 from property_agent.agent.graph_core import CompiledGraph
-from property_agent.agent.infrastructure.run_lease import Lease
+from property_agent.agent.infrastructure.checkpointer import CheckpointVersionConflict
+from property_agent.agent.infrastructure.run_lease import Lease, StaleAgentRunError
+from property_agent.agent.observability import AgentObservability
 from property_agent.agent.state import GraphState
 
 logger = getLogger(__name__)
@@ -120,6 +123,18 @@ class AgentTurn:
         return ""
 
 
+@dataclass
+class _TurnPlan:
+    """一轮装配结果，供 ``start`` / ``stream_start``（以及 resume 变体）共用。"""
+
+    lease: Lease | None
+    ctx: AgentContext
+    state: GraphState
+    conversation: Any
+    expected_version: int | None
+    repair_followup_message: str | None
+
+
 class AgentSessionRunner:
     def __init__(
         self,
@@ -133,6 +148,7 @@ class AgentSessionRunner:
         run_lease: Any | None = None,
         approval_service: Any | None = None,
         enforce_concurrency: bool = True,
+        observability: AgentObservability | None = None,
     ) -> None:
         self._graph = graph
         self._conversations = conversations
@@ -144,6 +160,8 @@ class AgentSessionRunner:
         self._approval_service = approval_service
         # P0 并发护栏总开关：关闭时不做 lease/CAS（兼容未升级库或回滚场景）。
         self._enforce = enforce_concurrency
+        # P1 观测与流式：4 关键指标 + agent.turn root span（缺省进程内实现）。
+        self._observability = observability or AgentObservability.in_memory()
 
     def start(
         self,
@@ -154,77 +172,194 @@ class AgentSessionRunner:
         house_id: UUID | None = None,
         slots: dict[str, Any] | None = None,
     ) -> AgentTurn:
+        plan = None
+        try:
+            plan = self._plan_start(
+                conversation_id=conversation_id,
+                context=context,
+                user_text=user_text,
+                house_id=house_id,
+                slots=slots,
+            )
+            if plan.repair_followup_message:
+                return self._return_done(plan.ctx, plan.state, conversation_id, user_text)
+            with self._observability.observe_turn(
+                conversation_id=conversation_id,
+                run_id=self._lease_run_id(plan),
+                fence=self._lease_fence(plan),
+                expected_version=plan.expected_version,
+            ) as span:
+                result = self._graph.invoke(
+                    plan.state,
+                    thread_id=conversation_id,
+                    expected_version=plan.expected_version,
+                )
+                turn = self._finalize(result)
+                self._persist_turn(plan.ctx, turn, user_text)
+                span.set_attribute("agent.intent", turn.state.intent)
+                span.set_attribute("agent.degraded", self._observability.degraded)
+                return turn
+        except AgentSessionError as exc:
+            # P1 观测：同会话并发被拒 → conversation_busy 指标。
+            if exc.code == AgentSessionErrorCode.CONVERSATION_BUSY:
+                self._observability.metrics.conversation_busy.inc()
+            raise
+        except CheckpointVersionConflict:
+            # P1 观测：checkpoint CAS 命中 stale 版本。
+            self._observability.metrics.checkpoint_conflict.inc()
+            raise
+        except StaleAgentRunError:
+            # P1 观测：旧 worker 凭旧 fence 的业务写被 fencing 拒绝。
+            self._observability.metrics.stale_fence_rejected.inc()
+            raise
+        finally:
+            if plan is not None:
+                self._release_lease(conversation_id, plan.lease)
+
+    def stream_start(
+        self,
+        *,
+        conversation_id: str,
+        context: AgentContext,
+        user_text: str,
+        house_id: UUID | None = None,
+        slots: dict[str, Any] | None = None,
+    ):
+        """真流式发起一轮（P1 观测与流式）。
+
+        生成器：先 yield ``run_started``（graph 完成前即发出，降低 time-to-first-event），
+        再按图节点生命周期 yield ``tool_started`` / ``tool_finished``，最后 yield
+        ``("__turn__", AgentTurn)`` 由 API 层展开为 intent/message/confirmation/facts/done。
+        """
+        plan = None
+        try:
+            plan = self._plan_start(
+                conversation_id=conversation_id,
+                context=context,
+                user_text=user_text,
+                house_id=house_id,
+                slots=slots,
+            )
+            if plan.repair_followup_message:
+                turn = self._return_done(plan.ctx, plan.state, conversation_id, user_text)
+                yield ("run_started", {"conversation_id": conversation_id})
+                yield ("__turn__", turn)
+                return
+            yield ("run_started", {"conversation_id": conversation_id})
+            with self._observability.observe_turn(
+                conversation_id=conversation_id,
+                run_id=self._lease_run_id(plan),
+                fence=self._lease_fence(plan),
+                expected_version=plan.expected_version,
+            ) as span:
+                for kind, payload in self._graph.invoke_stream(
+                    plan.state,
+                    thread_id=conversation_id,
+                    expected_version=plan.expected_version,
+                ):
+                    if kind == "node_enter":
+                        yield ("tool_started", {"node": payload["node"]})
+                    elif kind == "node_exit":
+                        yield ("tool_finished", {"node": payload["node"]})
+                    elif kind == "__final__":
+                        turn = self._finalize(payload)
+                        self._persist_turn(plan.ctx, turn, user_text)
+                        span.set_attribute("agent.intent", turn.state.intent)
+                        span.set_attribute("agent.degraded", self._observability.degraded)
+                        yield ("__turn__", turn)
+                return
+        except AgentSessionError as exc:
+            if exc.code == AgentSessionErrorCode.CONVERSATION_BUSY:
+                self._observability.metrics.conversation_busy.inc()
+            raise
+        except CheckpointVersionConflict:
+            self._observability.metrics.checkpoint_conflict.inc()
+            raise
+        except StaleAgentRunError:
+            self._observability.metrics.stale_fence_rejected.inc()
+            raise
+        finally:
+            if plan is not None:
+                self._release_lease(conversation_id, plan.lease)
+
+    def _plan_start(
+        self,
+        *,
+        conversation_id: str,
+        context: AgentContext,
+        user_text: str,
+        house_id: UUID | None,
+        slots: dict[str, Any] | None,
+    ) -> "_TurnPlan":
         # P0-2: lease 必须在 turn 最外层获取——任何会修改 conversation 状态的
         # 操作（ConversationService.start、recovery.peek、confirmation_token_provider、
         # graph.invoke、sync_from_state）都必须处于 lease ownership 下。
         lease = self._acquire_lease(conversation_id, uuid4())
-        try:
-            ctx = self._activate_lease_context(context, lease)
-            conversation = self._conversations.start(
-                conversation_id=conversation_id,
-                context=ctx,
-                current_house_id=house_id,
-            )
-            current_house_id = house_id or conversation.current_house_id
-            previous = self._recovery.peek(conversation_id)
-            explicit_corrections = self._collect_explicit_corrections(user_text, previous)
-            roles = tuple(str(role) for role in getattr(ctx, "roles", ()))
-            inspection_override = _first_turn_inspection_signal(user_text, roles)
-            if inspection_override:
-                explicit_corrections.update(inspection_override)
-            inspection_action = _explicit_inspection_action(user_text)
-            active_draft = self._active_announcement_draft(previous)
-            has_active_draft = active_draft is not None
-            announcement_followup = resolve_announcement_followup(
-                user_text, has_active_draft=has_active_draft
-            )
-            announcement_action = (
-                announcement_followup.action.value if announcement_followup.action else None
-            )
-            continuation = self._build_continuation(
-                previous=previous,
-                current_house_id=current_house_id,
-                user_text=user_text,
-                explicit_corrections=explicit_corrections,
-            )
-            self._apply_inspection_followup(continuation, previous, user_text, inspection_action)
-            self._apply_announcement_followup(
-                continuation, previous, user_text, announcement_action, announcement_followup
-            )
-            repair_followup, repair_followup_message = _resolve_repair_followup(
-                previous, user_text, explicit_corrections
-            )
-            state = _build_initial_state(
-                conversation_id=conversation_id,
-                context=ctx,
-                current_house_id=current_house_id,
-                user_text=user_text,
-                slots=slots,
-                inspection_override=inspection_override,
-                explicit_corrections=explicit_corrections,
-                continuation=continuation,
-                roles=roles,
-                active_draft=active_draft,
-                announcement_followup=announcement_followup,
-                repair_followup=repair_followup,
-            )
-            state.add_message("user", user_text)
-            if repair_followup_message:
-                state.add_message("assistant", repair_followup_message)
-                return self._return_done(ctx, state, conversation_id, user_text)
-            # P0-3: expected_version 必须在成功 acquire lease 后读取，避免读到
-            # 被并发新 run 覆盖的版本导致不必要 stale CAS。
-            expected_version = self._turn_start_version(conversation_id)
-            # P0-5: heartbeat——graph.invoke 前续期一次，覆盖长 LLM turn。
-            self._heartbeat(lease)
-            result = self._graph.invoke(
-                state, thread_id=conversation_id, expected_version=expected_version
-            )
-            turn = self._finalize(result)
-            self._persist_turn(ctx, turn, user_text)
-            return turn
-        finally:
-            self._release_lease(conversation_id, lease)
+        ctx = self._activate_lease_context(context, lease)
+        conversation = self._conversations.start(
+            conversation_id=conversation_id,
+            context=ctx,
+            current_house_id=house_id,
+        )
+        current_house_id = house_id or conversation.current_house_id
+        previous = self._recovery.peek(conversation_id)
+        explicit_corrections = self._collect_explicit_corrections(user_text, previous)
+        roles = tuple(str(role) for role in getattr(ctx, "roles", ()))
+        inspection_override = _first_turn_inspection_signal(user_text, roles)
+        if inspection_override:
+            explicit_corrections.update(inspection_override)
+        inspection_action = _explicit_inspection_action(user_text)
+        active_draft = self._active_announcement_draft(previous)
+        has_active_draft = active_draft is not None
+        announcement_followup = resolve_announcement_followup(
+            user_text, has_active_draft=has_active_draft
+        )
+        announcement_action = (
+            announcement_followup.action.value if announcement_followup.action else None
+        )
+        continuation = self._build_continuation(
+            previous=previous,
+            current_house_id=current_house_id,
+            user_text=user_text,
+            explicit_corrections=explicit_corrections,
+        )
+        self._apply_inspection_followup(continuation, previous, user_text, inspection_action)
+        self._apply_announcement_followup(
+            continuation, previous, user_text, announcement_action, announcement_followup
+        )
+        repair_followup, repair_followup_message = _resolve_repair_followup(
+            previous, user_text, explicit_corrections
+        )
+        state = _build_initial_state(
+            conversation_id=conversation_id,
+            context=ctx,
+            current_house_id=current_house_id,
+            user_text=user_text,
+            slots=slots,
+            inspection_override=inspection_override,
+            explicit_corrections=explicit_corrections,
+            continuation=continuation,
+            roles=roles,
+            active_draft=active_draft,
+            announcement_followup=announcement_followup,
+            repair_followup=repair_followup,
+        )
+        state.add_message("user", user_text)
+        if repair_followup_message:
+            state.add_message("assistant", repair_followup_message)
+        # P0-3: expected_version 必须在成功 acquire lease 后读取，避免读到
+        # 被并发新 run 覆盖的版本导致不必要 stale CAS。
+        expected_version = self._turn_start_version(conversation_id)
+        # P0-5: heartbeat——graph.invoke 前续期一次，覆盖长 LLM turn。
+        self._heartbeat(lease)
+        return _TurnPlan(
+            lease=lease,
+            ctx=ctx,
+            state=state,
+            conversation=conversation,
+            expected_version=expected_version,
+            repair_followup_message=repair_followup_message,
+        )
 
     def _collect_explicit_corrections(
         self, user_text: str, previous: GraphState | None
@@ -279,6 +414,16 @@ class AgentSessionRunner:
     def _activate_lease_context(self, context: AgentContext, lease: Lease | None) -> AgentContext:
         """委托 turn_guard.activate_lease_context（P0-4 fencing 注入）。"""
         return activate_lease_context(context, lease)
+
+    @staticmethod
+    def _lease_run_id(plan: "_TurnPlan") -> Any | None:
+        """lease 可能为 None（_enforce=False 的测试/退化路径），安全取 run_id。"""
+        return plan.lease.run_id if plan.lease is not None else None
+
+    @staticmethod
+    def _lease_fence(plan: "_TurnPlan") -> int | None:
+        """lease 可能为 None（_enforce=False 的测试/退化路径），安全取 fence。"""
+        return plan.lease.fence if plan.lease is not None else None
 
     def _turn_start_version(self, thread_id: str) -> int | None:
         return read_turn_start_version(
@@ -417,37 +562,155 @@ class AgentSessionRunner:
         confirmation_token: str | None = None,
         action_hash: str | None = None,
     ) -> AgentTurn:
+        plan = None
+        token = confirmation_token
+        try:
+            plan, token = self._plan_resume(
+                conversation_id=conversation_id,
+                context=context,
+                confirmed=confirmed,
+                confirmation_token=confirmation_token,
+                action_hash=action_hash,
+            )
+            with self._observability.observe_turn(
+                conversation_id=conversation_id,
+                run_id=self._lease_run_id(plan),
+                fence=self._lease_fence(plan),
+                expected_version=plan.expected_version,
+                confirmed=confirmed,
+            ) as span:
+                result = self._graph.resume(
+                    conversation_id,
+                    {"confirmed": confirmed, "confirmation_token": token},
+                    state=plan.state,
+                    expected_version=plan.expected_version,
+                )
+                turn = self._finalize(result)
+                action_text = "确认执行操作" if confirmed else "取消待确认操作"
+                self._persist_turn(plan.ctx, turn, action_text)
+                span.set_attribute("agent.intent", turn.state.intent)
+                span.set_attribute("agent.degraded", self._observability.degraded)
+                return turn
+        except AgentSessionError as exc:
+            if exc.code == AgentSessionErrorCode.CONVERSATION_BUSY:
+                self._observability.metrics.conversation_busy.inc()
+            raise
+        except CheckpointVersionConflict:
+            self._observability.metrics.checkpoint_conflict.inc()
+            raise
+        except StaleAgentRunError:
+            self._observability.metrics.stale_fence_rejected.inc()
+            raise
+        except Exception:
+            # P1 观测：已确认（审批已被业务 UoW 消费）却因后续业务失败整体回滚。
+            if confirmed:
+                self._observability.metrics.approval_rollback.inc()
+            raise
+        finally:
+            if plan is not None:
+                self._release_lease(conversation_id, plan.lease)
+
+    def stream_resume(
+        self,
+        *,
+        conversation_id: str,
+        context: AgentContext,
+        confirmed: bool,
+        confirmation_token: str | None = None,
+        action_hash: str | None = None,
+    ):
+        """真流式恢复一轮（P1 观测与流式）。语义同 ``stream_start``。"""
+        plan = None
+        token = confirmation_token
+        try:
+            plan, token = self._plan_resume(
+                conversation_id=conversation_id,
+                context=context,
+                confirmed=confirmed,
+                confirmation_token=confirmation_token,
+                action_hash=action_hash,
+            )
+            yield (
+                "run_started",
+                {"conversation_id": conversation_id, "confirmed": confirmed},
+            )
+            with self._observability.observe_turn(
+                conversation_id=conversation_id,
+                run_id=self._lease_run_id(plan),
+                fence=self._lease_fence(plan),
+                expected_version=plan.expected_version,
+                confirmed=confirmed,
+            ) as span:
+                for kind, payload in self._graph.resume_stream(
+                    conversation_id,
+                    {"confirmed": confirmed, "confirmation_token": token},
+                    state=plan.state,
+                    expected_version=plan.expected_version,
+                ):
+                    if kind == "node_enter":
+                        yield ("tool_started", {"node": payload["node"]})
+                    elif kind == "node_exit":
+                        yield ("tool_finished", {"node": payload["node"]})
+                    elif kind == "__final__":
+                        turn = self._finalize(payload)
+                        action_text = "确认执行操作" if confirmed else "取消待确认操作"
+                        self._persist_turn(plan.ctx, turn, action_text)
+                        span.set_attribute("agent.intent", turn.state.intent)
+                        span.set_attribute("agent.degraded", self._observability.degraded)
+                        yield ("__turn__", turn)
+                return
+        except AgentSessionError as exc:
+            if exc.code == AgentSessionErrorCode.CONVERSATION_BUSY:
+                self._observability.metrics.conversation_busy.inc()
+            raise
+        except CheckpointVersionConflict:
+            self._observability.metrics.checkpoint_conflict.inc()
+            raise
+        except StaleAgentRunError:
+            self._observability.metrics.stale_fence_rejected.inc()
+            raise
+        except Exception:
+            if confirmed:
+                self._observability.metrics.approval_rollback.inc()
+            raise
+        finally:
+            if plan is not None:
+                self._release_lease(conversation_id, plan.lease)
+
+    def _plan_resume(
+        self,
+        *,
+        conversation_id: str,
+        context: AgentContext,
+        confirmed: bool,
+        confirmation_token: str | None,
+        action_hash: str | None,
+    ) -> tuple["_TurnPlan", str | None]:
         # P0-2: lease 必须在最外层——restore、confirmation_token_provider（写
         # token + create_pending + approve）、graph.resume 都会修改 conversation
         # 状态，必须处于 lease ownership 下。
         lease = self._acquire_lease(conversation_id, uuid4())
-        try:
-            ctx = self._activate_lease_context(context, lease)
-            restored = self._recovery.restore(
-                conversation_id, ctx, expected_action_hash=action_hash
-            )
-            # HTTP 层不接受客户端令牌。生产装配存在 provider 时始终覆盖调用方值，
-            # 令牌只能由服务端根据恢复后的可信待确认参数签发。
-            if confirmed and self._confirmation_token_provider is not None:
-                confirmation_token = self._confirmation_token_provider(restored.state)
-            if confirmed and not confirmation_token:
-                raise RuntimeError("confirmation token provider is not configured")
-            # P0-3: expected_version 在 acquire lease 后读取。
-            expected_version = self._turn_start_version(conversation_id)
-            # P0-5: heartbeat——graph.resume 前续期一次。
-            self._heartbeat(lease)
-            result = self._graph.resume(
-                conversation_id,
-                {"confirmed": confirmed, "confirmation_token": confirmation_token},
-                state=restored.state,
-                expected_version=expected_version,
-            )
-            turn = self._finalize(result)
-            action_text = "确认执行操作" if confirmed else "取消待确认操作"
-            self._persist_turn(ctx, turn, action_text)
-            return turn
-        finally:
-            self._release_lease(conversation_id, lease)
+        ctx = self._activate_lease_context(context, lease)
+        restored = self._recovery.restore(conversation_id, ctx, expected_action_hash=action_hash)
+        # HTTP 层不接受客户端令牌。生产装配存在 provider 时始终覆盖调用方值，
+        # 令牌只能由服务端根据恢复后的可信待确认参数签发。
+        if confirmed and self._confirmation_token_provider is not None:
+            confirmation_token = self._confirmation_token_provider(restored.state)
+        if confirmed and not confirmation_token:
+            raise RuntimeError("confirmation token provider is not configured")
+        # P0-3: expected_version 在 acquire lease 后读取。
+        expected_version = self._turn_start_version(conversation_id)
+        # P0-5: heartbeat——graph.resume 前续期一次。
+        self._heartbeat(lease)
+        plan = _TurnPlan(
+            lease=lease,
+            ctx=ctx,
+            state=restored.state,
+            conversation=None,
+            expected_version=expected_version,
+            repair_followup_message=None,
+        )
+        return plan, confirmation_token
 
     def status(
         self, *, conversation_id: str, context: AgentContext

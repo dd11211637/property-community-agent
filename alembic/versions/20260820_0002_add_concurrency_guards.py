@@ -19,7 +19,6 @@ P0 正确性底座（deep-research-report.md §准备与并发控制修复）：
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
 from alembic import op
 

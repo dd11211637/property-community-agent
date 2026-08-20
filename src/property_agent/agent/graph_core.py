@@ -114,7 +114,11 @@ class CompiledGraph:
         expected_version: int | None = None,
     ) -> dict[str, Any]:
         thread_id = thread_id or state.conversation_id or str(uuid4())
-        return self._run(self._g._entry, state, thread_id, expected_version)
+        final: dict[str, Any] | None = None
+        for kind, payload in self._run(self._g._entry, state, thread_id, expected_version):
+            if kind == "__final__":
+                final = payload
+        return final if final is not None else {}
 
     def resume(
         self,
@@ -141,6 +145,46 @@ class CompiledGraph:
         if state is None:
             raise RuntimeError(f"No checkpoint found for thread {thread_id}.")
         state._resume = resume_value
+        final: dict[str, Any] | None = None
+        for kind, payload in self._run(
+            state._interrupt_node or self._g._entry, state, thread_id, expected_version
+        ):
+            if kind == "__final__":
+                final = payload
+        return final if final is not None else {}
+
+    def invoke_stream(
+        self,
+        state: GraphState,
+        *,
+        thread_id: str | None = None,
+        expected_version: int | None = None,
+    ) -> Any:
+        """流式执行入口（P1 真流式 SSE）。
+
+        返回生成器，逐节点 yield 生命周期事件 ``("node_enter"|"node_exit"|
+        "interrupt"|"__final__", payload)``；调用方在 ``__final__`` 处拿到
+        ``dict[str, Any]`` 结果并收尾。语义与 ``invoke`` 完全一致，只是逐步发声。
+        """
+        thread_id = thread_id or state.conversation_id or str(uuid4())
+        return self._run(self._g._entry, state, thread_id, expected_version)
+
+    def resume_stream(
+        self,
+        thread_id: str,
+        resume_value: Any,
+        *,
+        state: GraphState | None = None,
+        expected_version: int | None = None,
+    ) -> Any:
+        """流式恢复入口（P1 真流式 SSE）。"""
+        if state is None:
+            if self._cp is None:
+                raise RuntimeError("No checkpointer configured; cannot resume.")
+            state = self._cp.load(thread_id)
+        if state is None:
+            raise RuntimeError(f"No checkpoint found for thread {thread_id}.")
+        state._resume = resume_value
         return self._run(
             state._interrupt_node or self._g._entry, state, thread_id, expected_version
         )
@@ -152,46 +196,65 @@ class CompiledGraph:
         state: GraphState,
         thread_id: str,
         expected_version: int | None = None,
-    ) -> dict[str, Any]:
+    ):
+        """逐步执行图，yield 生命周期事件，最终 yield ``("__final__", dict)``。
+
+        非流式 ``invoke``/``resume`` 消费本生成器并取 ``__final__`` 结果，语义不变。
+        """
         current = start
         while current is not None:
             node = self._g._nodes.get(current)
             if node is None:
                 break
+            yield ("node_enter", {"node": current})
             try:
                 state = node(state)
             except Interrupt as intr:
+                # 中断：保留 _interrupt_node 供 resume 定位，并把真实 payload 透传
+                # 给 __final__，使 turn 被正确标记为"等待确认"（而非误判为 done）。
                 state._interrupt_node = current
-                if self._cp is not None:
-                    self._cp.save(thread_id, state, expected_version=expected_version)
-                return {
-                    "state": state,
-                    "interrupt": intr.payload,
-                    "thread_id": thread_id,
-                    "done": False,
-                }
+                yield ("interrupt", intr.payload)
+                yield from self._emit_finish(
+                    state, thread_id, expected_version, interrupt=intr.payload, done=False
+                )
+                return
 
+            yield ("node_exit", {"node": current})
             if current in self._g._conditional:
                 nxt = self._g._conditional[current](state)
                 if nxt is None or nxt == self._g._finish:
-                    return self._finish(state, thread_id, expected_version)
+                    yield from self._emit_finish(state, thread_id, expected_version)
+                    return
                 current = nxt
             elif current in self._g._edges:
                 current = self._g._edges[current]
                 if current == self._g._finish:
-                    return self._finish(state, thread_id, expected_version)
+                    yield from self._emit_finish(state, thread_id, expected_version)
+                    return
             else:
                 if current == self._g._finish:
-                    return self._finish(state, thread_id, expected_version)
+                    yield from self._emit_finish(state, thread_id, expected_version)
+                    return
                 break
-        return self._finish(state, thread_id, expected_version)
+        yield from self._emit_finish(state, thread_id, expected_version)
 
-    def _finish(
-        self, state: GraphState, thread_id: str, expected_version: int | None = None
-    ) -> dict[str, Any]:
-        # 本轮结束即清理恢复态，避免下一轮从检查点恢复时被误判为"已确认"
-        state._resume = None
-        state._interrupt_node = None
+    def _emit_finish(
+        self,
+        state: GraphState,
+        thread_id: str,
+        expected_version: int | None = None,
+        *,
+        interrupt: Any | None = None,
+        done: bool = True,
+    ):
+        if interrupt is None:
+            # 正常结束：清理恢复态，避免下一轮从检查点恢复时被误判为"已确认"
+            state._resume = None
+            state._interrupt_node = None
+        # 中断路径保留 _interrupt_node 供 resume 定位（_resume 由 resume 调用方设置）。
         if self._cp is not None:
             self._cp.save(thread_id, state, expected_version=expected_version)
-        return {"state": state, "interrupt": None, "thread_id": thread_id, "done": True}
+        yield (
+            "__final__",
+            {"state": state, "interrupt": interrupt, "thread_id": thread_id, "done": done},
+        )

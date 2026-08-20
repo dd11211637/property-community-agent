@@ -26,6 +26,8 @@ jobs:
       - name: Verify committed OpenAPI contract is current
         run: python scripts/export_openapi.py && git diff --exit-code -- docs/api/openapi.json
       - run: python -m pytest -rs
+      - name: Deterministic agent eval gate (P1)
+        run: python testing/agent_harness.py tests/agent/data/controlled_read_cases.json
 
   postgres:
     runs-on: ubuntu-latest

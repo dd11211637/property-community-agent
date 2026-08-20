@@ -27,6 +27,12 @@ dev = [
     "pytest-cov>=5,<7",
     "ruff>=0.8,<1",
 ]
+# 可观测性（P1 观测与流式）：生产可 ``pip install ".[otel]"`` 启用真实 OTel 导出；
+# 不安装时运行时自动降级为进程内计数器 + NullTracer，不影响正确性底座。
+otel = [
+    "opentelemetry-api>=1.20,<2",
+    "opentelemetry-sdk>=1.20,<2",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/property_agent"]
