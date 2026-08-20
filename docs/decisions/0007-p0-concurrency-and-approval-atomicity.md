@@ -168,3 +168,47 @@ ruff / structure / alembic 全通过。
 * `pytest tests/test_billing_production_ports.py tests/test_repair_production_ports.py
   tests/test_announcement_production_ports.py`：所有既有生产端口测试通过。
 * `ruff check` 已改文件 / 测试：全部通过。
+
+## P1 安全加固（后续迭代）
+
+P0 合并后，针对审查报告 P1 中两项低风险、验收明确的安全加固，在
+`feat/p0-concurrency-and-approval-atomicity` 分支继续提交：
+
+1. **Memory 真 CAS**（审查报告 P1「Memory 真 CAS」）。
+   `agent/application/memory_service.py` 的 `update_memory` / `delete_memory`
+   原先是「先 SELECT 读 `row.version`，再用 Python 比较 `!= expected_version`，
+   然后 ORM 赋值 `version += 1`」——属于读-改-写三段，两个并发事务可能都读到
+   version=N 并各自写 version=N+1，产生 lost update。
+   改为单条原子语句：
+
+   ```sql
+   UPDATE agent_memories
+   SET content = :content, version = version + 1, updated_at = now()
+   WHERE id = :id AND actor_id = :actor AND community_id = :community
+     AND deleted_at IS NULL AND version = :expected
+   RETURNING version;
+   ```
+
+   命中返回新 version；未命中（被别的请求先改）返回 0 行 → 抛
+   `VERSION_CONFLICT`。ownership + 未删除过滤一并保留。
+
+2. **配置安全验证**（审查报告 P1「配置安全验证」）。
+   `config.py` 的 `validate_runtime_security()` 生产分支新增三条硬性约束：
+   `agent_concurrency_guard` 必须开启、`agent_run_lease_seconds > 0`、
+   `agent_approval_ttl_minutes > 0`。任何一条不满足，生产启动直接抛
+   `RuntimeError("Unsafe production configuration: ...")`，杜绝有人把 P0
+   正确性底座（concurrency guard / lease / approval 窗口）悄悄关掉或置为非法值。
+
+### 关联代码（P1）
+
+| 组件 | 路径 |
+| --- | --- |
+| Memory CAS | `agent/application/memory_service.py`（`_apply_versioned_update`、`update_memory`、`delete_memory`） |
+| 配置校验 | `config.py`（`validate_runtime_security`） |
+| 测试 | `tests/agent/test_agent_memory.py`（update/delete stale version 冲突）、`tests/platform/test_runtime_config.py`（生产禁用 guard / 非正 lease·ttl 拒绝）、`tests/test_p0_postgres_concurrency.py::test_memory_double_writer_cas`（PG 双写严格 1 ok + 1 conflict） |
+
+### 验证（P1）
+
+* `pytest tests/agent/test_agent_memory.py tests/platform/test_runtime_config.py`：全绿。
+* 全量 `pytest`：通过（PG 用例本地 skip，CI 在 PostgreSQL 16 上运行）。
+* `ruff check` / `ruff format --check` / `scripts/check_code_structure.py`：全部通过。

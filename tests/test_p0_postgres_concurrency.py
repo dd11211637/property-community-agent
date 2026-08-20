@@ -22,7 +22,7 @@ from __future__ import annotations
 import os
 import threading
 import time
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -32,6 +32,7 @@ from property_agent.agent.application.errors import (
     AgentSessionError,
     AgentSessionErrorCode,
 )
+from property_agent.agent.application.memory_service import AgentMemoryService
 from property_agent.agent.infrastructure.checkpointer import (
     CheckpointVersionConflict,
     SqlAlchemyCheckpointer,
@@ -48,6 +49,7 @@ from property_agent.platform.application.approval_service import (
     ApprovalStatus,
 )
 from property_agent.platform.application.hashing import canonical_hash
+from property_agent.platform.errors import BusinessError
 from property_agent.platform.infrastructure.orm_models import Base
 
 POSTGRES_URL = os.getenv("TEST_POSTGRES_URL")
@@ -491,3 +493,52 @@ def test_assert_run_fence_holds_row_lock(run_lease, session_factory):
         session_a.close()
     # A 释放后能 acquire
     run_lease.release("pg-fence-lock", lease.run_id)
+
+
+# ── 12. Memory 真 CAS：双 writer 严格 1 success + 1 conflict ──
+
+
+def test_memory_double_writer_cas(session_factory):
+    """两个线程并发更新同一条 memory：原子 UPDATE...WHERE version=expected
+    保证严格一个成功、一个 VERSION_CONFLICT。SQLite 单连接无法证明真正的并发
+    丢失更新，必须在 PostgreSQL 上验证（审查报告 P1：Memory 真 CAS）。"""
+    from types import SimpleNamespace
+
+    actor_id = uuid4()
+    community_id = uuid4()
+    house_id = uuid4()
+    context = SimpleNamespace(
+        actor_id=actor_id, community_id=community_id, house_ids=frozenset({house_id})
+    )
+
+    with session_factory() as seed:
+        memory = AgentMemoryService(seed).create_memory(
+            context, memory_type="PREFERENCE", content="原始偏好", house_id=house_id
+        )
+    memory_id = UUID(memory["id"])
+
+    results: list[str] = []
+    barrier = threading.Barrier(2)
+
+    def worker(label: str) -> None:
+        barrier.wait()
+        try:
+            with session_factory() as session:
+                AgentMemoryService(session).update_memory(
+                    memory_id, context, content=f"更新-{label}", expected_version=1
+                )
+            results.append(f"{label}:ok")
+        except BusinessError as exc:
+            results.append(f"{label}:{exc.code}")
+
+    t1 = threading.Thread(target=worker, args=("a",))
+    t2 = threading.Thread(target=worker, args=("b",))
+    t1.start()
+    t2.start()
+    t1.join(timeout=10)
+    t2.join(timeout=10)
+
+    assert results.count("ok") == 1, f"exactly one writer should win, got {results}"
+    assert results.count("VERSION_CONFLICT") == 1, (
+        f"exactly one should conflict, got {results}"
+    )

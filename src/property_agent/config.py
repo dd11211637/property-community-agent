@@ -103,6 +103,16 @@ class Settings(BaseSettings):
         if self.slow_request_threshold_ms <= 0:
             problems.append("SLOW_REQUEST_THRESHOLD_MS must be positive")
 
+        # ── Agent concurrency guards（P0 正确性底座，禁止在生产关闭）──
+        # 关闭 guard 会回退到「单凭 confirmation token」旧行为，导致同会话
+        # 并发 lost-update；lease / approval 窗口非正也会让抢占与审批失效。
+        if not self.agent_concurrency_guard:
+            problems.append("AGENT_CONCURRENCY_GUARD must stay enabled in production")
+        if self.agent_run_lease_seconds <= 0:
+            problems.append("AGENT_RUN_LEASE_SECONDS must be positive")
+        if self.agent_approval_ttl_minutes <= 0:
+            problems.append("AGENT_APPROVAL_TTL_MINUTES must be positive")
+
         if problems:
             raise RuntimeError("Unsafe production configuration: " + "; ".join(problems))
 

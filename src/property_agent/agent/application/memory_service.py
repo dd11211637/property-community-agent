@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Protocol
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from property_agent.agent.infrastructure.models import (
@@ -186,11 +186,12 @@ class AgentMemoryService:
         expected_version: int,
     ) -> dict:
         row = self._owned_memory(memory_id, context)
-        if row.version != expected_version:
-            raise BusinessError("VERSION_CONFLICT", "Memory was modified by another request.", 409)
         self._validate_memory(row.memory_type, content, row.house_id, context)
-        row.content = content.strip()
-        row.version += 1
+        new_version = self._apply_versioned_update(
+            memory_id, context, expected_version, content=content.strip()
+        )
+        if new_version is None:
+            raise BusinessError("VERSION_CONFLICT", "Memory was modified by another request.", 409)
         self._session.commit()
         self._session.refresh(row)
         return _memory_data(row)
@@ -199,12 +200,41 @@ class AgentMemoryService:
         self, memory_id: UUID, context: MemoryContext, *, expected_version: int
     ) -> dict:
         row = self._owned_memory(memory_id, context)
-        if row.version != expected_version:
+        new_version = self._apply_versioned_update(
+            memory_id, context, expected_version, deleted_at=_now()
+        )
+        if new_version is None:
             raise BusinessError("VERSION_CONFLICT", "Memory was modified by another request.", 409)
-        row.deleted_at = _now()
-        row.version += 1
         self._session.commit()
-        return {"id": str(row.id), "deleted": True, "version": row.version}
+        return {"id": str(row.id), "deleted": True, "version": new_version}
+
+    def _apply_versioned_update(
+        self,
+        memory_id: UUID,
+        context: MemoryContext,
+        expected_version: int,
+        **values: object,
+    ) -> int | None:
+        """原子乐观锁 UPDATE：ownership + 未删除 + version 全在一条语句内守卫。
+
+        与 checkpoint CAS 同一思路：version 自增发生在同一条 UPDATE 内部，
+        两个并发事务不可能同时命中 ``version=:expected``，因此不会产生 lost
+        update。命中返回新 version；未命中（被别的请求先改）返回 ``None``，
+        由调用方抛 ``VERSION_CONFLICT``。
+        """
+        result = self._session.execute(
+            update(AgentMemoryModel)
+            .where(
+                AgentMemoryModel.id == memory_id,
+                AgentMemoryModel.actor_id == context.actor_id,
+                AgentMemoryModel.community_id == context.community_id,
+                AgentMemoryModel.deleted_at.is_(None),
+                AgentMemoryModel.version == expected_version,
+            )
+            .values(version=AgentMemoryModel.version + 1, updated_at=_now(), **values)
+            .returning(AgentMemoryModel.version)
+        )
+        return result.scalar_one_or_none()
 
     def _owned_conversation(
         self, conversation_id: str, context: MemoryContext
