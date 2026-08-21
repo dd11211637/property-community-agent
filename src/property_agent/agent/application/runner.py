@@ -19,11 +19,6 @@ from logging import getLogger
 from typing import Any
 from uuid import UUID, uuid4
 
-from property_agent.agent.announcement_actions import resolve_announcement_followup
-from property_agent.agent.announcement_time import (
-    resolve_announcement_time_slots,
-    trusted_business_date,
-)
 from property_agent.agent.application.conversation_service import (
     AgentContext,
     ConversationService,
@@ -32,32 +27,9 @@ from property_agent.agent.application.conversation_service import (
 from property_agent.agent.application.errors import AgentSessionError, AgentSessionErrorCode
 from property_agent.agent.application.recovery import AgentRecoveryService
 from property_agent.agent.application.runner_signals import (
-    ContinuationState as _ContinuationState,
+    first_turn_inspection_signal as _first_turn_inspection_signal,  # noqa: F401
 )
-from property_agent.agent.application.runner_signals import (
-    build_initial_state as _build_initial_state,
-)
-from property_agent.agent.application.runner_signals import (
-    explicit_inspection_action as _explicit_inspection_action,
-)
-from property_agent.agent.application.runner_signals import (
-    explicit_inspection_corrections as _explicit_inspection_corrections,
-)
-from property_agent.agent.application.runner_signals import (
-    explicit_repair_corrections as _explicit_repair_corrections,
-)
-from property_agent.agent.application.runner_signals import (
-    first_turn_inspection_signal as _first_turn_inspection_signal,
-)
-from property_agent.agent.application.runner_signals import (
-    inspection_group as _inspection_group,
-)
-from property_agent.agent.application.runner_signals import (
-    looks_contextual as _looks_contextual,
-)
-from property_agent.agent.application.runner_signals import (
-    resolve_repair_followup as _resolve_repair_followup,
-)
+from property_agent.agent.application.start_state import prepare_start_state
 from property_agent.agent.application.turn_guard import (
     acquire_turn_lease,
     activate_lease_context,
@@ -75,31 +47,6 @@ logger = getLogger(__name__)
 
 ConfirmationTokenProvider = Callable[[GraphState], str]
 TurnRecorder = Callable[[AgentContext, GraphState, str, str], None]
-
-_INSPECTION_SLOT_GROUPS = {
-    "task_query": {"statuses", "assigned_to_me", "limit", "task_id"},
-    "task_write": {
-        "task_id",
-        "expected_version",
-        "title",
-        "description",
-        "point",
-        "route_points",
-        "note",
-        "record_type",
-    },
-    "event_query": {"event_id", "statuses", "risk_levels", "assigned_to_me", "limit"},
-    "event_write": {
-        "event_id",
-        "expected_version",
-        "event_type",
-        "risk_level",
-        "location",
-        "description",
-        "note",
-        "task_id",
-    },
-}
 
 
 @dataclass(frozen=True)
@@ -311,50 +258,14 @@ class AgentSessionRunner:
         )
         current_house_id = house_id or conversation.current_house_id
         previous = self._recovery.peek(conversation_id)
-        explicit_corrections = self._collect_explicit_corrections(user_text, previous)
-        roles = tuple(str(role) for role in getattr(ctx, "roles", ()))
-        inspection_override = _first_turn_inspection_signal(user_text, roles)
-        if inspection_override:
-            explicit_corrections.update(inspection_override)
-        inspection_action = _explicit_inspection_action(user_text)
-        active_draft = self._active_announcement_draft(previous)
-        has_active_draft = active_draft is not None
-        announcement_followup = resolve_announcement_followup(
-            user_text, has_active_draft=has_active_draft
-        )
-        announcement_action = (
-            announcement_followup.action.value if announcement_followup.action else None
-        )
-        continuation = self._build_continuation(
-            previous=previous,
-            current_house_id=current_house_id,
-            user_text=user_text,
-            explicit_corrections=explicit_corrections,
-        )
-        self._apply_inspection_followup(continuation, previous, user_text, inspection_action)
-        self._apply_announcement_followup(
-            continuation, previous, user_text, announcement_action, announcement_followup
-        )
-        repair_followup, repair_followup_message = _resolve_repair_followup(
-            previous, user_text, explicit_corrections
-        )
-        state = _build_initial_state(
+        prepared = prepare_start_state(
             conversation_id=conversation_id,
             context=ctx,
             current_house_id=current_house_id,
+            previous=previous,
             user_text=user_text,
             slots=slots,
-            inspection_override=inspection_override,
-            explicit_corrections=explicit_corrections,
-            continuation=continuation,
-            roles=roles,
-            active_draft=active_draft,
-            announcement_followup=announcement_followup,
-            repair_followup=repair_followup,
         )
-        state.add_message("user", user_text)
-        if repair_followup_message:
-            state.add_message("assistant", repair_followup_message)
         # P0-3: expected_version 必须在成功 acquire lease 后读取，避免读到
         # 被并发新 run 覆盖的版本导致不必要 stale CAS。
         expected_version = self._turn_start_version(conversation_id)
@@ -365,30 +276,12 @@ class AgentSessionRunner:
         return _TurnPlan(
             lease=lease,
             ctx=ctx,
-            state=state,
+            state=prepared.state,
             conversation=conversation,
             expected_version=expected_version,
-            repair_followup_message=repair_followup_message,
+            repair_followup_message=prepared.repair_followup_message,
             heartbeat=heartbeat,
         )
-
-    def _collect_explicit_corrections(
-        self, user_text: str, previous: GraphState | None
-    ) -> dict[str, str]:
-        corrections: dict[str, str] = (
-            _explicit_repair_corrections(user_text)
-            if previous is not None and previous.intent == "REPAIR"
-            else {}
-        )
-        corrections.update(_explicit_inspection_corrections(user_text, previous))
-        return corrections
-
-    def _active_announcement_draft(self, previous: GraphState | None) -> dict[str, Any] | None:
-        if previous is None or previous.intent != "ANNOUNCEMENT":
-            return None
-        if not all(previous.slots.get(key) is not None for key in ("title", "body", "audience")):
-            return None
-        return {key: previous.slots[key] for key in ("title", "body", "audience")}
 
     def _return_done(
         self, context: AgentContext, state: GraphState, conversation_id: str, user_text: str
@@ -471,129 +364,6 @@ class AgentSessionRunner:
         return read_turn_start_version(
             self._checkpointer, enforce_concurrency=self._enforce, thread_id=thread_id
         )
-
-    @staticmethod
-    def _build_continuation(
-        *,
-        previous: GraphState | None,
-        current_house_id: UUID | None,
-        user_text: str,
-        explicit_corrections: dict[str, str],
-    ) -> _ContinuationState:
-        same_house = previous is not None and previous.current_house_id == current_house_id
-        slot_continuation = bool(
-            same_house and previous.missing_slots and previous.pending_action is None
-        )
-        failed_turn_retry = bool(
-            same_house
-            and previous.error
-            and any(marker in user_text for marker in ("重试", "再试"))
-        )
-        contextual_followup = bool(
-            same_house
-            and (previous.pending_action is None or explicit_corrections)
-            and previous.intent
-            and _looks_contextual(user_text)
-        )
-        continuing = slot_continuation or contextual_followup or failed_turn_retry
-        previous_messages = list(previous.messages[-12:]) if same_house else []
-        previous_slots: dict[str, Any] = {}
-        previous_intent = None
-        single_slot_reply: dict[str, Any] = {}
-        if continuing and previous is not None:
-            previous_slots = {
-                key: value
-                for key, value in previous.slots.items()
-                if key not in {"user_text", "tool"}
-            }
-            previous_intent = previous.intent
-            requested_slot = previous.requested_slot or (
-                previous.missing_slots[0] if len(previous.missing_slots) == 1 else None
-            )
-            if slot_continuation and requested_slot and user_text.strip():
-                single_slot_reply[requested_slot] = AgentSessionRunner._single_slot_value(
-                    requested_slot, user_text
-                )
-        return _ContinuationState(
-            previous_slots=previous_slots,
-            previous_messages=previous_messages,
-            previous_intent=previous_intent,
-            single_slot_reply=single_slot_reply,
-            slot_continuation=slot_continuation,
-            contextual_followup=contextual_followup,
-            continuing=continuing,
-        )
-
-    @staticmethod
-    def _single_slot_value(requested_slot: str, user_text: str) -> Any:
-        value: Any = user_text.strip()
-        if requested_slot != "audience":
-            return value
-        import json
-
-        try:
-            return json.loads(value)
-        except json.JSONDecodeError:
-            return {} if value == "全社区" else value
-
-    @staticmethod
-    def _apply_inspection_followup(
-        continuation: _ContinuationState,
-        previous: GraphState | None,
-        user_text: str,
-        action: str | None,
-    ) -> None:
-        if not action or previous is None:
-            return
-        group = _inspection_group(action, user_text)
-        allowed = _INSPECTION_SLOT_GROUPS[group]
-        continuation.previous_slots = {
-            key: value for key, value in continuation.previous_slots.items() if key in allowed
-        }
-        continuation.previous_slots["action"] = action
-        continuation.previous_slots["target"] = "event" if group.startswith("event") else "task"
-        continuation.previous_intent = "INSPECTION"
-        continuation.continuing = True
-
-    @staticmethod
-    def _apply_announcement_followup(
-        continuation: _ContinuationState,
-        previous: GraphState | None,
-        user_text: str,
-        action: str | None,
-        followup: Any,
-    ) -> None:
-        if not action or previous is None or previous.intent != "ANNOUNCEMENT":
-            return
-        if action == "revise":
-            previous.pending_action = None
-            previous.confirmation_token = None
-            previous._interrupt_node = None
-        continuation.previous_slots = {
-            key: value for key, value in previous.slots.items() if key not in {"user_text", "tool"}
-        }
-        continuation.previous_intent = "ANNOUNCEMENT"
-        continuation.previous_slots["action"] = action
-        business_date = trusted_business_date(previous.trusted_context.get("business_date"))
-        continuation.previous_slots.update(
-            resolve_announcement_time_slots(user_text, business_date)
-        )
-        continuation.previous_slots.update(followup.slot_updates or {})
-        AgentSessionRunner._replace_optional_slot(
-            continuation.previous_slots, "revision_instruction", followup.instruction
-        )
-        AgentSessionRunner._replace_optional_slot(
-            continuation.previous_slots, "revision_detail_kind", followup.detail_kind
-        )
-        continuation.continuing = True
-        continuation.contextual_followup = False
-
-    @staticmethod
-    def _replace_optional_slot(slots: dict[str, Any], key: str, value: Any) -> None:
-        if value:
-            slots[key] = value
-        else:
-            slots.pop(key, None)
 
     def resume(
         self,

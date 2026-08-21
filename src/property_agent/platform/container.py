@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from property_agent.agent.application.confirmation_provider import prepare_confirmation
 from property_agent.agent.application.conversation_service import ConversationService
 from property_agent.agent.application.memory_runtime import (
     _display_part as _display_part,
@@ -72,7 +73,6 @@ from property_agent.inspection.application.service import (
 from property_agent.inspection.infrastructure.shared_ports import build_inspection_ports
 from property_agent.inspection.infrastructure.uow import SqlAlchemyInspectionUnitOfWork
 from property_agent.platform.application.approval_service import ApprovalService
-from property_agent.platform.application.confirmation_service import ConfirmationService
 from property_agent.platform.context import RequestContext
 from property_agent.platform.infrastructure.database import (
     dispose_engine,
@@ -464,7 +464,7 @@ def build_agent_runner(
 
     def confirmation_token_provider(state: GraphState) -> str:
         """见 ``_make_confirmation_token_provider``；P0 正确性底座。"""
-        return _make_confirmation_token_provider(
+        return prepare_confirmation(
             state,
             session_factory=session_factory,
             approval_service=approval_service,
@@ -547,56 +547,6 @@ def _build_agent_tooling(
         inspection_tools,
         controlled_read_tools,
     )  # noqa: E501
-
-
-def _make_confirmation_token_provider(
-    state: GraphState,
-    *,
-    session_factory: Any,
-    approval_service: ApprovalService,
-    announcement_service: Any,
-) -> str:
-    """服务端签发确认令牌 + APPROVED 审批引用（P0 正确性底座）。
-
-    用户点击确认后（resume confirmed=True）由 runner 在 **lease ownership 内** 调用：
-    1. 服务端签发确认令牌（传输层防伪造凭据）；
-    2. 创建 PENDING 审批（部分唯一索引保证幂等，重复确认不产生第二条）；
-    3. 立即 approve（PENDING → APPROVED）—— 用户已明确确认，审批进入可执行态；
-    4. ``approval_ref`` 写回 ``state.approval_ref``，由工具层透传到业务 Service。
-
-    业务 UoW 的 ``consume`` 只接受 APPROVED，杜绝"签发即消费"反模式
-    （deep-research-report.md §3.2 / 审查报告 P0-6）。
-    """
-    from property_agent.platform.application.confirm_params import (
-        derive_confirmation_params,
-    )
-
-    action, parameters = derive_confirmation_params(
-        state, announcement_service=announcement_service
-    )
-
-    # 1) 服务端签发确认令牌（传输层防伪造凭据，按既有行为生成）。
-    with session_factory() as session:
-        token = ConfirmationService(session).generate_token(
-            actor_id=state.actor_id,
-            action=action,
-            params=parameters,
-        )
-        session.commit()
-
-    # 2) 创建 PENDING 审批（幂等：同 conversation+action+params_hash 复用现有开放审批）。
-    conversation_id = str(state.conversation_id or "")
-    if conversation_id:
-        approval = approval_service.create_pending(
-            conversation_id=conversation_id,
-            actor_id=state.actor_id,
-            action=action,
-            params=parameters,
-        )
-        # 3) 用户已确认 → PENDING → APPROVED。业务 UoW consume 只接受 APPROVED。
-        approval_service.approve(approval_id=approval.id, actor_id=state.actor_id)
-        state.approval_ref = str(approval.id)
-    return token
 
 
 def build_model_gateway() -> ModelGateway:
