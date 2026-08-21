@@ -20,3 +20,10 @@ def test_billing_routes_exclude_payment_mutations() -> None:
     bill_ref = envelope["properties"]["data"]["anyOf"][0]["items"]["$ref"].rsplit("/", 1)[-1]
     bill_schema = openapi["components"]["schemas"][bill_ref]
     assert bill_schema["properties"]["total_amount"]["type"] == "string"
+
+    create_operation = openapi["paths"]["/api/billing/consultations"]["post"]
+    request_ref = create_operation["requestBody"]["content"]["application/json"]["schema"][
+        "$ref"
+    ].rsplit("/", 1)[-1]
+    request_schema = openapi["components"]["schemas"][request_ref]
+    assert "confirmation_token" in request_schema["required"]

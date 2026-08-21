@@ -64,6 +64,7 @@ class CreateConsultationRequest(BaseModel):
     subject: str
     description: str
     bill_id: str | None = None
+    confirmation_token: str = Field(min_length=1)
 
 
 class AnswerConsultationRequest(BaseModel):
@@ -208,6 +209,7 @@ def create_consultation(
         description=payload.description,
         bill_id=payload.bill_id,
         idempotency_key=idempotency_key,
+        confirmation_token=payload.confirmation_token,
     )
     return success_envelope(consultation_data(ticket), context)
 

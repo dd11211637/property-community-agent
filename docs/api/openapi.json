@@ -826,6 +826,11 @@
             ],
             "title": "Bill Id"
           },
+          "confirmation_token": {
+            "minLength": 1,
+            "title": "Confirmation Token",
+            "type": "string"
+          },
           "description": {
             "title": "Description",
             "type": "string"
@@ -837,7 +842,8 @@
         },
         "required": [
           "subject",
-          "description"
+          "description",
+          "confirmation_token"
         ],
         "title": "CreateConsultationRequest",
         "type": "object"
