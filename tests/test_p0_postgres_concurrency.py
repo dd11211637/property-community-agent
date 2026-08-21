@@ -484,15 +484,31 @@ def test_production_container_wiring_no_typeerror(session_factory):
 def test_assert_run_fence_holds_row_lock(run_lease, session_factory):
     """assert_run_fence 获取行锁，阻止并发 acquire（直到事务结束）。"""
     lease = run_lease.acquire("pg-fence-lock")
-    # 在一个 session 里 assert_run_fence（获取行锁），不 commit
+    results: list[object] = []
+    competing = threading.Event()
+
+    def acquire_while_locked() -> None:
+        competing.set()
+        try:
+            run_lease.acquire("pg-fence-lock")
+            results.append("acquired")
+        except AgentSessionError as exc:
+            results.append(exc.code)
+
+    # 在一个 session 里 assert_run_fence（获取行锁），不 commit。竞争 acquire
+    # 必须放在另一线程；同线程同步调用会等待自己持有的行锁，导致测试自死锁。
     session_a = session_factory()
     try:
         assert_run_fence(session_a, lease)
-        # 此时另一个线程试图 acquire 同一 conversation——lease 未过期，应该 409
-        # （不是行锁问题，而是 lease 仍被 A 持有）
-        with pytest.raises(AgentSessionError):
-            run_lease.acquire("pg-fence-lock")
+        contender = threading.Thread(target=acquire_while_locked)
+        contender.start()
+        assert competing.wait(timeout=2)
+        time.sleep(0.2)
+        assert contender.is_alive(), "competing acquire should wait for the fence row lock"
         session_a.rollback()
+        contender.join(timeout=5)
+        assert not contender.is_alive()
+        assert results == [AgentSessionErrorCode.CONVERSATION_BUSY]
     finally:
         session_a.close()
     # A 释放后能 acquire
@@ -542,8 +558,10 @@ def test_memory_double_writer_cas(session_factory):
     t1.join(timeout=10)
     t2.join(timeout=10)
 
-    assert results.count("ok") == 1, f"exactly one writer should win, got {results}"
-    assert results.count("VERSION_CONFLICT") == 1, f"exactly one should conflict, got {results}"
+    successes = [result for result in results if result.endswith(":ok")]
+    conflicts = [result for result in results if result.endswith(":VERSION_CONFLICT")]
+    assert len(successes) == 1, f"exactly one writer should win, got {results}"
+    assert len(conflicts) == 1, f"exactly one should conflict, got {results}"
 
 
 # ── Close / Sync 原子性竞态 (P0-7) ───────────────────────
