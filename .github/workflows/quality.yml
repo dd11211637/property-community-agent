@@ -31,6 +31,7 @@ jobs:
 
   postgres:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16-alpine
@@ -58,7 +59,7 @@ jobs:
       - run: alembic upgrade head
       - run: alembic check
       - name: Run PostgreSQL concurrency suite (no skips allowed)
-        run: python -m pytest -m postgres -rs --junitxml=pytest-postgres.xml
+        run: python -m pytest -m postgres -v -rs --junitxml=pytest-postgres.xml
       - name: Enforce zero skips
         run: python scripts/check_postgres_no_skip.py pytest-postgres.xml
 
