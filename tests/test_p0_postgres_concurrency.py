@@ -597,3 +597,74 @@ def test_close_and_run_race_keeps_conversation_closed(session_factory):
     )
     # 关闭状态保持稳定。
     assert service.get("race-1").is_closed is True
+
+
+# ── mark_handover lifecycle: CLOSED 为终态，禁止复活 ──────────────
+
+
+def test_mark_handover_rejects_closed_conversation(session_factory):
+    """已 CLOSED 的 conversation 调用 mark_handover 必须拒绝
+    （CONVERSATION_CLOSED），不得出现 CLOSED -> HANDOVER 复活。"""
+    from types import SimpleNamespace
+
+    context = SimpleNamespace(
+        actor_id=uuid4(), community_id=uuid4(), house_ids=frozenset()
+    )
+    service = ConversationService(session_factory)
+    service.start(conversation_id="pg-handover-closed", context=context, current_house_id=None)
+    service.close("pg-handover-closed")
+    assert service.get("pg-handover-closed").is_closed is True
+
+    with pytest.raises(AgentSessionError) as exc:
+        service.mark_handover("pg-handover-closed")
+    assert exc.value.code == AgentSessionErrorCode.CONVERSATION_CLOSED
+
+
+def test_close_vs_mark_handover_race_keeps_closed(session_factory):
+    """并发 close 与 mark_handover：最终状态必须为 CLOSED，
+    不得出现 CLOSED -> HANDOVER resurrection。
+
+    mark_handover 使用原子条件 UPDATE ... WHERE status <> 'CLOSED'，
+    因此无论哪个事务先提交，CLOSED 都不会被覆盖为 HANDOVER。
+    """
+    from types import SimpleNamespace
+
+    context = SimpleNamespace(
+        actor_id=uuid4(), community_id=uuid4(), house_ids=frozenset()
+    )
+    cid = "pg-handover-race"
+    setup = ConversationService(session_factory)
+    setup.start(conversation_id=cid, context=context, current_house_id=None)
+
+    results: dict[str, object] = {}
+    barrier = threading.Barrier(2)
+
+    def closer() -> None:
+        barrier.wait()
+        try:
+            ConversationService(session_factory).close(cid)
+            results["close"] = "ok"
+        except Exception as exc:  # noqa: BLE001
+            results["close"] = repr(exc)
+
+    def handover() -> None:
+        barrier.wait()
+        try:
+            ConversationService(session_factory).mark_handover(cid)
+            results["handover"] = "ok"
+        except AgentSessionError as exc:
+            results["handover"] = exc.code
+        except Exception as exc:  # noqa: BLE001
+            results["handover"] = repr(exc)
+
+    t1 = threading.Thread(target=closer)
+    t2 = threading.Thread(target=handover)
+    t1.start()
+    t2.start()
+    t1.join(timeout=20)
+    t2.join(timeout=20)
+
+    final = ConversationService(session_factory).get(cid)
+    assert final.status == ConversationStatus.CLOSED.value, (
+        f"final state must stay CLOSED, got {final.status}; race results={results}"
+    )

@@ -210,19 +210,39 @@ class ConversationService:
     ) -> ConversationSnapshot:
         session = self._session_factory()
         try:
-            row = self._find(session, conversation_id)
-            if row is None:
-                raise AgentSessionError(AgentSessionErrorCode.CONVERSATION_NOT_FOUND)
-            row.handover_required = True
-            row.status = ConversationStatus.HANDOVER.value
+            set_clause = (
+                "status = :target_status, "
+                "handover_required = :handover_required, "
+                "updated_at = :updated_at"
+            )
+            params: dict[str, object] = {
+                "target_status": ConversationStatus.HANDOVER.value,
+                "handover_required": True,
+                "updated_at": datetime.now(timezone.utc),
+                "conversation_id": conversation_id,
+            }
             if ticket_id is not None:
-                row.handover_ticket_id = ticket_id
+                set_clause += ", handover_ticket_id = :ticket_id"
+                params["ticket_id"] = ticket_id
+            result = session.execute(
+                text(
+                    "UPDATE agent_conversations SET "
+                    + set_clause
+                    + " WHERE conversation_id = :conversation_id AND status <> 'CLOSED'"
+                ),
+                params,
+            )
+            if result.rowcount == 0:
+                row = self._find(session, conversation_id)
+                if row is None:
+                    raise AgentSessionError(AgentSessionErrorCode.CONVERSATION_NOT_FOUND)
+                # 唯一其余 0 行原因：会话已 CLOSED（被 WHERE status <> 'CLOSED' 过滤）。
+                raise AgentSessionError(AgentSessionErrorCode.CONVERSATION_CLOSED)
             session.commit()
-            session.refresh(row)
+            row = self._find(session, conversation_id)
             return _to_snapshot(row)
         finally:
             session.close()
-
     def close(self, conversation_id: str) -> ConversationSnapshot:
         session = self._session_factory()
         try:
