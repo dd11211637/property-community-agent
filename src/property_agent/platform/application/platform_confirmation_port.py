@@ -26,7 +26,7 @@ from property_agent.agent.infrastructure.run_lease import (
 )
 from property_agent.platform.application.approval_service import ApprovalError, ApprovalService
 from property_agent.platform.application.confirmation_service import ConfirmationService
-from property_agent.platform.context import RequestContext
+from property_agent.platform.context import ExecutionSource, RequestContext
 from property_agent.platform.domain.exceptions import InvalidConfirmationTokenException
 
 ErrorFactory = Callable[[str, str, int], Any]
@@ -71,16 +71,7 @@ class PlatformConfirmationPort:
         # P0-4: 在任何 mutation / 审批消费之前，校验当前 turn 仍拥有 conversation
         # lease（fencing）。lease 从 trusted RequestContext 取，不由模型 slots 传入。
         # stale worker（lease 过期或被抢占）的业务写在此被拒绝。
-        lease = _current_agent_lease()
-        if self._enforce_fence and lease is None:
-            # 生产强制 fencing 模式：缺失 lease 意味着本次 turn 未经 lease 注入，
-            # 任何业务 mutation 都不允许落地——失败关闭，禁止静默放行。
-            raise StaleAgentRunError(
-                "<production-fence>",
-                reason="fencing enforced but no active lease present in production",
-            )
-        if lease is not None:
-            assert_run_fence(self._session, lease)
+        enforce_agent_fence(self._session, enforce_fence=self._enforce_fence)
         if approval_ref:
             try:
                 self._approval_service.consume(
@@ -114,13 +105,13 @@ class PlatformConfirmationPort:
             raise self._error_factory("CONFIRMATION_INVALID", exc.message, 422) from exc
 
 
-def _current_agent_lease() -> Lease | None:
+def _current_agent_lease(context: RequestContext | None = None) -> Lease | None:
     """从 trusted RequestContext 取当前 turn 的 lease（fencing token）。
 
     生产路径：runner acquire lease 后注入 ``RequestContext.agent_lease`` 并 activate。
     非请求 scope（测试 mock / 后台扫描）返回 None，fence check 退化为跳过。
     """
-    ctx = RequestContext.current()
+    ctx = context or RequestContext.current()
     if ctx is None or ctx.agent_lease is None:
         return None
     return Lease(
@@ -129,3 +120,24 @@ def _current_agent_lease() -> Lease | None:
         fence=ctx.agent_lease.fence,
         lease_until=ctx.agent_lease.lease_until,
     )
+
+
+def enforce_agent_fence(session: Session, *, enforce_fence: bool) -> None:
+    """Apply fencing only to writes explicitly marked as agent execution."""
+    if not enforce_fence:
+        return
+    context = RequestContext.current()
+    if context is None:
+        raise StaleAgentRunError(
+            "<production-fence>",
+            reason="fencing enforced but trusted execution context is missing",
+        )
+    if context.execution_source == ExecutionSource.HUMAN:
+        return
+    lease = _current_agent_lease(context)
+    if lease is None:
+        raise StaleAgentRunError(
+            "<agent-execution>",
+            reason="agent execution has no active lease",
+        )
+    assert_run_fence(session, lease)

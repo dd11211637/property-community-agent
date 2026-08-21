@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextvars
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import StrEnum
 from typing import Annotated
 from uuid import UUID
 
@@ -60,6 +61,13 @@ class AgentLeaseContext:
     lease_until: datetime
 
 
+class ExecutionSource(StrEnum):
+    """Trusted origin of a business operation within the current request."""
+
+    HUMAN = "HUMAN"
+    AGENT = "AGENT"
+
+
 @dataclass(frozen=True, slots=True)
 class RequestContext:
     """Coroutine-safe request context (PRD 5.2).
@@ -74,6 +82,8 @@ class RequestContext:
         agent_lease: P0 fencing lease for the current agent turn (None outside
             a turn or when concurrency guard is disabled). Business write UoWs
             read this to assert the turn still owns the conversation.
+        execution_source: trusted discriminator for human HTTP writes versus
+            writes initiated by an agent turn. It is never populated from model output.
     """
 
     actor_id: UUID
@@ -83,6 +93,7 @@ class RequestContext:
     current_house_id: UUID | None = None
     bound_house_ids: frozenset[UUID] = field(default_factory=frozenset)
     agent_lease: AgentLeaseContext | None = None
+    execution_source: ExecutionSource = ExecutionSource.HUMAN
 
     def __post_init__(self) -> None:
         if not self.request_id.strip() or len(self.request_id) > 64:

@@ -15,17 +15,13 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from property_agent.agent.infrastructure.run_lease import (
-    StaleAgentRunError,
-    assert_run_fence,
-)
 from property_agent.billing.application.ports import IdempotencyRecord
 from property_agent.billing.errors import BillingError
-from property_agent.platform.application.approval_service import ApprovalError, ApprovalService
+from property_agent.platform.application.approval_service import ApprovalService
 from property_agent.platform.application.audit_service import AuditService
-from property_agent.platform.application.confirmation_service import ConfirmationService
-from property_agent.platform.application.platform_confirmation_port import _current_agent_lease
-from property_agent.platform.domain.exceptions import InvalidConfirmationTokenException
+from property_agent.platform.application.platform_confirmation_port import (
+    PlatformConfirmationPort,
+)
 from property_agent.platform.infrastructure.orm_models import IdempotencyRecordModel
 
 
@@ -99,72 +95,18 @@ class PlatformBillingAuditPort:
         )
 
 
-class PlatformBillingConfirmationPort:
-    """原子化消费确认令牌 + 审批（与 repair/announcement/inspection 同形）。
-
-    ``create_draft``（咨询单写入）属于受控写：先消费审批（同一 UoW 内
-    ``FOR UPDATE``，校验后置 ``CONSUMED``），再消费令牌作为纵深防御。
-    """
+class PlatformBillingConfirmationPort(PlatformConfirmationPort):
+    """Billing error adapter for the shared atomic confirmation port."""
 
     def __init__(
         self, session: Session, approval_service: ApprovalService, *, enforce_fence: bool = False
     ) -> None:
-        self._session = session
-        self._approval_service = approval_service
-        self._token_service = ConfirmationService(session)
-        self._enforce_fence = enforce_fence
-
-    def consume(
-        self,
-        *,
-        approval_ref: str | None,
-        token: str,
-        actor_id: UUID,
-        action: str,
-        parameter_hash: str,
-        request_id: str,
-    ) -> None:
-        lease = _current_agent_lease()
-        if self._enforce_fence and lease is None:
-            # 生产强制 fencing 模式：缺失 lease 意味着本次 turn 未经 lease 注入，
-            # 任何业务 mutation 都不允许落地——失败关闭。
-            raise StaleAgentRunError(
-                "<production-fence>",
-                reason="fencing enforced but no active lease present in production",
-            )
-        if lease is not None:
-            assert_run_fence(self._session, lease)
-        if approval_ref:
-            try:
-                self._approval_service.consume(
-                    approval_id=UUID(approval_ref),
-                    actor_id=actor_id,
-                    action=action,
-                    params_hash=parameter_hash,
-                    session=self._session,
-                )
-            except ApprovalError as exc:
-                raise BillingError(
-                    f"CONFIRMATION_{exc.code}",
-                    exc.message,
-                    exc.status_code,
-                ) from exc
-        if not token or not token.strip():
-            raise BillingError(
-                "CONFIRMATION_REQUIRED",
-                "This operation requires a confirmation token.",
-                422,
-            )
-        try:
-            self._token_service.consume(
-                token=token,
-                actor_id=actor_id,
-                action=action,
-                parameter_hash=parameter_hash,
-                request_id=request_id,
-            )
-        except InvalidConfirmationTokenException as exc:
-            raise BillingError("CONFIRMATION_INVALID", exc.message, 422) from exc
+        super().__init__(
+            session,
+            approval_service,
+            error_factory=BillingError,
+            enforce_fence=enforce_fence,
+        )
 
 
 def build_billing_ports(

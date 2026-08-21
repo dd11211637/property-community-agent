@@ -112,22 +112,24 @@ def activate_lease_context(context: Any, lease: Lease | None) -> Any:
     仍拥有 conversation。非 ``RequestContext`` 实例（测试 mock）不注入，
     业务 UoW 的 fence check 退化为跳过（仅在测试环境）。
     """
-    if lease is None:
-        return context
     from dataclasses import replace
 
-    from property_agent.platform.context import AgentLeaseContext, RequestContext
+    from property_agent.platform.context import AgentLeaseContext, ExecutionSource, RequestContext
 
     if not isinstance(context, RequestContext):
         return context
-    new_context = replace(
-        context,
-        agent_lease=AgentLeaseContext(
+    agent_lease = None
+    if lease is not None:
+        agent_lease = AgentLeaseContext(
             thread_id=lease.thread_id,
             run_id=lease.run_id,
             fence=lease.fence,
             lease_until=lease.lease_until,
-        ),
+        )
+    new_context = replace(
+        context,
+        agent_lease=agent_lease,
+        execution_source=ExecutionSource.AGENT,
     )
     new_context.activate()
     return new_context

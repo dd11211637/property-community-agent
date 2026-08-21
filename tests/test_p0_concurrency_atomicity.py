@@ -52,10 +52,12 @@ from property_agent.platform.application.approval_service import (
     ApprovalService,
     ApprovalStatus,
 )
+from property_agent.platform.application.confirmation_service import ConfirmationService
 from property_agent.platform.application.hashing import canonical_hash
 from property_agent.platform.application.platform_confirmation_port import (
     PlatformConfirmationPort,
 )
+from property_agent.platform.context import AgentLeaseContext, ExecutionSource, RequestContext
 from property_agent.platform.errors import BusinessError
 from property_agent.platform.infrastructure.orm_models import Base
 
@@ -564,8 +566,15 @@ def test_heartbeat_stops_on_renew_failure(session_factory):
 # ── Fence fail-closed (P0-4 生产护栏) ─────────────────────
 
 
-def test_fence_fail_closed_blocks_without_lease(approval_service, session_factory):
-    """生产 enforce_fence=True 时，未经 lease 注入的业务 mutation 必须被拒绝。"""
+def test_explicit_agent_execution_without_lease_fails_closed(approval_service, session_factory):
+    """明确标记为 agent execution 时，缺失 lease 必须失败关闭。"""
+    RequestContext(
+        actor_id=uuid4(),
+        community_id=uuid4(),
+        roles=frozenset({"RESIDENT"}),
+        request_id="agent-missing-lease",
+        execution_source=ExecutionSource.AGENT,
+    ).activate()
     port = PlatformConfirmationPort(
         session_factory(),
         approval_service,
@@ -583,12 +592,128 @@ def test_fence_fail_closed_blocks_without_lease(approval_service, session_factor
         )
 
 
+def test_human_confirmation_does_not_require_agent_lease(approval_service, session_factory):
+    """合法 human HTTP write 使用正常确认校验，但不适用 agent fencing。"""
+    actor_id = uuid4()
+    params = {"a": 1}
+    context = RequestContext(
+        actor_id=actor_id,
+        community_id=uuid4(),
+        roles=frozenset({"RESIDENT"}),
+        request_id="human-direct",
+    )
+    context.activate()
+    with session_factory() as session:
+        token = ConfirmationService(session).generate_token(
+            actor_id=actor_id, action="CREATE_WORK_ORDER", params=params
+        )
+        session.commit()
+    with session_factory() as session:
+        PlatformConfirmationPort(
+            session,
+            approval_service,
+            error_factory=BusinessError,
+            enforce_fence=True,
+        ).consume(
+            approval_ref=None,
+            token=token,
+            actor_id=actor_id,
+            action="CREATE_WORK_ORDER",
+            parameter_hash=canonical_hash(params),
+            request_id=context.request_id,
+        )
+        session.commit()
+
+
+def test_active_agent_confirmation_accepts_valid_lease(
+    approval_service, run_lease, session_factory
+):
+    """合法 agent execution 携带当前 lease/fence 时允许进入正常确认消费。"""
+    actor_id = uuid4()
+    params = {"a": 1}
+    lease = run_lease.acquire("agent-valid")
+    context = RequestContext(
+        actor_id=actor_id,
+        community_id=uuid4(),
+        roles=frozenset({"RESIDENT"}),
+        request_id="agent-valid",
+        agent_lease=AgentLeaseContext(
+            thread_id=lease.thread_id,
+            run_id=lease.run_id,
+            fence=lease.fence,
+            lease_until=lease.lease_until,
+        ),
+        execution_source=ExecutionSource.AGENT,
+    )
+    context.activate()
+    with session_factory() as session:
+        token = ConfirmationService(session).generate_token(
+            actor_id=actor_id, action="CREATE_WORK_ORDER", params=params
+        )
+        session.commit()
+    with session_factory() as session:
+        PlatformConfirmationPort(
+            session,
+            approval_service,
+            error_factory=BusinessError,
+            enforce_fence=True,
+        ).consume(
+            approval_ref=None,
+            token=token,
+            actor_id=actor_id,
+            action="CREATE_WORK_ORDER",
+            parameter_hash=canonical_hash(params),
+            request_id=context.request_id,
+        )
+        session.rollback()
+
+
+def test_stale_agent_confirmation_rejects_old_lease(approval_service, run_lease, session_factory):
+    """明确 agent execution 的旧 fence 即使带 lease 也必须被拒绝。"""
+    stale = run_lease.acquire("agent-stale")
+    time.sleep(2.1)
+    run_lease.acquire("agent-stale")
+    RequestContext(
+        actor_id=uuid4(),
+        community_id=uuid4(),
+        roles=frozenset({"RESIDENT"}),
+        request_id="agent-stale",
+        agent_lease=AgentLeaseContext(
+            thread_id=stale.thread_id,
+            run_id=stale.run_id,
+            fence=stale.fence,
+            lease_until=stale.lease_until,
+        ),
+        execution_source=ExecutionSource.AGENT,
+    ).activate()
+    with session_factory() as session, pytest.raises(StaleAgentRunError):
+        PlatformConfirmationPort(
+            session,
+            approval_service,
+            error_factory=BusinessError,
+            enforce_fence=True,
+        ).consume(
+            approval_ref=None,
+            token="unused",
+            actor_id=uuid4(),
+            action="CREATE_WORK_ORDER",
+            parameter_hash="x",
+            request_id="agent-stale",
+        )
+
+
 def test_fence_fail_closed_disabled_allows_mock(approval_service, session_factory):
     """测试环境 enforce_fence=False 时，缺失 lease 不会触发 fencing 拒绝（mock 兼容）。
 
     注意：fence 关闭后 consume 仍会执行正常的 token/approval 校验，这里只验证
     fencing 这一道闸不会在缺失 lease 时误杀（绝不应抛 StaleAgentRunError）。
     """
+    RequestContext(
+        actor_id=uuid4(),
+        community_id=uuid4(),
+        roles=frozenset(),
+        request_id="mock-human",
+    ).activate()
     port = PlatformConfirmationPort(
         session_factory(),
         approval_service,

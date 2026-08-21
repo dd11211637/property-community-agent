@@ -34,18 +34,12 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from property_agent.agent.infrastructure.run_lease import (
-    StaleAgentRunError,
-    assert_run_fence,
-)
 from property_agent.inspection.application.ports import IdempotencyRecord
 from property_agent.inspection.domain.errors import BusinessError, forbidden, validation_error
 from property_agent.platform.application.approval_service import ApprovalError, ApprovalService
 from property_agent.platform.application.audit_service import AuditService
 from property_agent.platform.application.confirmation_service import ConfirmationService
-from property_agent.platform.application.platform_confirmation_port import (
-    _current_agent_lease,
-)
+from property_agent.platform.application.platform_confirmation_port import enforce_agent_fence
 from property_agent.platform.domain.exceptions import InvalidConfirmationTokenException
 from property_agent.platform.infrastructure.orm_models import (
     ATTACHMENT_ALLOWED_CONTENT_TYPES,
@@ -179,14 +173,7 @@ class PlatformConfirmationPort:
     ) -> None:
         # P0-4: 在任何 mutation / 审批消费之前校验当前 turn 仍拥有 conversation
         # lease（fencing）。lease 从 trusted RequestContext 取，不由模型 slots 传入。
-        lease = _current_agent_lease()
-        if self._enforce_fence and lease is None:
-            raise StaleAgentRunError(
-                "<production-fence>",
-                reason="fencing enforced but no active lease present in production",
-            )
-        if lease is not None:
-            assert_run_fence(self._session, lease)
+        enforce_agent_fence(self._session, enforce_fence=self._enforce_fence)
         if approval_ref:
             try:
                 self._approval_service.consume(

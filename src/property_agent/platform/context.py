@@ -14,6 +14,10 @@ breaks role checks and community isolation across modules.
 
 from __future__ import annotations
 
-from property_agent.platform.adapters.api.dependencies import AgentLeaseContext, RequestContext
+from property_agent.platform.adapters.api.dependencies import (
+    AgentLeaseContext,
+    ExecutionSource,
+    RequestContext,
+)
 
-__all__ = ["AgentLeaseContext", "RequestContext"]
+__all__ = ["AgentLeaseContext", "ExecutionSource", "RequestContext"]
