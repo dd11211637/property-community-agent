@@ -49,7 +49,7 @@ def upgrade() -> None:
         ),
         sa.Column(
             "fence",
-            sa.BigInteger(),
+            sa.Integer(),
             nullable=False,
             server_default="1",
             comment="fencing token：每次抢占 +1，旧 worker 凭旧 fence 被拒绝",
