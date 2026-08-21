@@ -569,9 +569,7 @@ def test_source_unavailable_keeps_draft_r02(sessions, seed):
     resident_ctx = _ctx(seed, "resident")
     # 账单源不可用时，list_bills 应失败（503），但咨询草稿仍可保存（R-02）。
     approval_service = ApprovalService(sessions)
-    billing = BillingService(
-        lambda tx: UnavailableBillingUnitOfWork(tx, approval_service)
-    )
+    billing = BillingService(lambda tx: UnavailableBillingUnitOfWork(tx, approval_service))
     consultation = ConsultationService(_uow_factory(sessions))
     token, ref = _make_consultation_approval(
         sessions, resident_ctx, subject="源挂了还能问吗", description="d"

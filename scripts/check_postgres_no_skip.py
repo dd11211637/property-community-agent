@@ -47,10 +47,7 @@ def main(argv: list[str]) -> int:
         print(f"[check_postgres_no_skip] ERROR: failed to parse {xml_path}: {exc}")
         return 1
 
-    print(
-        f"[check_postgres_no_skip] tests={tests} skipped={skipped} errors={errors} "
-        f"({xml_path})"
-    )
+    print(f"[check_postgres_no_skip] tests={tests} skipped={skipped} errors={errors} ({xml_path})")
 
     if tests == 0:
         print(

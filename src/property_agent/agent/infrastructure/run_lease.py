@@ -285,9 +285,7 @@ class RunLeaseService:
         session = self._session_factory()
         try:
             return (
-                session.execute(
-                    statement, {"tid": thread_id, "now": _normalize(_utcnow())}
-                ).first()
+                session.execute(statement, {"tid": thread_id, "now": _normalize(_utcnow())}).first()
                 is not None
             )
         finally:

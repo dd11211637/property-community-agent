@@ -360,8 +360,16 @@ class _FakeConsultationService:
         self.keys: list[str] = []
 
     def create_draft(
-        self, ctx, db, *, subject, description, bill_id, idempotency_key,
-        confirmation_token=None, approval_ref=None,
+        self,
+        ctx,
+        db,
+        *,
+        subject,
+        description,
+        bill_id,
+        idempotency_key,
+        confirmation_token=None,
+        approval_ref=None,
     ):
         self.keys.append(idempotency_key)
         return type(

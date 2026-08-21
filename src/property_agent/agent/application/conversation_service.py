@@ -243,6 +243,7 @@ class ConversationService:
             return _to_snapshot(row)
         finally:
             session.close()
+
     def close(self, conversation_id: str) -> ConversationSnapshot:
         session = self._session_factory()
         try:

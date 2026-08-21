@@ -28,6 +28,10 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
+from property_agent.agent.application.conversation_service import (
+    ConversationService,
+    ConversationStatus,
+)
 from property_agent.agent.application.errors import (
     AgentSessionError,
     AgentSessionErrorCode,
@@ -41,10 +45,6 @@ from property_agent.agent.infrastructure.run_lease import (
     RunLeaseService,
     StaleAgentRunError,
     assert_run_fence,
-)
-from property_agent.agent.application.conversation_service import (
-    ConversationService,
-    ConversationStatus,
 )
 from property_agent.agent.state import GraphState
 from property_agent.platform.application.approval_service import (
@@ -543,9 +543,7 @@ def test_memory_double_writer_cas(session_factory):
     t2.join(timeout=10)
 
     assert results.count("ok") == 1, f"exactly one writer should win, got {results}"
-    assert results.count("VERSION_CONFLICT") == 1, (
-        f"exactly one should conflict, got {results}"
-    )
+    assert results.count("VERSION_CONFLICT") == 1, f"exactly one should conflict, got {results}"
 
 
 # ── Close / Sync 原子性竞态 (P0-7) ───────────────────────
@@ -592,9 +590,7 @@ def test_close_and_run_race_keeps_conversation_closed(session_factory):
         t.join(timeout=20)
 
     assert errors == [], f"unexpected errors during race: {errors}"
-    assert resurrected == [], (
-        f"CLOSED conversation was resurrected {len(resurrected)} times"
-    )
+    assert resurrected == [], f"CLOSED conversation was resurrected {len(resurrected)} times"
     # 关闭状态保持稳定。
     assert service.get("race-1").is_closed is True
 
@@ -607,9 +603,7 @@ def test_mark_handover_rejects_closed_conversation(session_factory):
     （CONVERSATION_CLOSED），不得出现 CLOSED -> HANDOVER 复活。"""
     from types import SimpleNamespace
 
-    context = SimpleNamespace(
-        actor_id=uuid4(), community_id=uuid4(), house_ids=frozenset()
-    )
+    context = SimpleNamespace(actor_id=uuid4(), community_id=uuid4(), house_ids=frozenset())
     service = ConversationService(session_factory)
     service.start(conversation_id="pg-handover-closed", context=context, current_house_id=None)
     service.close("pg-handover-closed")
@@ -629,9 +623,7 @@ def test_close_vs_mark_handover_race_keeps_closed(session_factory):
     """
     from types import SimpleNamespace
 
-    context = SimpleNamespace(
-        actor_id=uuid4(), community_id=uuid4(), house_ids=frozenset()
-    )
+    context = SimpleNamespace(actor_id=uuid4(), community_id=uuid4(), house_ids=frozenset())
     cid = "pg-handover-race"
     setup = ConversationService(session_factory)
     setup.start(conversation_id=cid, context=context, current_house_id=None)

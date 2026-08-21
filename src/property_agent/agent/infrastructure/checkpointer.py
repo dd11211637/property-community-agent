@@ -35,9 +35,7 @@ class CheckpointVersionConflict(Exception):
     def __init__(self, thread_id: str, expected: int) -> None:
         self.thread_id = thread_id
         self.expected = expected
-        super().__init__(
-            f"checkpoint version conflict for thread {thread_id}: expected {expected}"
-        )
+        super().__init__(f"checkpoint version conflict for thread {thread_id}: expected {expected}")
 
 
 def _snapshot(state: GraphState) -> dict[str, Any]:

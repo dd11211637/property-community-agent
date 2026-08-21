@@ -19,7 +19,11 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from property_agent.agent.infrastructure.run_lease import Lease, StaleAgentRunError, assert_run_fence
+from property_agent.agent.infrastructure.run_lease import (
+    Lease,
+    StaleAgentRunError,
+    assert_run_fence,
+)
 from property_agent.platform.application.approval_service import ApprovalError, ApprovalService
 from property_agent.platform.application.confirmation_service import ConfirmationService
 from property_agent.platform.context import RequestContext

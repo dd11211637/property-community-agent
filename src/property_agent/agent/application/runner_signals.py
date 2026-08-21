@@ -96,9 +96,7 @@ def explicit_inspection_action(text: str) -> str | None:
     return None
 
 
-def first_turn_inspection_signal(
-    user_text: str, roles: tuple[str, ...]
-) -> dict[str, str]:
+def first_turn_inspection_signal(user_text: str, roles: tuple[str, ...]) -> dict[str, str]:
     """首轮确定性巡检信号：命中则锁定 INSPECTION 并走安防事件上报。
 
     仅靠 LLM 分类会把"消防通道堵塞上报"这类公共区域安防问题误判成住户报修；
@@ -167,9 +165,7 @@ def explicit_repair_corrections(text: str) -> dict[str, str]:
     return corrections
 
 
-def explicit_inspection_corrections(
-    text: str, previous: GraphState | None
-) -> dict[str, str]:
+def explicit_inspection_corrections(text: str, previous: GraphState | None) -> dict[str, str]:
     """Map a user correction to the active inspection field, never to identity fields."""
     if previous is None or previous.intent != "INSPECTION":
         return {}
@@ -190,11 +186,7 @@ def explicit_inspection_corrections(
         return {}
     value = max(mentioned, key=len)
     action = str(previous.slots.get("action") or "")
-    field = (
-        "location"
-        if action in {"report_event", "create_event", "event_create"}
-        else "point"
-    )
+    field = "location" if action in {"report_event", "create_event", "event_create"} else "point"
     return {field: value}
 
 
@@ -213,11 +205,7 @@ def resolve_repair_followup(
         return {}, None
     business_no = str(previous.slots["work_order_id"])
     location = explicit_corrections.get("location") or previous.slots.get("location") or ""
-    description = (
-        explicit_corrections.get("description")
-        or previous.slots.get("description")
-        or ""
-    )
+    description = explicit_corrections.get("description") or previous.slots.get("description") or ""
     followup = {
         "work_order_id": business_no,
         "location": location,
@@ -263,17 +251,14 @@ def build_initial_state(
         actor_id=context.actor_id,
         community_id=context.community_id,
         current_house_id=current_house_id,
-        intent=(
-            Intent.INSPECTION.value if inspection_override else continuation.previous_intent
-        ),
+        intent=(Intent.INSPECTION.value if inspection_override else continuation.previous_intent),
         slots={
             **continuation.previous_slots,
             **explicit_corrections,
             **continuation.single_slot_reply,
             "roles": list(roles),
             "_user_corrected_fields": sorted(
-                set(explicit_corrections)
-                | set((announcement_followup.slot_updates or {}).keys())
+                set(explicit_corrections) | set((announcement_followup.slot_updates or {}).keys())
             ),
             "_active_announcement_draft": active_draft,
             "user_text": user_text,

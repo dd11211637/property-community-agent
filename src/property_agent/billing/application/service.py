@@ -258,9 +258,7 @@ class ConsultationService:
             bill_id=bill_id,
         )
         community_code = uow.community_code(ctx.community_id)
-        validate_consultation_bill(
-            uow, ctx, bill_id=bill_id, community_code=community_code
-        )
+        validate_consultation_bill(uow, ctx, bill_id=bill_id, community_code=community_code)
 
         ticket = ConsultationTicket(
             id=uuid4().hex,

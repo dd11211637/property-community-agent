@@ -15,19 +15,18 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from property_agent.agent.infrastructure.run_lease import (
+    StaleAgentRunError,
+    assert_run_fence,
+)
 from property_agent.billing.application.ports import IdempotencyRecord
 from property_agent.billing.errors import BillingError
 from property_agent.platform.application.approval_service import ApprovalError, ApprovalService
 from property_agent.platform.application.audit_service import AuditService
 from property_agent.platform.application.confirmation_service import ConfirmationService
+from property_agent.platform.application.platform_confirmation_port import _current_agent_lease
 from property_agent.platform.domain.exceptions import InvalidConfirmationTokenException
 from property_agent.platform.infrastructure.orm_models import IdempotencyRecordModel
-
-from property_agent.agent.infrastructure.run_lease import (
-    StaleAgentRunError,
-    assert_run_fence,
-)
-from property_agent.platform.application.platform_confirmation_port import _current_agent_lease
 
 
 class SqlAlchemyBillingIdempotencyPort:

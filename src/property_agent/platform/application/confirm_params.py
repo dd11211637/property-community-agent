@@ -27,9 +27,7 @@ def _announcement_params(
 ) -> tuple[str, dict[str, Any]]:
     """公告发布 / 定时发布的确认参数；前置校验 ``expected_version``。"""
     context = _resolve_request_context(state)
-    announcement = announcement_service.get(
-        UUID(str(state.slots["announcement_id"])), context
-    )
+    announcement = announcement_service.get(UUID(str(state.slots["announcement_id"])), context)
     reviewed_version = int(state.slots["expected_version"])
     if reviewed_version != announcement.version:
         raise ParameterDerivationError("公告内容已发生变化，请重新查看后再确认发布。")

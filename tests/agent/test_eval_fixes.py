@@ -49,9 +49,7 @@ class TestInspectionSelectorFallback:
 
 class TestAnnouncementRoleGuard:
     def test_resident_write_is_denied_before_tool_selection(self):
-        state = _state(
-            action="publish", roles=["RESIDENT"], title="停水通知", body="明天停水"
-        )
+        state = _state(action="publish", roles=["RESIDENT"], title="停水通知", body="明天停水")
         tool = select_announcement_tool(state)
         assert tool == "announcement_list"
         assert state.error and "发布公告的权限" in state.error

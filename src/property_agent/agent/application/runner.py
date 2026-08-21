@@ -449,7 +449,9 @@ class AgentSessionRunner:
         """
         if plan.heartbeat is not None and plan.heartbeat.stale:
             thread_id = plan.lease.thread_id if plan.lease is not None else "<unknown>"
-            raise StaleAgentRunError(thread_id, reason="lease heartbeat detected stale run; aborting turn")
+            raise StaleAgentRunError(
+                thread_id, reason="lease heartbeat detected stale run; aborting turn"
+            )
 
     def _activate_lease_context(self, context: AgentContext, lease: Lease | None) -> AgentContext:
         """委托 turn_guard.activate_lease_context（P0-4 fencing 注入）。"""
