@@ -47,11 +47,20 @@ from property_agent.agent.capabilities.registry import (
     UnknownCapabilityError,
 )
 from property_agent.agent.policies import TOOL_LEVELS, TOOL_SLOTS
+from property_agent.agent.runtime import ExecutionPolicy, RuntimeContext
 from property_agent.billing.errors import BillingError
 
 
-def _runtime(context: object, house_id=None, write=None) -> CapabilityRuntimeContext:
-    return CapabilityRuntimeContext(context, house_id, write=write)
+def _runtime(
+    context: object,
+    house_id=None,
+    write=None,
+    policy: ExecutionPolicy | None = None,
+) -> CapabilityRuntimeContext:
+    trusted = RuntimeContext(
+        context, "test-conversation", house_id, execution_policy=policy or ExecutionPolicy()
+    )
+    return CapabilityRuntimeContext(context, house_id, write=write, trusted_runtime=trusted)
 
 
 def _executor(adapters, policy=None) -> CapabilityExecutor:
@@ -60,13 +69,17 @@ def _executor(adapters, policy=None) -> CapabilityExecutor:
 
 def test_registry_inventory_lookup_duplicate_and_unknown():
     registry = default_capability_registry()
-    assert registry.names() == (
-        "billing_consult",
-        "billing_query",
+    assert set(registry.names()) == {spec.name for spec in capability_specs()}
+    assert {
         "repair_create",
-        "repair_get",
-        "repair_list",
-    )
+        "billing_consult",
+        "announcement_create_draft",
+        "announce_publish",
+        "inspection_create",
+        "inspection_submit_records",
+        "security_event_create",
+        "close_high_risk_event",
+    }.issubset(registry.names())
     assert registry.get("repair_create").domain == "repair"
     with pytest.raises(UnknownCapabilityError):
         registry.get("missing")
@@ -176,20 +189,29 @@ def test_unexpected_adapter_error_is_sanitized_but_retains_internal_cause():
 
 
 @pytest.mark.parametrize(
-    ("state", "reason"),
+    ("state", "policy", "reason"),
     [
-        (CapabilityInvocationState(allowlist=frozenset()), "CAPABILITY_NOT_ALLOWLISTED"),
-        (CapabilityInvocationState(step=1, max_steps=1), "MAX_STEPS_EXCEEDED"),
-        (CapabilityInvocationState(calls_made=1, max_calls=1), "EXECUTION_BUDGET_EXCEEDED"),
         (
-            CapabilityInvocationState(deadline_monotonic=time.monotonic() - 1),
+            CapabilityInvocationState(),
+            ExecutionPolicy(allowlist=frozenset()),
+            "CAPABILITY_NOT_ALLOWLISTED",
+        ),
+        (CapabilityInvocationState(step=1), ExecutionPolicy(max_steps=1), "MAX_STEPS_EXCEEDED"),
+        (
+            CapabilityInvocationState(calls_made=1),
+            ExecutionPolicy(max_calls=1),
+            "EXECUTION_BUDGET_EXCEEDED",
+        ),
+        (
+            CapabilityInvocationState(),
+            ExecutionPolicy(deadline_monotonic=time.monotonic() - 1),
             "EXECUTION_DEADLINE_EXCEEDED",
         ),
     ],
 )
-def test_policy_enforces_allowlist_and_execution_bounds(state, reason):
+def test_policy_enforces_allowlist_and_execution_bounds(state, policy, reason):
     result = _executor({"repair_list": Mock()}).execute(
-        "repair_list", {}, _runtime(object()), state
+        "repair_list", {}, _runtime(object(), policy=policy), state
     )
     assert result.error.code == reason
 
@@ -454,13 +476,21 @@ def test_real_write_path_preserves_single_execution_and_service_invariants(
 def test_legacy_metadata_is_derived_from_registry():
     assert {name: TOOL_LEVELS[name] for name in migrated_tool_levels()} == migrated_tool_levels()
     assert {name: TOOL_SLOTS[name] for name in migrated_tool_slots()} == migrated_tool_slots()
-    assert migrated_tool_slots() == {
+    expected_pr2 = {
         "billing_consult": ["subject", "description"],
         "billing_query": [],
         "repair_create": ["description", "location"],
         "repair_get": ["work_order_id"],
         "repair_list": [],
     }
+    assert {name: migrated_tool_slots()[name] for name in expected_pr2} == expected_pr2
+    assert migrated_tool_slots()["announcement_revise"] == [
+        "title",
+        "body",
+        "audience",
+        "revision_instruction",
+    ]
+    assert migrated_tool_slots()["inspection_create"] == ["title", "description", "point"]
     assert migrated_presentation()["repair_create"]["confirmation_title"] == (
         "确认提交这条报修吗？"
     )

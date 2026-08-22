@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 from property_agent.inspection.application.commands import (
@@ -20,6 +22,7 @@ from property_agent.inspection.domain.enums import (
 from property_agent.inspection.domain.errors import (
     BusinessError,
 )
+from property_agent.platform.context import ExecutionSource
 
 
 # ============================== 巡检任务 ==============================
@@ -58,6 +61,33 @@ def test_create_task_idempotency_conflict(task_service, manager_context):
     with pytest.raises(BusinessError) as exc:
         _create_task(task_service, manager_context, idem="conflict-1", title="B")
     assert exc.value.code == "IDEMPOTENCY_CONFLICT"
+
+
+def test_agent_create_task_requires_uow_confirmation_while_human_stays_compatible(
+    task_service, harness, manager_context
+):
+    human = _create_task(task_service, manager_context, idem="human-create")
+    assert human.id is not None
+    assert harness.state.confirmed == []
+
+    agent = replace(manager_context, execution_source=ExecutionSource.AGENT)
+    with pytest.raises(BusinessError) as exc:
+        _create_task(task_service, agent, idem="agent-unconfirmed")
+    assert exc.value.code == "CONFIRMATION_REQUIRED"
+
+    confirmed = task_service.create_task(
+        CreateInspectionTaskCommand(
+            title="Agent 巡检",
+            description="可信 Agent 创建",
+            route_points=("A1",),
+            confirmation_token="confirmed",
+            approval_ref="approval-task-create",
+        ),
+        agent,
+        idempotency_key="agent-confirmed",
+    )
+    assert confirmed.id is not None
+    assert harness.state.confirmed[-1][1] == "INSPECTION_TASK_CREATE"
 
 
 def test_task_full_lifecycle(task_service, harness, ids, manager_context, security_context):

@@ -155,6 +155,29 @@ def boot(session_factory, *, clock=None, ttl_seconds=300, gateway=None):
     return runner, rec, checkpointer, conversations, recovery
 
 
+def downgrade_checkpoint_to_legacy(session_factory, conversation_id: str) -> None:
+    typed_keys = {
+        "schema_version",
+        "domain",
+        "capability_invocation",
+        "clarification",
+        "proposed_action",
+        "orchestration",
+    }
+    with session_factory() as session:
+        record = session.query(AgentCheckpointModel).filter_by(thread_id=conversation_id).one()
+        legacy = {key: value for key, value in record.state.items() if key not in typed_keys}
+        orchestration = record.state.get("orchestration") or {}
+        legacy.update(
+            _resume=orchestration.get("resume"),
+            _interrupt_node=orchestration.get("interrupt_node"),
+            _continuation=orchestration.get("continuation", False),
+            _contextual_followup=orchestration.get("contextual_followup", False),
+        )
+        record.state = legacy
+        session.commit()
+
+
 REPAIR_SLOTS = {
     "action": "create",
     "category": "WATER_PLUMBING",
@@ -200,6 +223,42 @@ def test_checkpointer_roundtrip_uses_conversation_id_as_thread_id(session_factor
     assert cp.load("missing") is None
 
 
+def test_loading_legacy_checkpoint_is_zero_write_and_preserves_pending_resume(session_factory):
+    legacy = {
+        "conversation_id": "conv-legacy-pending",
+        "intent": "BILLING",
+        "slots": {"action": "consult", "bill_id": ""},
+        "missing_slots": [],
+        "pending_action": {
+            "tool": "billing_consult",
+            "params": {"question": "这笔费用是什么？", "bill_id": None},
+        },
+        "_interrupt_node": "confirm_write",
+    }
+    with session_factory() as session:
+        session.add(
+            AgentCheckpointModel(
+                thread_id="conv-legacy-pending",
+                version=7,
+                state=legacy,
+                interrupt_node="confirm_write",
+                pending_confirm=True,
+            )
+        )
+        session.commit()
+
+    cp = SqlAlchemyCheckpointer(session_factory)
+    loaded = cp.load("conv-legacy-pending")
+
+    assert loaded is not None
+    assert loaded.schema_version == 2
+    assert loaded.domain.bill_id is None
+    assert loaded.proposed_action.capability == "billing_consult"
+    assert loaded._interrupt_node == "confirm_write"
+    assert cp.version_of("conv-legacy-pending") == 7
+    assert cp.pending_threads() == ["conv-legacy-pending"]
+
+
 def test_checkpointer_marks_pending_threads(session_factory, ctx):
     runner, rec, cp, _, _ = boot(session_factory)
     start_repair(runner, ctx)
@@ -219,6 +278,10 @@ def test_pending_confirmation_survives_restart(session_factory, ctx):
     assert turn.interrupt["action"]["tool"] == "repair_create"
     assert rec.calls == []
     assert turn.conversation.status == ConversationStatus.WAITING_CONFIRM.value
+
+    # Simulate a pre-PR3 row: decode is in-memory only; the successful resume
+    # performs the first normal durable write in the current schema.
+    downgrade_checkpoint_to_legacy(session_factory, "conv-1")
 
     # —— 应用重启：全新的图、Checkpointer、服务对象，只有数据库保留下来 ——
     runner2, rec2, _, conversations2, _ = boot(session_factory)
