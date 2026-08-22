@@ -6,6 +6,7 @@ import time
 from unittest.mock import Mock
 
 import pytest
+from pydantic import ValidationError
 
 from property_agent.agent.capabilities.adapters.billing import (
     BillingConsultAdapter,
@@ -35,6 +36,7 @@ from property_agent.agent.capabilities.contracts import (
     CapabilityPolicyDecision,
     CapabilityRisk,
     CapabilityRuntimeContext,
+    CapabilityWriteContext,
     PolicyDisposition,
 )
 from property_agent.agent.capabilities.executor import CapabilityExecutor
@@ -48,8 +50,8 @@ from property_agent.agent.policies import TOOL_LEVELS, TOOL_SLOTS
 from property_agent.billing.errors import BillingError
 
 
-def _runtime(context: object, house_id=None) -> CapabilityRuntimeContext:
-    return CapabilityRuntimeContext(context, house_id)
+def _runtime(context: object, house_id=None, write=None) -> CapabilityRuntimeContext:
+    return CapabilityRuntimeContext(context, house_id, write=write)
 
 
 def _executor(adapters, policy=None) -> CapabilityExecutor:
@@ -74,30 +76,59 @@ def test_registry_inventory_lookup_duplicate_and_unknown():
 
 @pytest.mark.parametrize(
     "forbidden",
-    ["actor_id", "role", "community_id", "house_id", "execution_source", "lease", "fence"],
+    [
+        "confirmation_token",
+        "approval_ref",
+        "idempotency_key",
+        "actor_id",
+        "user_id",
+        "role",
+        "community_id",
+        "house_id",
+        "current_house_id",
+        "execution_source",
+        "lease",
+        "fence",
+    ],
 )
-def test_model_cannot_override_trusted_authority(forbidden):
-    service = Mock()
-    result = _executor({"repair_list": RepairListAdapter(service)}).execute(
-        "repair_list", {forbidden: "model-claim"}, _runtime(object())
+@pytest.mark.parametrize(
+    ("name", "semantic_payload"),
+    [
+        ("repair_create", {"description": "pipe leaking", "location": "kitchen"}),
+        ("billing_consult", {"subject": "bill question", "description": "please check"}),
+    ],
+)
+def test_model_cannot_override_server_write_or_trusted_authority(forbidden, name, semantic_payload):
+    adapter = Mock()
+    result = _executor({name: adapter}).execute(
+        name,
+        {**semantic_payload, forbidden: "model-claim"},
+        _runtime(object(), "house"),
+        CapabilityInvocationState(human_confirmed=True),
     )
     assert result.error is not None
     assert result.error.code == "INVALID_CAPABILITY_INPUT"
-    service.search.assert_not_called()
+    adapter.assert_not_called()
+
+
+def test_write_capability_inputs_contain_only_business_semantics():
+    assert set(RepairCreateInput.model_fields) == {"description", "location", "urgency"}
+    assert set(BillingConsultInput.model_fields) == {"subject", "description", "bill_id"}
 
 
 def test_typed_input_and_output_are_enforced():
-    adapter = Mock(return_value={"count": "not-an-int", "items": []})
+    secret = "postgresql://secret/internal-output"
+    adapter = Mock(return_value={"count": secret, "items": []})
     executor = _executor({"repair_list": adapter})
     invalid_input = executor.execute("repair_list", {"limit": 0}, _runtime(object()))
     assert invalid_input.error.code == "INVALID_CAPABILITY_INPUT"
     adapter.assert_not_called()
 
     invalid_output = executor.execute("repair_list", {"limit": 1}, _runtime(object()))
-    assert invalid_output.error.code == "CAPABILITY_EXECUTION_FAILED"
-    assert invalid_output.error.message == "Capability execution failed."
-    assert invalid_output.error.details == {}
-    assert invalid_output.error.cause is not None
+    assert invalid_output.error.code == "INVALID_CAPABILITY_OUTPUT"
+    assert invalid_output.error.message == "Capability output validation failed."
+    assert secret not in str(invalid_output.error.details)
+    assert isinstance(invalid_output.error.cause, ValidationError)
     adapter.assert_called_once()
 
 
@@ -197,8 +228,6 @@ def test_static_spec_and_dynamic_policy_are_separate():
             description="trapped resident",
             location="lift",
             urgency="EMERGENCY",
-            confirmation_token="server-token",
-            idempotency_key="key",
         ),
         _runtime(object()),
         CapabilityInvocationState(),
@@ -212,8 +241,6 @@ def test_write_requires_orchestration_confirmation_before_adapter():
     payload = {
         "description": "pipe leaking",
         "location": "kitchen",
-        "confirmation_token": "server-token",
-        "idempotency_key": "key",
     }
     result = _executor({"repair_create": adapter}).execute(
         "repair_create", payload, _runtime(object(), "house")
@@ -240,6 +267,61 @@ def test_executor_invokes_exactly_one_selected_adapter_and_observes():
         "capability_started",
         "capability_finished",
     ]
+
+
+def test_observer_failure_before_adapter_does_not_block_execution():
+    adapter = Mock(return_value={"count": 0, "items": []})
+
+    def observe(event, _fields):
+        if event == "capability_started":
+            raise RuntimeError("telemetry sink unavailable")
+
+    executor = CapabilityExecutor(
+        default_capability_registry(),
+        CapabilityPolicy(),
+        {"repair_list": adapter},
+        observe=observe,
+    )
+
+    result = executor.execute("repair_list", {}, _runtime(object()))
+
+    assert result.ok
+    adapter.assert_called_once()
+
+
+def test_observer_failure_after_success_does_not_replace_result():
+    def observe(event, _fields):
+        if event == "capability_finished":
+            raise RuntimeError("telemetry sink unavailable")
+
+    result = CapabilityExecutor(
+        default_capability_registry(),
+        CapabilityPolicy(),
+        {"repair_list": Mock(return_value={"count": 0, "items": []})},
+        observe=observe,
+    ).execute("repair_list", {}, _runtime(object()))
+
+    assert result.ok
+    assert result.output.count == 0
+
+
+def test_observer_failure_while_recording_error_preserves_capability_error():
+    domain_error = CapabilityDomainError("PUBLIC_FAILURE", "Stable failure.")
+
+    def observe(event, _fields):
+        if event == "capability_failed":
+            raise RuntimeError("telemetry sink unavailable")
+
+    result = CapabilityExecutor(
+        default_capability_registry(),
+        CapabilityPolicy(),
+        {"repair_list": Mock(side_effect=domain_error)},
+        observe=observe,
+    ).execute("repair_list", {}, _runtime(object()))
+
+    assert result.error.code == "PUBLIC_FAILURE"
+    assert result.error.message == "Stable failure."
+    assert result.error.cause is domain_error
 
 
 def test_real_read_adapter_calls_existing_application_service(service, resident_context):
@@ -275,6 +357,37 @@ def test_billing_query_adapter_calls_existing_application_service():
     assert output.items[0].total_amount == "88.00"
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"query_type": "detail"},
+        {"query_type": "rule"},
+    ],
+)
+def test_billing_query_shape_errors_fail_input_validation_before_adapter(payload):
+    adapter = Mock()
+
+    result = _executor({"billing_query": adapter}).execute(
+        "billing_query", payload, _runtime(object())
+    )
+
+    assert result.error.code == "INVALID_CAPABILITY_INPUT"
+    adapter.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"query_type": "list"},
+        {"query_type": "list", "period": "2026-08", "fee_type": "PROPERTY"},
+        {"query_type": "detail", "bill_id": "B-1"},
+        {"query_type": "rule", "fee_type": "PROPERTY"},
+    ],
+)
+def test_billing_query_valid_shapes_remain_accepted(payload):
+    assert BillingQueryInput.model_validate(payload).query_type == payload["query_type"]
+
+
 def test_billing_write_adapter_forwards_server_approval_to_application_service():
     ticket = type(
         "Ticket",
@@ -290,12 +403,14 @@ def test_billing_write_adapter_forwards_server_approval_to_application_service()
         subject="账单疑问",
         description="请人工核对",
         bill_id="B-1",
+    )
+    write = CapabilityWriteContext(
         confirmation_token="server-token",
         approval_ref="approval-id",
         idempotency_key="agent-key",
     )
 
-    output = adapter(request, _runtime(context))
+    output = adapter(request, _runtime(context, write=write))
 
     service.create_draft.assert_called_once_with(
         context,
@@ -317,16 +432,17 @@ def test_real_write_path_preserves_single_execution_and_service_invariants(
     payload = {
         "description": "客厅插座没电",
         "location": "客厅",
-        "confirmation_token": "confirmed",
-        "idempotency_key": "capability-write-key",
     }
     invocation = CapabilityInvocationState(human_confirmed=True)
-    first = executor.execute(
-        "repair_create", payload, _runtime(resident_context, ids.house), invocation
+    runtime = _runtime(
+        resident_context,
+        ids.house,
+        CapabilityWriteContext(
+            confirmation_token="confirmed", idempotency_key="capability-write-key"
+        ),
     )
-    second = executor.execute(
-        "repair_create", payload, _runtime(resident_context, ids.house), invocation
-    )
+    first = executor.execute("repair_create", payload, runtime, invocation)
+    second = executor.execute("repair_create", payload, runtime, invocation)
     assert first.ok and second.ok
     assert first.output.work_order.id == second.output.work_order.id
     assert len(harness.state.orders) == 1

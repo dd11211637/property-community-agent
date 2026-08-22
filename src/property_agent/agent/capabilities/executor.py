@@ -64,7 +64,7 @@ class CapabilityExecutor:
                 "INVALID_CAPABILITY_INPUT",
                 "Capability input validation failed.",
                 "validation",
-                {"errors": exc.errors(include_url=False)},
+                self._safe_validation_details(exc),
             )
         bounded = self._with_fingerprint(name, request, invocation)
         decision = self._policy.evaluate(spec, request, runtime, bounded)
@@ -78,16 +78,37 @@ class CapabilityExecutor:
         adapter = self._adapters.get(name)
         if adapter is None:
             return self._failure(name, "CAPABILITY_ADAPTER_MISSING", name, "configuration")
-        self._observe("capability_started", {"capability": name})
+        self._observe_safely("capability_started", {"capability": name})
         try:
             raw_output = adapter(request, runtime)
-            output = spec.output_type.model_validate(raw_output)
         except Exception as exc:  # normalized public boundary; never retries or invokes twice
             result = self._adapter_failure(name, decision, bounded.fingerprint, exc)
-            self._observe("capability_failed", {"capability": name, "code": result.error.code})
+            self._observe_safely(
+                "capability_failed", {"capability": name, "code": result.error.code}
+            )
             return result
-        self._observe("capability_finished", {"capability": name, "ok": True})
+        try:
+            output = spec.output_type.model_validate(raw_output)
+        except ValidationError as exc:
+            result = self._output_failure(name, decision, bounded.fingerprint, exc)
+            self._observe_safely(
+                "capability_failed", {"capability": name, "code": result.error.code}
+            )
+            return result
+        except Exception as exc:
+            result = self._adapter_failure(name, decision, bounded.fingerprint, exc)
+            self._observe_safely(
+                "capability_failed", {"capability": name, "code": result.error.code}
+            )
+            return result
+        self._observe_safely("capability_finished", {"capability": name, "ok": True})
         return CapabilityResult(name, decision, output=output, fingerprint=bounded.fingerprint)
+
+    def _observe_safely(self, event: str, fields: dict[str, Any]) -> None:
+        try:
+            self._observe(event, fields)
+        except Exception:
+            return
 
     @staticmethod
     def _with_fingerprint(
@@ -140,3 +161,26 @@ class CapabilityExecutor:
                 exc,
             )
         return CapabilityResult(name, decision, error=error, fingerprint=fingerprint)
+
+    @classmethod
+    def _output_failure(cls, name, decision, fingerprint, exc: ValidationError) -> CapabilityResult:
+        error = CapabilityError(
+            "INVALID_CAPABILITY_OUTPUT",
+            "Capability output validation failed.",
+            "validation",
+            cls._safe_validation_details(exc),
+            exc,
+        )
+        return CapabilityResult(name, decision, error=error, fingerprint=fingerprint)
+
+    @staticmethod
+    def _safe_validation_details(exc: ValidationError) -> dict[str, Any]:
+        return {
+            "errors": [
+                {
+                    "type": str(error["type"]),
+                    "loc": [str(part) for part in error["loc"]],
+                }
+                for error in exc.errors(include_url=False)
+            ]
+        }

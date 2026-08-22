@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from property_agent.agent.capabilities.contracts import (
     CapabilityInput,
@@ -48,6 +48,14 @@ class BillingQueryInput(CapabilityInput):
     fee_type: str | None = Field(default=None, max_length=32)
     bill_id: str | None = Field(default=None, max_length=64)
 
+    @model_validator(mode="after")
+    def validate_query_shape(self) -> BillingQueryInput:
+        if self.query_type == "detail" and not self.bill_id:
+            raise ValueError("bill_id is required when query_type is detail")
+        if self.query_type == "rule" and not self.fee_type:
+            raise ValueError("fee_type is required when query_type is rule")
+        return self
+
 
 class BillingQueryOutput(CapabilityOutput):
     query_type: str
@@ -63,9 +71,6 @@ class BillingConsultInput(CapabilityInput):
     subject: str = Field(min_length=1, max_length=200)
     description: str = Field(min_length=1, max_length=2000)
     bill_id: str | None = Field(default=None, max_length=64)
-    confirmation_token: str = Field(min_length=1, max_length=512, repr=False)
-    approval_ref: str | None = Field(default=None, max_length=64, repr=False)
-    idempotency_key: str = Field(min_length=1, max_length=128)
 
 
 class ConsultationBrief(CapabilityOutput):
@@ -125,18 +130,16 @@ class BillingQueryAdapter:
     ) -> BillingQueryOutput:
         db = self._session_provider(runtime)
         if request.query_type == "detail":
-            if not request.bill_id:
-                raise ValueError("bill_id is required for billing detail")
-            bill, rule = self._service.get_bill(runtime.request_context, db, request.bill_id)
+            bill_id = cast(str, request.bill_id)
+            bill, rule = self._service.get_bill(runtime.request_context, db, bill_id)
             return BillingQueryOutput(
                 query_type="detail", bill=_bill_brief(bill), rule_known=rule is not None
             )
         if request.query_type == "rule":
-            if not request.fee_type:
-                raise ValueError("fee_type is required for billing rule")
-            rule = self._service.get_rule(runtime.request_context, db, request.fee_type)
+            fee_type = cast(str, request.fee_type)
+            rule = self._service.get_rule(runtime.request_context, db, fee_type)
             return BillingQueryOutput(
-                query_type="rule", fee_type=request.fee_type, rule_known=rule is not None
+                query_type="rule", fee_type=fee_type, rule_known=rule is not None
             )
         bills = self._service.list_bills(
             runtime.request_context,
@@ -160,15 +163,17 @@ class BillingConsultAdapter:
     def __call__(
         self, request: BillingConsultInput, runtime: CapabilityRuntimeContext
     ) -> BillingConsultOutput:
+        if runtime.write is None:
+            raise RuntimeError("billing_consult requires server write context")
         ticket = self._service.create_draft(
             runtime.request_context,
             self._session_provider(runtime),
             subject=request.subject,
             description=request.description,
             bill_id=request.bill_id,
-            idempotency_key=request.idempotency_key,
-            confirmation_token=request.confirmation_token,
-            approval_ref=request.approval_ref,
+            idempotency_key=runtime.write.idempotency_key,
+            confirmation_token=runtime.write.confirmation_token,
+            approval_ref=runtime.write.approval_ref,
         )
         return BillingConsultOutput(
             consultation=ConsultationBrief(
@@ -177,5 +182,5 @@ class BillingConsultAdapter:
                 status=str(getattr(ticket, "status", "")),
                 bill_id=str(ticket.bill_id) if getattr(ticket, "bill_id", None) else None,
             ),
-            idempotency_key=request.idempotency_key,
+            idempotency_key=runtime.write.idempotency_key,
         )

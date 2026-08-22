@@ -5,6 +5,7 @@
   转人工工单，工具把它翻译成接管指令而不是伪装成成功。
 """
 
+from functools import partial
 from typing import Any
 
 from property_agent.agent.capabilities.adapters.repair import (
@@ -16,7 +17,9 @@ from property_agent.agent.capabilities.adapters.repair import (
 from property_agent.agent.capabilities.catalog import default_capability_registry
 from property_agent.agent.capabilities.contracts import (
     CapabilityInvocationState,
+    CapabilityResult,
     CapabilityRuntimeContext,
+    CapabilityWriteContext,
 )
 from property_agent.agent.capabilities.executor import CapabilityExecutor
 from property_agent.agent.capabilities.policy import CapabilityPolicy
@@ -48,6 +51,26 @@ def normalize_repair_category(value: Any) -> RepairCategory:
         return classify_repair_category(text)
 
 
+def _invoke_capability(
+    executor: CapabilityExecutor,
+    context_provider: ContextProvider,
+    state: GraphState,
+    name: str,
+    payload: dict[str, Any],
+    *,
+    confirmed: bool = False,
+    write: CapabilityWriteContext | None = None,
+) -> CapabilityResult:
+    return executor.execute(
+        name,
+        payload,
+        CapabilityRuntimeContext(
+            context_provider(state), state.current_house_id, legacy_state=state, write=write
+        ),
+        CapabilityInvocationState(allowlist=frozenset({name}), human_confirmed=confirmed),
+    )
+
+
 def build_repair_tools(
     service: Any,
     context_provider: ContextProvider,
@@ -63,15 +86,7 @@ def build_repair_tools(
         },
     )
 
-    def invoke(state: GraphState, name: str, payload: dict[str, Any], *, confirmed=False):
-        return executor.execute(
-            name,
-            payload,
-            CapabilityRuntimeContext(
-                context_provider(state), state.current_house_id, legacy_state=state
-            ),
-            CapabilityInvocationState(allowlist=frozenset({name}), human_confirmed=confirmed),
-        )
+    invoke = partial(_invoke_capability, executor, context_provider)
 
     def repair_list(state: GraphState) -> dict[str, Any]:
         assert_level("repair_list", OperationLevel.READ)
@@ -125,11 +140,13 @@ def build_repair_tools(
                 "description": description,
                 "location": location,
                 "urgency": urgency,
-                "confirmation_token": token,
-                "approval_ref": state.approval_ref,
-                "idempotency_key": key,
             },
             confirmed=True,
+            write=CapabilityWriteContext(
+                confirmation_token=token,
+                approval_ref=state.approval_ref,
+                idempotency_key=key,
+            ),
         )
         if result.error and result.error.code == "HANDOVER_REQUIRED":
             return handover("repair_create", result.error.message, **result.error.details)

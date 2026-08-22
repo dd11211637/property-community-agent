@@ -13,6 +13,7 @@ from property_agent.agent.capabilities.contracts import (
     CapabilityRisk,
     CapabilityRuntimeContext,
     CapabilitySpec,
+    CapabilityWriteContext,
     PolicyDisposition,
 )
 from property_agent.agent.capabilities.executor import CapabilityExecutor
@@ -34,6 +35,7 @@ __all__ = [
     "CapabilityRisk",
     "CapabilityRuntimeContext",
     "CapabilitySpec",
+    "CapabilityWriteContext",
     "PolicyDisposition",
     "default_capability_registry",
 ]

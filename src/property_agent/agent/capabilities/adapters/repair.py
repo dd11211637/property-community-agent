@@ -72,9 +72,6 @@ class RepairCreateInput(CapabilityInput):
     description: str = Field(min_length=1, max_length=2000)
     location: str = Field(min_length=1, max_length=255)
     urgency: str = "NORMAL"
-    confirmation_token: str = Field(min_length=1, max_length=512, repr=False)
-    approval_ref: str | None = Field(default=None, max_length=64, repr=False)
-    idempotency_key: str = Field(min_length=1, max_length=128)
 
 
 class RepairCreateOutput(CapabilityOutput):
@@ -184,6 +181,8 @@ class RepairCreateAdapter:
             raise CapabilityDomainError(
                 "CURRENT_HOUSE_REQUIRED", "repair_create 需要先选择当前房屋"
             )
+        if runtime.write is None:
+            raise RuntimeError("repair_create requires server write context")
         category = classify_repair_category(request.description)
         command = CreateWorkOrderCommand(
             house_id=runtime.current_house_id,
@@ -191,15 +190,15 @@ class RepairCreateAdapter:
             location=request.location,
             description=request.description,
             urgency=normalize_repair_urgency(request.urgency),
-            confirmation_token=request.confirmation_token,
-            approval_ref=request.approval_ref,
+            confirmation_token=runtime.write.confirmation_token,
+            approval_ref=runtime.write.approval_ref,
         )
         with _translate_public_repair_errors():
             work_order = self._service.create(
                 command,
                 runtime.request_context,
-                idempotency_key=request.idempotency_key,
+                idempotency_key=runtime.write.idempotency_key,
             )
         return RepairCreateOutput(
-            work_order=_brief(work_order), idempotency_key=request.idempotency_key
+            work_order=_brief(work_order), idempotency_key=runtime.write.idempotency_key
         )

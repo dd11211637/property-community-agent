@@ -78,12 +78,22 @@ class CapabilitySpec:
 
 
 @dataclass(frozen=True, slots=True)
+class CapabilityWriteContext:
+    """Server-issued material bound to a prepared write invocation."""
+
+    confirmation_token: str = field(repr=False)
+    idempotency_key: str = field(repr=False)
+    approval_ref: str | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True, slots=True)
 class CapabilityRuntimeContext:
     """Server-created facts supplied separately from model-controlled input."""
 
     request_context: Any
     current_house_id: Any = None
     legacy_state: Any = None
+    write: CapabilityWriteContext | None = field(default=None, repr=False)
 
     @property
     def actor_id(self) -> Any:

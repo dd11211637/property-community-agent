@@ -8,6 +8,7 @@
 """
 
 from collections.abc import Callable
+from functools import partial
 from typing import Any
 
 from property_agent.agent.capabilities.adapters.billing import (
@@ -20,7 +21,9 @@ from property_agent.agent.capabilities.adapters.billing import (
 from property_agent.agent.capabilities.catalog import default_capability_registry
 from property_agent.agent.capabilities.contracts import (
     CapabilityInvocationState,
+    CapabilityResult,
     CapabilityRuntimeContext,
+    CapabilityWriteContext,
 )
 from property_agent.agent.capabilities.executor import CapabilityExecutor
 from property_agent.agent.capabilities.policy import CapabilityPolicy
@@ -40,6 +43,26 @@ from property_agent.agent.tools.base import (
 def _normalize_fee_type(value: Any) -> str | None:
     """Compatibility facade; canonical normalization lives in the typed adapter."""
     return _capability_normalize_fee_type(None if value is None else str(value))
+
+
+def _invoke_capability(
+    executor: CapabilityExecutor,
+    context_provider: ContextProvider,
+    state: GraphState,
+    name: str,
+    payload: dict[str, Any],
+    *,
+    confirmed: bool = False,
+    write: CapabilityWriteContext | None = None,
+) -> CapabilityResult:
+    return executor.execute(
+        name,
+        payload,
+        CapabilityRuntimeContext(
+            context_provider(state), state.current_house_id, legacy_state=state, write=write
+        ),
+        CapabilityInvocationState(allowlist=frozenset({name}), human_confirmed=confirmed),
+    )
 
 
 def build_billing_tools(
@@ -62,15 +85,7 @@ def build_billing_tools(
         },
     )
 
-    def invoke(state: GraphState, name: str, payload: dict[str, Any], *, confirmed=False):
-        return executor.execute(
-            name,
-            payload,
-            CapabilityRuntimeContext(
-                context_provider(state), state.current_house_id, legacy_state=state
-            ),
-            CapabilityInvocationState(allowlist=frozenset({name}), human_confirmed=confirmed),
-        )
+    invoke = partial(_invoke_capability, executor, context_provider)
 
     def billing_query(state: GraphState) -> dict[str, Any]:
         assert_level("billing_query", OperationLevel.READ)
@@ -95,7 +110,7 @@ def build_billing_tools(
 
     def billing_consult(state: GraphState) -> dict[str, Any]:
         assert_level("billing_consult", OperationLevel.WRITE_LOW_RISK)
-        require_confirmation(state, "billing_consult")
+        token = require_confirmation(state, "billing_consult")
         subject = str(require_slot(state, "subject", "billing_consult"))
         description = str(require_slot(state, "description", "billing_consult"))
         bill_id = state.slots.get("bill_id")
@@ -111,11 +126,13 @@ def build_billing_tools(
                 "subject": subject,
                 "description": description,
                 "bill_id": str(bill_id) if bill_id else None,
-                "idempotency_key": key,
-                "confirmation_token": state.confirmation_token or "",
-                "approval_ref": state.approval_ref,
             },
             confirmed=True,
+            write=CapabilityWriteContext(
+                confirmation_token=token,
+                approval_ref=state.approval_ref,
+                idempotency_key=key,
+            ),
         )
         return _tool_result("billing_consult", result)
 
