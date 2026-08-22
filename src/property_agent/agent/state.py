@@ -1,18 +1,60 @@
-"""Graph State — PRD §6.5.4.
+"""Typed checkpointable Agent state with a legacy GraphState facade."""
 
-保存完成当前任务所需的会话状态。仅从可信 RequestContext 读取 actor / community /
-current_house；不长期保存完整手机号、住户姓名与门牌组合、完整附件地址或无关账单数据。
-切换房屋时由节点负责清除地址、工单和账单相关槽位。
-"""
+from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypedDict
 from uuid import UUID
+
+from property_agent.agent.capabilities.contracts import CapabilityInvocationState
+from property_agent.agent.working_state import DomainWorkingState, EmptyWorkingState
+
+
+class AgentMessage(TypedDict, total=False):
+    role: str
+    content: str
+    name: str
+
+
+@dataclass(slots=True)
+class ClarificationState:
+    missing_inputs: list[str] = field(default_factory=list)
+    requested_input: str | None = None
+
+
+@dataclass(slots=True)
+class ProposedAction:
+    capability: str
+    params: dict[str, Any]
+    params_hash: str | None = None
+    issued_at: str | None = None
+
+
+@dataclass(slots=True)
+class OrchestrationState:
+    resume: Any | None = None
+    interrupt_node: str | None = None
+    continuation: bool = False
+    contextual_followup: bool = False
 
 
 @dataclass
-class GraphState:
+class AgentState:
+    """Mutable orchestration state; never a trusted identity or approval source.
+
+    ``slots`` and identity fields are version-1 graph compatibility projections.
+    New capabilities consume typed input plus trusted ``RuntimeContext``.
+    """
+
     conversation_id: str
+    schema_version: int = 2
+    domain: DomainWorkingState = field(default_factory=EmptyWorkingState)
+    capability_invocation: CapabilityInvocationState = field(
+        default_factory=CapabilityInvocationState
+    )
+    clarification: ClarificationState = field(default_factory=ClarificationState)
+    proposed_action: ProposedAction | None = None
+    orchestration: OrchestrationState = field(default_factory=OrchestrationState)
     actor_id: UUID | None = None
     community_id: UUID | None = None
     current_house_id: UUID | None = None
@@ -21,72 +63,38 @@ class GraphState:
     slots: dict[str, Any] = field(default_factory=dict)
     missing_slots: list[str] = field(default_factory=list)
     requested_slot: str | None = None
-    operation_level: str | None = None  # read / write-low-risk / write-high-risk
+    operation_level: str | None = None
     pending_action: dict[str, Any] | None = None
     confirmation_token: str | None = None
-    # P0 审批原子化：服务端在确认时创建的 PENDING 审批引用，随确认回执下发，
-    # 由工具层透传到业务 Service，在业务 UoW 内与 mutation 同事务消费（CONSUMED）。
     approval_ref: str | None = None
     tool_result: dict[str, Any] | None = None
     retry_count: int = 0
     handover_required: bool = False
-    messages: list[dict[str, Any]] = field(default_factory=list)
+    messages: list[AgentMessage] = field(default_factory=list)
     trusted_context: dict[str, Any] = field(default_factory=dict)
     read_facts: dict[str, Any] | None = None
     read_trace: dict[str, Any] | None = None
     error: str | None = None
-    # 内部运行态（不进入业务语义）
+    # Constructor-compatible v1 projection. The codec maps these fields to the
+    # typed ``orchestration`` owner on every persistence boundary.
     _resume: Any | None = None
     _interrupt_node: str | None = None
     _continuation: bool = False
     _contextual_followup: bool = False
 
     def add_message(self, role: str, content: str, **extra: Any) -> None:
-        msg = {"role": role, "content": content, **extra}
-        self.messages.append(msg)
+        self.messages.append({"role": role, "content": content, **extra})
 
     def to_dict(self) -> dict[str, Any]:
-        def _enc(v: Any) -> Any:
-            if isinstance(v, UUID):
-                return str(v)
-            return v
+        from property_agent.agent.state_codec import CheckpointStateCodec
 
-        return {
-            "conversation_id": self.conversation_id,
-            "actor_id": _enc(self.actor_id),
-            "community_id": _enc(self.community_id),
-            "current_house_id": _enc(self.current_house_id),
-            "intent": self.intent,
-            "confidence": self.confidence,
-            "slots": self.slots,
-            "missing_slots": self.missing_slots,
-            "requested_slot": self.requested_slot,
-            "operation_level": self.operation_level,
-            "pending_action": self.pending_action,
-            "confirmation_token": self.confirmation_token,
-            "approval_ref": self.approval_ref,
-            "tool_result": self.tool_result,
-            "retry_count": self.retry_count,
-            "handover_required": self.handover_required,
-            "messages": self.messages,
-            "trusted_context": self.trusted_context,
-            "read_facts": self.read_facts,
-            "read_trace": self.read_trace,
-            "error": self.error,
-            "_resume": self._resume,
-            "_interrupt_node": self._interrupt_node,
-            "_continuation": self._continuation,
-            "_contextual_followup": self._contextual_followup,
-        }
+        return CheckpointStateCodec().encode(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "GraphState":
-        def _dec(k: str, v: Any) -> Any:
-            if v is None:
-                return None
-            if k in ("actor_id", "community_id", "current_house_id"):
-                return UUID(v)
-            return v
+    def from_dict(cls, data: dict[str, Any]) -> AgentState:
+        from property_agent.agent.state_codec import CheckpointStateCodec
 
-        known = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
-        return cls(**{k: _dec(k, v) for k, v in data.items() if k in known})
+        return CheckpointStateCodec().decode(data)
+
+
+GraphState = AgentState

@@ -28,6 +28,7 @@ from property_agent.agent.capabilities.contracts import (
 from property_agent.agent.capabilities.executor import CapabilityExecutor
 from property_agent.agent.capabilities.policy import CapabilityPolicy
 from property_agent.agent.policies import OperationLevel
+from property_agent.agent.runtime import ExecutionPolicy, RuntimeContext
 from property_agent.agent.state import GraphState
 from property_agent.agent.tools.base import (
     ContextProvider,
@@ -55,13 +56,24 @@ def _invoke_capability(
     confirmed: bool = False,
     write: CapabilityWriteContext | None = None,
 ) -> CapabilityResult:
+    context = context_provider(state)
+    trusted_runtime = RuntimeContext.from_request_context(
+        context,
+        conversation_id=state.conversation_id,
+        current_house_id=state.current_house_id,
+        execution_policy=ExecutionPolicy(allowlist=frozenset({name})),
+    )
     return executor.execute(
         name,
         payload,
         CapabilityRuntimeContext(
-            context_provider(state), state.current_house_id, legacy_state=state, write=write
+            context,
+            state.current_house_id,
+            legacy_state=state,
+            write=write,
+            trusted_runtime=trusted_runtime,
         ),
-        CapabilityInvocationState(allowlist=frozenset({name}), human_confirmed=confirmed),
+        CapabilityInvocationState(human_confirmed=confirmed),
     )
 
 

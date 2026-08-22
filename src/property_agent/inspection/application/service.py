@@ -1,8 +1,12 @@
-from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
+from property_agent.inspection.application.agent_authority import (
+    consume_inspection_agent_write,
+    inspection_operator_role,
+    require_inspection_idempotency_key,
+)
 from property_agent.inspection.application.commands import (
     AddAiSuggestionCommand,
     CreateInspectionTaskCommand,
@@ -39,6 +43,7 @@ from property_agent.inspection.domain.errors import (
     validation_error,
     version_conflict,
 )
+from property_agent.platform.application.agent_write_authority import business_command
 from property_agent.platform.application.hashing import canonical_hash
 
 # 角色分组
@@ -91,14 +96,16 @@ class InspectionTaskService:
         *,
         idempotency_key: str,
     ) -> InspectionTask:
-        self._require_idempotency_key(idempotency_key)
+        require_inspection_idempotency_key(idempotency_key)
         self._require_role(context, *TASK_CREATE_ROLES)
         operation = "INSPECTION_TASK_CREATE"
-        request_hash = canonical_hash(asdict(command))
+        command_data = business_command(command)
+        request_hash = canonical_hash(command_data)
         with self._unit_of_work_factory() as uow:
             replay = self._idempotent_replay(uow, context, operation, idempotency_key, request_hash)
             if replay is not None:
                 return replay
+            consume_inspection_agent_write(uow, context, command, operation)
             self._validate_create(command)
             self._validate_plan_conflict(command, context, uow)
             now = datetime.now(UTC)
@@ -187,9 +194,10 @@ class InspectionTaskService:
         *,
         idempotency_key: str,
     ) -> InspectionTask:
-        self._require_idempotency_key(idempotency_key)
+        require_inspection_idempotency_key(idempotency_key)
         operation = f"INSPECTION_TASK_{command.action.value}"
-        request_hash = canonical_hash({"task_id": task_id, **asdict(command)})
+        command_data = business_command(command)
+        request_hash = canonical_hash({"task_id": task_id, **command_data})
         with self._unit_of_work_factory() as uow:
             replay = self._idempotent_replay(uow, context, operation, idempotency_key, request_hash)
             if replay is not None:
@@ -197,6 +205,8 @@ class InspectionTaskService:
             task = self._get_authorized_task(uow, task_id, context)
             if task.version != command.expected_version:
                 raise version_conflict(task.version)
+            if command.action in {TaskAction.START, TaskAction.ADD_RECORD}:
+                consume_inspection_agent_write(uow, context, command, operation, task_id=task_id)
             now = datetime.now(UTC)
             from_status = task.status
             reason = self._apply_task_action(uow, task, command, context, now)
@@ -388,14 +398,16 @@ class InspectionTaskService:
         idempotency_key: str,
     ) -> InspectionTask:
         """追加一条 AI 异常建议（置为待人工确认）。"""
-        self._require_idempotency_key(idempotency_key)
+        require_inspection_idempotency_key(idempotency_key)
         self._require_role(context, *TASK_CREATE_ROLES)
         operation = "INSPECTION_TASK_ADD_AI_SUGGESTION"
-        request_hash = canonical_hash(asdict(command))
+        command_data = business_command(command)
+        request_hash = canonical_hash(command_data)
         with self._unit_of_work_factory() as uow:
             replay = self._idempotent_replay(uow, context, operation, idempotency_key, request_hash)
             if replay is not None:
                 return replay
+            consume_inspection_agent_write(uow, context, command, operation, task_id=task_id)
             task = self._get_authorized_task(uow, task_id, context)
             now = datetime.now(UTC)
             task.add_ai_suggestion(
@@ -442,7 +454,7 @@ class InspectionTaskService:
         idempotency_key: str,
     ) -> InspectionTask:
         """授权管理者确认全部待确认建议，清除待确认标识。"""
-        self._require_idempotency_key(idempotency_key)
+        require_inspection_idempotency_key(idempotency_key)
         self._require_role(context, *TASK_COMPLETE_ROLES)
         operation = "INSPECTION_TASK_CONFIRM_AI"
         request_hash = canonical_hash({"task_id": str(task_id)})
@@ -540,12 +552,6 @@ class InspectionTaskService:
         if not context.has_any_role(*TASK_ASSIGNEE_ROLES) or task.assignee_id != context.actor_id:
             raise forbidden()
 
-    def _require_idempotency_key(self, key: str) -> None:
-        if not key or not key.strip() or len(key) > 128:
-            raise validation_error(
-                "Idempotency-Key is required and must not exceed 128 characters."
-            )
-
     def _validate_pagination(self, limit: int, offset: int) -> None:
         if limit < 1 or limit > 100 or offset < 0:
             raise validation_error("Pagination must use offset >= 0 and limit between 1 and 100.")
@@ -620,7 +626,7 @@ class InspectionTaskService:
             action=action,
             to_status=task.status.value,
             operator_id=context.actor_id,
-            operator_role=self._operator_role(context).value,
+            operator_role=inspection_operator_role(context).value,
             reason=reason,
             request_id=context.request_id,
             created_at=now,
@@ -638,13 +644,6 @@ class InspectionTaskService:
             request_id=context.request_id,
             created_at=now,
         )
-
-    @staticmethod
-    def _operator_role(context) -> Role:
-        for role in (Role.MANAGER, Role.SECURITY_STAFF, Role.CUSTOMER_SERVICE, Role.RESIDENT):
-            if role in context.roles:
-                return role
-        raise forbidden()
 
     def _idempotent_replay(
         self, uow, context, operation, key, request_hash
@@ -669,7 +668,7 @@ class SecurityEventService:
         *,
         idempotency_key: str,
     ) -> SecurityEvent:
-        self._require_idempotency_key(idempotency_key)
+        require_inspection_idempotency_key(idempotency_key)
         self._require_role(context, *EVENT_CREATE_ROLES)
         if not command.confirmation_token or not command.confirmation_token.strip():
             raise confirmation_required()
@@ -810,9 +809,10 @@ class SecurityEventService:
         *,
         idempotency_key: str,
     ) -> SecurityEvent:
-        self._require_idempotency_key(idempotency_key)
+        require_inspection_idempotency_key(idempotency_key)
         operation = f"SECURITY_EVENT_{command.action.value}"
-        request_hash = canonical_hash({"event_id": event_id, **asdict(command)})
+        command_data = business_command(command)
+        request_hash = canonical_hash({"event_id": event_id, **command_data})
         with self._unit_of_work_factory() as uow:
             replay = self._idempotent_replay(uow, context, operation, idempotency_key, request_hash)
             if replay is not None:
@@ -820,6 +820,8 @@ class SecurityEventService:
             event = self._get_authorized_event(uow, event_id, context)
             if event.version != command.expected_version:
                 raise version_conflict(event.version)
+            if command.action == EventAction.SUBMIT_DISPOSAL:
+                consume_inspection_agent_write(uow, context, command, operation, event_id=event_id)
             now = datetime.now(UTC)
             from_status = event.status
             reason = self._apply_event_action(uow, event, command, context, now)
@@ -994,12 +996,6 @@ class SecurityEventService:
         if not context.has_any_role(*EVENT_HANDLER_ROLES) or event.assignee_id != context.actor_id:
             raise forbidden()
 
-    def _require_idempotency_key(self, key: str) -> None:
-        if not key or not key.strip() or len(key) > 128:
-            raise validation_error(
-                "Idempotency-Key is required and must not exceed 128 characters."
-            )
-
     def _validate_pagination(self, limit: int, offset: int) -> None:
         if limit < 1 or limit > 100 or offset < 0:
             raise validation_error("Pagination must use offset >= 0 and limit between 1 and 100.")
@@ -1078,7 +1074,7 @@ class SecurityEventService:
             action=action,
             to_status=event.status.value,
             operator_id=context.actor_id,
-            operator_role=self._operator_role(context).value,
+            operator_role=inspection_operator_role(context).value,
             reason=reason,
             request_id=context.request_id,
             created_at=now,
@@ -1095,13 +1091,6 @@ class SecurityEventService:
             request_id=context.request_id,
             created_at=now,
         )
-
-    @staticmethod
-    def _operator_role(context) -> Role:
-        for role in (Role.MANAGER, Role.SECURITY_STAFF, Role.CUSTOMER_SERVICE, Role.RESIDENT):
-            if role in context.roles:
-                return role
-        raise forbidden()
 
     def _idempotent_replay(
         self, uow, context, operation, key, request_hash

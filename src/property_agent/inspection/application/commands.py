@@ -19,6 +19,8 @@ class CreateInspectionTaskCommand:
     planned_at: datetime | None = None
     due_at: datetime | None = None
     attachment_ids: tuple[UUID, ...] = ()
+    confirmation_token: str | None = None
+    approval_ref: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +46,8 @@ class AddAiSuggestionCommand:
     finding: str
     severity: str = "MEDIUM"
     model: str = "inspection-ai"
+    confirmation_token: str | None = None
+    approval_ref: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +76,8 @@ class ExecuteEventActionCommand:
     assignee_id: UUID | None = None
     note: str | None = None
     attachment_ids: tuple[UUID, ...] = ()
+    confirmation_token: str | None = None
+    approval_ref: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

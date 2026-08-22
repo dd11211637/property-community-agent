@@ -514,10 +514,14 @@ def _build_agent_tooling(
         billing_service=app.state.billing_service,
         consultation_service=app.state.consultation_service,
         billing_session_provider=lambda runtime: session_provider(runtime.legacy_state),
+        announcement_service=app.state.announcement_service,
+        announcement_model_gateway=gateway,
+        inspection_task_service=app.state.task_service,
+        inspection_event_service=app.state.event_service,
     )
     repair_tools = build_repair_tools(agent_work_orders, context_provider, capability_executor)
     announcement_tools = build_announcement_tools(
-        app.state.announcement_service, context_provider, gateway
+        app.state.announcement_service, context_provider, gateway, capability_executor
     )
     billing_tools = build_billing_tools(
         app.state.billing_service,
@@ -527,7 +531,10 @@ def _build_agent_tooling(
         capability_executor,
     )
     inspection_tools = build_inspection_tools(
-        app.state.task_service, app.state.event_service, inspection_context_provider
+        app.state.task_service,
+        app.state.event_service,
+        inspection_context_provider,
+        capability_executor,
     )
     controlled_read_tools = build_read_tools(
         announcement_tools=announcement_tools,

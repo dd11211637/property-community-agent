@@ -11,6 +11,7 @@ from property_agent.agent.capabilities.contracts import (
     CapabilityInput,
     CapabilityInvocationState,
     CapabilityPolicyDecision,
+    CapabilityRisk,
     CapabilityRuntimeContext,
     CapabilitySpec,
     PolicyDisposition,
@@ -70,17 +71,18 @@ class CapabilityPolicy:
         invocation: CapabilityInvocationState,
     ) -> CapabilityPolicyDecision | None:
         reason = None
+        constraints = runtime.execution_policy
         if runtime.request_context is None:
             reason = "TRUSTED_CONTEXT_REQUIRED"
-        elif invocation.allowlist is not None and spec.name not in invocation.allowlist:
+        elif constraints.allowlist is not None and spec.name not in constraints.allowlist:
             reason = "CAPABILITY_NOT_ALLOWLISTED"
-        elif invocation.step >= invocation.max_steps:
+        elif invocation.step >= constraints.max_steps:
             reason = "MAX_STEPS_EXCEEDED"
-        elif invocation.calls_made >= invocation.max_calls:
+        elif invocation.calls_made >= constraints.max_calls:
             reason = "EXECUTION_BUDGET_EXCEEDED"
         elif (
-            invocation.deadline_monotonic is not None
-            and time.monotonic() >= invocation.deadline_monotonic
+            constraints.deadline_monotonic is not None
+            and time.monotonic() >= constraints.deadline_monotonic
         ):
             reason = "EXECUTION_DEADLINE_EXCEEDED"
         elif invocation.fingerprint in invocation.prior_fingerprints:
@@ -93,3 +95,19 @@ class CapabilityPolicy:
             ApprovalRequirement.NONE,
             reason,
         )
+
+
+def default_capability_policy() -> CapabilityPolicy:
+    """Project policy rules layered over canonical static Registry metadata."""
+
+    def security_event_risk(spec, request, runtime, invocation):
+        if str(getattr(request, "risk_level", "")).upper() != "HIGH_RISK":
+            return None
+        return CapabilityPolicyDecision(
+            PolicyDisposition.ALLOW,
+            CapabilityRisk.WRITE_HIGH_RISK,
+            ApprovalRequirement.REQUIRED,
+            "HIGH_RISK_EVENT_REQUIRES_HITL",
+        )
+
+    return CapabilityPolicy({"security_event_create": security_event_risk})

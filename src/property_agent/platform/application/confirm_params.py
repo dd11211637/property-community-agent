@@ -14,7 +14,16 @@ from uuid import UUID
 
 from property_agent.agent.state import GraphState
 from property_agent.agent.tools.repair import normalize_repair_category
+from property_agent.announcement.domain.classification import classify_announcement_category
 from property_agent.announcement.domain.enums import AnnouncementAction
+from property_agent.announcement.domain.policies import normalize_audience_condition
+from property_agent.inspection.application.commands import (
+    AddAiSuggestionCommand,
+    CreateInspectionTaskCommand,
+    ExecuteEventActionCommand,
+    ExecuteTaskActionCommand,
+)
+from property_agent.inspection.domain.enums import EventAction, TaskAction, TaskRecordType
 from property_agent.repair.domain.enums import Urgency
 
 
@@ -73,6 +82,95 @@ def _security_event_params(state: GraphState) -> tuple[str, dict[str, Any]]:
     )
 
 
+def _announcement_create_params(state: GraphState) -> tuple[str, dict[str, Any]]:
+    title = str(state.slots.get("title") or "")
+    body = str(state.slots.get("body") or "")
+    return (
+        "ANNOUNCEMENT_CREATE",
+        {
+            "title": title.strip(),
+            "body": body.strip(),
+            "category": classify_announcement_category(title, body),
+            "audience": normalize_audience_condition(state.slots.get("audience") or {}),
+        },
+    )
+
+
+def _inspection_create_params(state: GraphState) -> tuple[str, dict[str, Any]]:
+    route_points = tuple(state.slots.get("route_points") or ())
+    if not route_points:
+        route_points = (str(state.slots.get("point") or ""),)
+    command = CreateInspectionTaskCommand(
+        title=str(state.slots.get("title") or ""),
+        description=str(state.slots.get("description") or ""),
+        route_points=route_points,
+        planned_at=_optional_datetime(state.slots.get("planned_at")),
+        due_at=_optional_datetime(state.slots.get("due_at")),
+    )
+    return "INSPECTION_TASK_CREATE", _without_approval(command)
+
+
+def _inspection_task_action_params(state: GraphState, tool: str) -> tuple[str, dict[str, Any]]:
+    action = TaskAction.START if tool == "inspection_start_task" else TaskAction.ADD_RECORD
+    is_supplement = bool(state.slots.get("is_supplement"))
+    record_type = None
+    if action == TaskAction.ADD_RECORD:
+        default = "SUPPLEMENT" if is_supplement else "POINT_RECORD"
+        record_type = TaskRecordType(str(state.slots.get("record_type") or default))
+    command = ExecuteTaskActionCommand(
+        action=action,
+        expected_version=int(state.slots.get("expected_version") or 0),
+        note=state.slots.get("note"),
+        record_type=record_type,
+        point=state.slots.get("point"),
+        is_supplement=is_supplement,
+        actual_time=_optional_datetime(state.slots.get("actual_time")),
+        supplement_reason=state.slots.get("supplement_reason"),
+    )
+    params = {"task_id": UUID(str(state.slots["task_id"])), **_without_approval(command)}
+    return f"INSPECTION_TASK_{action.value}", params
+
+
+def _inspection_ai_params(state: GraphState) -> tuple[str, dict[str, Any]]:
+    command = AddAiSuggestionCommand(
+        point=str(state.slots.get("point") or ""),
+        finding=str(state.slots.get("finding") or ""),
+        severity=str(state.slots.get("severity") or "MEDIUM"),
+        model=str(state.slots.get("model") or "inspection-ai"),
+    )
+    return (
+        "INSPECTION_TASK_ADD_AI_SUGGESTION",
+        {"task_id": UUID(str(state.slots["task_id"])), **_without_approval(command)},
+    )
+
+
+def _security_disposal_params(state: GraphState) -> tuple[str, dict[str, Any]]:
+    command = ExecuteEventActionCommand(
+        action=EventAction.SUBMIT_DISPOSAL,
+        expected_version=int(state.slots.get("expected_version") or 0),
+        note=str(state.slots.get("note") or ""),
+    )
+    return (
+        "SECURITY_EVENT_SUBMIT_DISPOSAL",
+        {"event_id": UUID(str(state.slots["event_id"])), **_without_approval(command)},
+    )
+
+
+def _without_approval(command: Any) -> dict[str, Any]:
+    from dataclasses import asdict
+
+    values = asdict(command)
+    values.pop("confirmation_token", None)
+    values.pop("approval_ref", None)
+    return values
+
+
+def _optional_datetime(value: Any) -> datetime | None:
+    if value is None or isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(str(value))
+
+
 def _repair_create_params(state: GraphState) -> tuple[str, dict[str, Any]]:
     urgency_value = str(state.slots.get("urgency") or "NORMAL").upper()
     category = normalize_repair_category(state.slots.get("category"))
@@ -128,10 +226,23 @@ def derive_confirmation_params(
     tool = str(pending.get("tool") or "")
     if tool in {"announce_publish", "announcement_schedule_publish"}:
         return _announcement_params(tool, state, announcement_service)
+    if tool == "announcement_create_draft":
+        return _announcement_create_params(state)
     if tool == "inspection_submit_records":
         return _submit_records_params(state)
     if tool == "security_event_create":
         return _security_event_params(state)
+    if tool in {
+        "inspection_create",
+        "inspection_create_task",
+    }:
+        return _inspection_create_params(state)
+    if tool in {"inspection_start_task", "inspection_add_record", "inspection_submit_record"}:
+        return _inspection_task_action_params(state, tool)
+    if tool == "inspection_ai_suggest":
+        return _inspection_ai_params(state)
+    if tool == "security_event_submit_disposal":
+        return _security_disposal_params(state)
     if tool == "billing_consult":
         return _billing_consult_params(state)
     if tool == "repair_create":

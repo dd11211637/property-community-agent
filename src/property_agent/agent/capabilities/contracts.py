@@ -94,6 +94,8 @@ class CapabilityRuntimeContext:
     current_house_id: Any = None
     legacy_state: Any = None
     write: CapabilityWriteContext | None = field(default=None, repr=False)
+    trusted_runtime: Any = field(default=None, repr=False)
+    inspection_context_projector: Any = field(default=None, repr=False)
 
     @property
     def actor_id(self) -> Any:
@@ -107,20 +109,29 @@ class CapabilityRuntimeContext:
     def roles(self) -> frozenset[str]:
         return frozenset(getattr(self.request_context, "roles", ()))
 
+    @property
+    def execution_policy(self) -> Any:
+        from property_agent.agent.runtime import ExecutionPolicy
 
-@dataclass(frozen=True, slots=True)
+        if self.trusted_runtime is None:
+            return ExecutionPolicy()
+        return self.trusted_runtime.execution_policy
+
+
+@dataclass(slots=True)
 class CapabilityInvocationState:
-    """Bounded orchestration state used only for deterministic classification."""
+    """Mutable, checkpointable progress for one capability invocation."""
 
-    allowlist: frozenset[str] | None = None
     step: int = 0
-    max_steps: int = 1
     calls_made: int = 0
-    max_calls: int = 1
-    deadline_monotonic: float | None = None
     prior_fingerprints: frozenset[str] = field(default_factory=frozenset)
     fingerprint: str | None = None
+    selected_capability: str | None = None
+    retry_count: int = 0
     human_confirmed: bool = False
+
+    def __post_init__(self) -> None:
+        self.prior_fingerprints = frozenset(self.prior_fingerprints)
 
 
 @dataclass(frozen=True, slots=True)
