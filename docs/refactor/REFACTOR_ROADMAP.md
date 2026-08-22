@@ -87,7 +87,7 @@ it?”
 
 - the detailed criteria in
   [`stages/PR2_CAPABILITY_LAYER.md`](stages/PR2_CAPABILITY_LAYER.md) pass;
-- migrated capability metadata has one authoritative registry representation;
+- migrated static capability metadata has one authoritative registry representation;
 - trusted identity/scope cannot be overridden by model arguments;
 - business writes still execute only through Application Services; and
 - legacy runtime compatibility and all required quality gates remain green.
@@ -178,7 +178,8 @@ the durable runtime.
 
 ### Exit criteria
 
-- specialists are stateless and use only registered capabilities;
+- specialists are stateless; their business/domain actions use registered capabilities,
+  while governed orchestration infrastructure uses dedicated interfaces;
 - Supervisor plans and replans within budgets and policy limits;
 - deterministic business and security decisions remain authoritative outside the LLM;
 - HITL and recovery behavior are contract-tested; and

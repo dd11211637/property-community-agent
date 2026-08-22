@@ -63,16 +63,34 @@ metadata, or memory retrieval.
 
 ## 4. Business authority boundary
 
-Every Agent-initiated business write MUST preserve this authority chain:
+Every Agent-initiated business write has two distinct approval boundaries. At the
+orchestration boundary, `CapabilityPolicy` MAY classify an invocation as requiring
+approval or HITL; the Agent or Supervisor MAY propose the action and interrupt while it
+waits for human confirmation. This gate controls whether orchestration may proceed. It
+does not validate or consume authoritative approval state.
+
+The resulting write request MUST preserve this authority chain:
 
 ```text
-Policy
-  -> Approval
+CapabilityPolicy approval/HITL requirement
+  -> proposed action and interrupt/wait
+  -> confirmed invocation
+  -> CapabilityExecutor
+  -> Typed Domain Adapter
   -> Application Service
   -> Unit of Work
-  -> Audit / Outbox
+       -> authoritative approval validation / binding / consumption
+       -> business mutation
+       -> audit / outbox
   -> Commit
 ```
+
+The Application Service and its Unit of Work MUST remain authoritative for live approval
+token/state validation, actor/action/parameter binding, and consumption. Approval
+consumption and the business mutation MUST commit or roll back atomically. The system
+MUST NOT expose an intermediate state in which authoritative approval is consumed but
+the business mutation failed. `CapabilityExecutor` MUST NOT independently consume
+authoritative approval.
 
 The following paths are permanently forbidden:
 
@@ -112,7 +130,7 @@ Application Services. It MUST provide:
 
 - discoverable capability specifications;
 - typed input and output contracts;
-- centralized orchestration metadata such as risk and approval requirements;
+- centralized static orchestration metadata such as baseline risk and approval posture;
 - policy evaluation against trusted runtime facts;
 - bounded, observable invocation; and
 - typed adapters to existing Application Services.
@@ -121,6 +139,14 @@ The registry describes what orchestration may request. It is not a Platform doma
 permission database, or a business authority. Registry metadata MAY narrow access but
 MUST NOT grant access that RBAC, domain rules, approval state, or the Application Service
 would reject.
+
+`CapabilitySpec` is the canonical static declaration for a capability and its baseline
+metadata. `CapabilityPolicy` deterministically computes the effective invocation-specific
+orchestration classification from that specification, validated typed input, trusted
+`RuntimeContext`, and bounded invocation state. That classification MAY vary by
+invocation and include effective risk, approval/HITL requirement, or
+allow/deny/human-only outcomes. Application Services remain authoritative for live
+business authorization, domain state, and dynamic business rules.
 
 ## 7. Trusted RuntimeContext boundary
 
@@ -163,11 +189,18 @@ specialist object lifetime.
 
 The Supervisor is responsible for high-level routing, planning, specialist selection,
 replanning, execution-budget enforcement, result synthesis, and escalation to
-human-in-the-loop flows. It MUST operate only through registered capabilities and MUST
-respect capability policy outcomes.
+human-in-the-loop flows. All business or domain actions requested by the Supervisor MUST
+go through registered capabilities and respect capability policy outcomes.
+
+The Supervisor and specialists MAY use governed orchestration infrastructure through
+dedicated interfaces, including `AgentState`, graph/checkpoint APIs, the Memory API,
+tracing, HITL infrastructure, and execution-budget infrastructure. These interfaces are
+not business capabilities and SHOULD NOT be forced into the business Capability Registry.
 
 The Supervisor MUST NOT implement domain state machines, authorize business operations,
-consume approvals independently of the business transaction, or mutate persistence.
+consume approvals independently of the business transaction, mutate business
+persistence, or bypass the Capability Layer to invoke an Application Service for a
+business action.
 
 ## 11. LangGraph responsibility
 
@@ -219,10 +252,12 @@ support, as needed:
 legacy runtime + compatibility layer + feature flags + progressive rollout + new runtime
 ```
 
-Runtime selection MUST be pinned at conversation creation. A pending or
-`WAITING_CONFIRM` conversation MUST NOT switch runtimes mid-lifecycle. Legacy
-conversations must complete, expire, or be safely drained before their runtime is
-retired. Rollback MUST preserve the correctness substrate and business authority
+Runtime selection MUST be persisted before the first runtime-dependent execution and
+MUST remain pinned for the conversation lifecycle. Current implementations MAY choose
+and persist it at conversation creation. Resume MUST use the same pinned runtime, and a
+pending or `WAITING_CONFIRM` conversation MUST NOT switch runtimes mid-lifecycle. Legacy
+pinned conversations must complete, expire, or be safely drained before their runtime
+is retired. Rollback MUST preserve the correctness substrate and business authority
 boundary.
 
 ## 15. Runner retirement direction

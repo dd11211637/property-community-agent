@@ -80,16 +80,28 @@ Every write adapter MUST call an existing Application Service. Policy and execut
 checks are orchestration defenses and MUST NOT replace Application Service authorization,
 approval, domain validation, UoW, audit, outbox, or transaction ownership.
 
-The write path MUST remain:
+The orchestration gate and authoritative transaction MUST remain distinct:
 
 ```text
-Capability Policy
-  -> Approval
+CapabilityPolicy computes approval/HITL requirement
+  -> Agent/Supervisor proposes action
+  -> interrupt/wait for human confirmation when required
+  -> CapabilityExecutor
+  -> Typed Domain Adapter
   -> Application Service
   -> Unit of Work
-  -> Audit / Outbox
+       -> validate and bind authoritative approval token/state
+       -> consume authoritative approval
+       -> business mutation
+       -> audit / outbox
   -> Commit
 ```
+
+The orchestration gate only determines whether an invocation may proceed to the business
+boundary. `CapabilityExecutor` MUST NOT independently validate or consume authoritative
+approval. The existing Application Service/UoW transaction MUST validate actor, action,
+parameters, token/state, and other live business conditions; approval consumption and
+business mutation MUST commit or roll back atomically.
 
 `CapabilityExecutor -> ORM`, `CapabilityExecutor -> repository.update(...)`, and
 `CapabilityExecutor -> direct SQL business mutation` are forbidden.
@@ -105,16 +117,35 @@ derive or validate it against trusted context; model values MUST NOT widen autho
 
 ### 5.3 Policy semantics
 
-`CapabilityPolicy` MUST be deterministic. It SHOULD evaluate allowlisting, risk,
-approval requirements, trusted scope, execution budget, step/deadline constraints, and
-duplicate-call rules applicable to the invocation. A policy allow decision permits an
-attempt; it does not prove business authorization or success.
+`CapabilitySpec` declares static capability identity, contracts, and baseline metadata.
+It MUST NOT encode every invocation's effective risk or approval result as an invariant
+boolean.
+
+`CapabilityPolicy` MUST provide the single deterministic path for invocation-specific
+orchestration classification. From the `CapabilitySpec`, validated typed capability
+input, trusted `RuntimeContext`, and bounded invocation state, it SHOULD evaluate
+allowlisting, effective risk, approval/HITL requirements, trusted scope, execution budget,
+step/deadline constraints, and duplicate-call rules. Its result MAY include
+allow/deny/human-only and an effective approval requirement. A policy allow decision
+permits an attempt; it does not prove live business authorization or success.
+
+Dynamic business rules, live domain state, and authoritative authorization remain in the
+Application Service.
 
 ### 5.4 Approval and correctness
 
-Risk and approval requirements MUST have one canonical representation for migrated
-capabilities. The executor MUST NOT declare or consume approval outside the existing
-authoritative transaction path.
+Static capability metadata MUST have one canonical source in the Registry. Effective
+invocation classification MUST have one deterministic `CapabilityPolicy` path.
+Application Services remain authoritative for live business authorization, dynamic
+business rules, and approval state.
+
+The Agent or Supervisor MAY propose an action, and orchestration MAY interrupt and wait
+for human confirmation when policy requires it. This is an orchestration-level gate, not
+authoritative approval consumption. `CapabilityExecutor` MUST NOT independently consume
+authoritative approval. Approval token/state validation, actor/action/parameter binding,
+and consumption MUST remain inside the existing Application Service/UoW transaction.
+Approval consumption and business mutation MUST be atomic; an `approval consumed` state
+MUST NOT survive when the associated business mutation fails.
 
 Checkpoint CAS, memory CAS, run lease, heartbeat, fencing, stale-worker rejection,
 approval atomicity, idempotency, audit, outbox, and `CLOSED` terminal behavior MUST
@@ -162,8 +193,9 @@ business logic.
 ### 7.1 CapabilitySpec
 
 `CapabilitySpec` MUST provide a stable capability identifier and typed input/output
-contract. It SHOULD centralize orchestration metadata needed for discovery, risk,
-approval, presentation, and compatibility without embedding callable business logic.
+contract. It SHOULD centralize static orchestration metadata needed for discovery,
+baseline risk/approval posture, presentation, and compatibility without embedding
+callable business logic or invocation-specific business decisions.
 
 ### 7.2 CapabilityRegistry
 
@@ -173,15 +205,17 @@ migrated orchestration metadata. It MUST NOT decide live RBAC or query business 
 
 ### 7.3 CapabilityPolicy
 
-`CapabilityPolicy` MUST produce an explicit allow/deny/approval-required result from a
-capability specification, trusted context, and bounded invocation state. Decisions MUST
-be deterministic, testable, and independent of LLM claims.
+`CapabilityPolicy` MUST produce an explicit invocation-specific classification from a
+capability specification, validated typed input, trusted context, and bounded invocation
+state. Effective risk and allow/deny/human-only/approval-required outcomes MUST be
+deterministic, testable, and independent of LLM claims.
 
 ### 7.4 CapabilityExecutor
 
 `CapabilityExecutor` MUST enforce the policy result and invocation bounds, call exactly
 one selected typed adapter per invocation, and normalize success/error output for
-orchestration. It MUST NOT own database sessions, domain transactions, or approval truth.
+orchestration. It MUST NOT own database sessions, domain transactions, approval truth,
+or authoritative approval consumption.
 
 ### 7.5 Typed domain adapters
 
@@ -214,10 +248,10 @@ For each legacy metadata family, PR2 MUST classify every entry as **migrated**,
 
 | Metadata | PR2 expectation |
 | --- | --- |
-| `TOOL_LEVELS` | Migrated repair/billing levels derive from registry risk/policy metadata where semantics match. |
+| `TOOL_LEVELS` | Migrated repair/billing baseline levels derive from static registry metadata where semantics match; effective invocation risk comes from `CapabilityPolicy`. |
 | `TOOL_SLOTS` | Migrated repair/billing slots derive from typed input contracts or an explicit compatibility projection. |
 | Presentation metadata | Centralize orchestration-facing metadata where stable; keep domain response formatting outside the registry. |
-| Confirmation metadata | Registry describes requirement/risk; authoritative approval state and consumption remain in Application Services/UoW. |
+| Confirmation metadata | Registry describes static baseline posture; `CapabilityPolicy` computes the effective invocation requirement; authoritative approval validation and consumption remain in Application Services/UoW. |
 | `controlled_read.py` semantics | Retain or map each guard explicitly; do not remove coverage. |
 
 Compatibility output MUST preserve public tool names, signatures where contracted,
@@ -257,19 +291,24 @@ PR2 is complete only when:
 3. Repair and billing have typed adapters to existing Application Services.
 4. At least one real read and one real write capability execute through the Capability
    Layer.
-5. The registry is the source of truth for migrated capability metadata, with an
+5. The registry is the source of truth for migrated static capability metadata, with an
    inventory of remaining legacy metadata.
-6. Migrated `TOOL_LEVELS`, `TOOL_SLOTS`, presentation, and confirmation metadata are
-   derived or explicitly mapped without conflicting sources of truth.
-7. Trusted identity/scope cannot be overridden through model-controlled arguments.
-8. Application Services remain the sole business authority; no capability component
+6. Effective invocation risk and approval/HITL classification follow one deterministic
+   `CapabilityPolicy` path using typed input, trusted context, and bounded invocation
+   state.
+7. Migrated `TOOL_LEVELS`, `TOOL_SLOTS`, presentation, and confirmation metadata are
+   derived or explicitly mapped without conflicting static sources of truth.
+8. Trusted identity/scope cannot be overridden through model-controlled arguments.
+9. Application Services remain the sole business authority; no capability component
    directly mutates business persistence.
-9. P0 fencing, approval transaction semantics, CAS, idempotency, audit, outbox, and
+10. Authoritative approval validation/binding/consumption remains inside the Application
+    Service/UoW transaction and is atomic with the business mutation.
+11. P0 fencing, approval transaction semantics, CAS, idempotency, audit, outbox, and
    terminal lifecycle behavior remain intact.
-10. Controlled-read protections are retained or demonstrably migrated with no safety
+12. Controlled-read protections are retained or demonstrably migrated with no safety
     regression.
-11. There is no shadow double-write, and the old runtime remains compatible.
-12. Focused, full local, real PostgreSQL, and required remote quality gates are green.
+13. There is no shadow double-write, and the old runtime remains compatible.
+14. Focused, full local, real PostgreSQL, and required remote quality gates are green.
 
 PR2 MUST NOT claim completion based only on unit tests or static inspection.
 
