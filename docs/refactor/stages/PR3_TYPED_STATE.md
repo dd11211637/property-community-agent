@@ -44,6 +44,11 @@ model inferred from directory names:
 - platform `RequestContext` is frozen and carries authenticated identity, roles,
   community/house scope, request identity, execution source, and optional Agent
   lease/fence context;
+- inspection currently defines a compatibility/domain `RequestContext` projection and
+  constructs it from the canonical platform context for both HTTP and Agent paths. That
+  projection carries actor, community, mapped roles, request id, and house ids, but not
+  execution source or Agent lease/fence context; it is server-derived but incomplete and
+  is not an independent authority source;
 - PR2 `CapabilityRuntimeContext` and `CapabilityWriteContext` already keep trusted facts
   and server-issued write material separate from typed model-controlled input;
 - `GraphState` mixes identity copies, mutable semantic fields, a generic `slots` map,
@@ -91,6 +96,13 @@ capability contexts during migration. It MUST NOT create a divergent identity or
 source. Any checkpointed identifiers are correlation data only: on every request and
 resume, trusted values MUST be reconstructed or rebound from current server-side facts
 and revalidated at their authoritative boundaries.
+
+Domain/compatibility context projections MAY narrow or translate the canonical trusted
+context for an Application Service, but MUST NOT create a second identity, scope,
+execution-origin, lease, or fence authority. If a protected boundary requires execution
+origin or fencing inputs, the projection MUST preserve them explicitly from the canonical
+server-created context, or be safely retired in favor of that context. Missing fields
+MUST NOT be reconstructed by inference.
 
 The model, `AgentState`, legacy checkpoint JSON, and capability input MUST NOT override
 trusted context. In particular, legacy `slots.roles`, copied `actor_id`, copied
@@ -188,6 +200,7 @@ readable only through the legacy checkpoint adapter, not a second source of trut
 | Current field or state | Current owner | Trust | Mutability | Business-authoritative? | Persistence / resume behavior | PR3 target owner | Status |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `RequestContext.actor_id`, `community_id`, `roles`, `bound_house_ids`, `current_house_id` | Platform auth/request composition | Trusted server facts | Frozen per context; live authorization can change between requests | Identity/scope inputs are authoritative only when revalidated by protected services | Recreated on request; recovery overwrites checkpoint identity copies and checks house binding | `RuntimeContext.identity_scope`, wrapping the canonical platform context | MIGRATE |
+| Inspection compatibility/domain context projection (`actor_id`, `community_id`, mapped `roles`, `request_id`, `house_ids`) | Inspection context projection used by HTTP and Agent adapters | Server-derived but incomplete: current projection omits execution source and Agent lease/fence | Frozen per projected call | No independent authority; it is a view of canonical trusted facts | Recreated from platform/Agent request context; not a checkpoint authority | Compatibility projection of canonical `RuntimeContext`/platform context, preserving every trusted fact required at the protected boundary, or safely retired | COMPAT |
 | `request_id`, `execution_source` | Platform request composition | Trusted | Frozen | Origin and trace input, not domain truth | Recreated per request/turn | `RuntimeContext.request_origin` | MIGRATE |
 | `AgentLeaseContext` (`thread_id`, `run_id`, `fence`, `lease_until`) | Turn guard/platform context | Trusted but time-sensitive | New value per acquired turn | Lease store/UoW fence check is authoritative | Never trusted merely because checkpointed; reacquired and checked on resume | `RuntimeContext.run`; existing turn guard remains owner | RETAIN |
 | PR2 `CapabilityRuntimeContext` / `CapabilityWriteContext` | Capability composition | Trusted server seam | Frozen per invocation | Write material is not approval truth | Rebuilt for each invocation; secrets are not model fields | Typed projection from `RuntimeContext` | RETAIN |
@@ -302,6 +315,47 @@ typed AgentState + trusted RuntimeContext
 allow/deny/human-only classification from typed input and trusted context. It MUST NOT
 consume approval or replace current business authorization. No shadow double-write is
 permitted.
+
+### 6.3 Trusted execution origin and HUMAN compatibility
+
+Closing a class-A gap is specific to an Agent-initiated write. The authoritative
+Application Service boundary MUST distinguish origin only through the canonical trusted
+server-created execution source (or an equivalent explicit trusted field):
+
+```text
+trusted AGENT origin
+  -> orchestration confirmation/HITL
+  -> Capability Layer
+  -> Application Service/UoW
+  -> authoritative approval validation/binding/consumption
+  -> mutation / audit / outbox / commit
+
+trusted HUMAN origin
+  -> existing HTTP/Application Service contract
+  -> existing RBAC / domain validation / any historically required confirmation
+  -> idempotency / mutation / audit / outbox / commit
+```
+
+For `AGENT`, every migrated class-A write MUST fail closed without the required
+authoritative confirmation/approval, and consumption MUST be atomic with mutation. For
+`HUMAN`, PR3 MUST preserve the existing direct-write contract: it MUST NOT impose a new
+Agent-only confirmation or Agent lease merely because the same Application Service also
+serves a migrated capability. A HUMAN operation that already requires confirmation
+continues to require it.
+
+Execution origin MUST NOT be inferred from confirmation-token presence, approval-reference
+presence, lease presence/absence, idempotency-key shape, call stack, or tool/capability
+name. In particular, `lease is None -> HUMAN` and `confirmation token exists -> AGENT`
+are forbidden. Model output, `AgentState`, checkpoint data, and capability input MUST NOT
+set or override execution source. An inspection compatibility projection that needs the
+origin at the Application Service boundary MUST project it explicitly from canonical
+trusted context.
+
+PR3 does not redesign fencing. The existing authoritative confirmation port and its
+`enforce_agent_fence()` protected-boundary behavior remain the single fencing
+implementation: trusted HUMAN direct writes are not rejected for lacking an Agent lease,
+while trusted AGENT writes with a missing or stale fence continue to fail closed. Context
+projection changes MUST preserve this ownership and MUST NOT add a parallel fence check.
 
 ## 7. Runner de-domainization without a rewrite
 
@@ -423,6 +477,20 @@ PR3 MUST add or update focused tests under `tests/` for:
   invocation progress having no duplicated canonical owner;
 - model output being unable to assert human confirmation; only a server-observed event
   may drive orchestration resume, and it never substitutes for authoritative approval;
+- an Agent-origin migrated class-A write without authoritative confirmation being
+  rejected before mutation;
+- an Agent-origin confirmed class-A write consuming the bound approval atomically with
+  mutation;
+- a HUMAN direct write that historically did not require Agent confirmation remaining
+  valid under its existing RBAC, domain, idempotency, audit/outbox, and UoW controls;
+- an existing HUMAN operation that already requires confirmation continuing to require
+  it;
+- model input being unable to inject `execution_source=HUMAN`;
+- `AgentState` and restored checkpoint data being unable to override execution source;
+- the inspection context projection preserving required trusted origin information from
+  canonical context, or being safely retired without introducing another authority;
+- a trusted AGENT write with a missing or stale fence continuing to fail closed;
+- a trusted HUMAN direct write remaining free of an Agent lease requirement;
 - typed `AgentState` and every admitted domain-state variant, including invalid
   cross-domain combinations;
 - optional billing `bill_id=None` preservation through state conversion and
@@ -491,29 +559,37 @@ PR3 is complete only when:
 1. one immutable server-created `RuntimeContext` supplies trusted identity, scope,
    origin, conversation/run, lease/fence, trace, and prepared-write facts without model
    override;
-2. typed `AgentState` and evidence-driven domain working-state variants replace generic
+2. inspection and any other compatibility context projection remains a non-authoritative
+   view of canonical trusted context, explicitly preserves required execution-origin and
+   fencing inputs, or is safely retired; no divergent authority is introduced;
+3. typed `AgentState` and evidence-driven domain working-state variants replace generic
    slot access on all migrated execution paths;
-3. the state inventory has no unexplained field, trust source, persistence behavior, or
+4. the state inventory has no unexplained field, trust source, persistence behavior, or
    target owner;
-4. announcement and inspection business actions use the PR2 Registry, Policy, Executor,
+5. announcement and inspection business actions use the PR2 Registry, Policy, Executor,
    and typed adapters with exactly one active mutation path;
-5. every migrated announcement/inspection write has a recorded authority-path audit;
+6. every migrated announcement/inspection write has a recorded authority-path audit;
    class-B references remain intact and no class-A `KNOWN_BASELINE_AUTHORITY_GAP` is
    activated without the minimum authoritative Application Service/UoW correction;
-6. all business writes still enter existing Application Services, and authoritative
+7. all business writes still enter existing Application Services, and authoritative
    approval validation/binding/consumption remains atomic with business mutation in the
    UoW; no executor or adapter consumes approval;
-7. the Runner owns only generic turn coordination and no longer imports, filters, or
+8. trusted execution origin is never inferred: Agent-origin class-A writes require the
+   authoritative boundary, HUMAN direct writes preserve their existing confirmation
+   semantics, and neither model nor checkpoint can select `HUMAN`;
+9. the existing protected-boundary fencing implementation remains sole owner: missing or
+   stale AGENT fences fail closed and HUMAN direct writes do not require Agent leases;
+10. the Runner owns only generic turn coordination and no longer imports, filters, or
    branches on domain continuation state;
-8. current public API/tool behavior, fallback order, confirmation UX/gates, idempotency,
+11. current public API/tool behavior, fallback order, confirmation UX/gates, idempotency,
    audit/outbox, lease/fencing, CAS, and terminal lifecycle semantics are preserved;
-9. old checkpoints, especially pending/`WAITING_CONFIRM` snapshots, convert in memory,
+12. old checkpoints, especially pending/`WAITING_CONFIRM` snapshots, convert in memory,
    pass recovery gates before any durable upgrade, and resume safely exactly once without
    write-on-read, replay, or authority escalation;
-10. compatibility code has measured removal conditions and is not prematurely deleted;
-11. no PR4+ runtime, Supervisor, specialist, memory, or productionization scope is
+13. compatibility code has measured removal conditions and is not prematurely deleted;
+14. no PR4+ runtime, Supervisor, specialist, memory, or productionization scope is
     introduced; and
-12. focused, complete local, real PostgreSQL zero-skip, Agent evaluation,
+15. focused, complete local, real PostgreSQL zero-skip, Agent evaluation,
     frontend/browser, OpenAPI, and required remote quality gates are green.
 
 PR3 MUST NOT claim completion based only on type declarations, unit tests, or a clean
