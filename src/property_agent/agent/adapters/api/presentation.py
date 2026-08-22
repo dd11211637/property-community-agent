@@ -11,6 +11,7 @@ from typing import Any
 
 from property_agent.agent.application.conversation_service import ConversationSnapshot
 from property_agent.agent.application.runner import AgentTurn
+from property_agent.agent.capabilities.compatibility import migrated_presentation
 from property_agent.agent.slot_prompts import repair_slot_prompt
 from property_agent.agent.state import GraphState
 
@@ -23,8 +24,6 @@ def _pending_card(pending: dict[str, Any] | None) -> dict[str, Any] | None:
     if not pending:
         return None
     summaries = {
-        "repair_create": "确认提交这条报修吗？",
-        "billing_consult": "确认提交这条费用咨询吗？",
         "inspection_create": "确认创建这项巡检任务吗？",
         "inspection_create_task": "确认创建这项巡检任务吗？",
         "inspection_start_task": "确认开始执行这项巡检任务吗？",
@@ -38,6 +37,13 @@ def _pending_card(pending: dict[str, Any] | None) -> dict[str, Any] | None:
         "announce_publish": "您已审阅最终稿，确认立即发布这份公告吗？",
         "announcement_schedule_publish": "您已审阅最终稿，确认按指定时间发布吗？",
     }
+    summaries.update(
+        {
+            name: str(metadata["confirmation_title"])
+            for name, metadata in migrated_presentation().items()
+            if metadata["confirmation_title"]
+        }
+    )
     tool = pending.get("tool")
     params = pending.get("params", {})
     if tool == "security_event_create" and params.get("risk_level") == "HIGH_RISK":

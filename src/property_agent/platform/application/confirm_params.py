@@ -94,12 +94,15 @@ def _repair_create_params(state: GraphState) -> tuple[str, dict[str, Any]]:
 
 
 def _billing_consult_params(state: GraphState) -> tuple[str, dict[str, Any]]:
+    raw_bill_id = state.slots.get("bill_id")
     return (
         "CREATE_CONSULTATION",
         {
             "subject": str(state.slots.get("subject") or ""),
             "description": str(state.slots.get("description") or ""),
-            "bill_id": str(state.slots.get("bill_id") or ""),
+            # Match ConsultationService's authoritative optional-field contract:
+            # an absent bill association is None, not an empty string.
+            "bill_id": str(raw_bill_id) if raw_bill_id else None,
         },
     )
 

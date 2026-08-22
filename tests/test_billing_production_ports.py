@@ -22,13 +22,21 @@ Coverage:
 from __future__ import annotations
 
 from datetime import date, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from property_agent.agent.application.confirmation_provider import prepare_confirmation
+from property_agent.agent.capabilities.adapters.billing import BillingConsultAdapter
+from property_agent.agent.capabilities.catalog import default_capability_registry
+from property_agent.agent.capabilities.executor import CapabilityExecutor
+from property_agent.agent.capabilities.policy import CapabilityPolicy
+from property_agent.agent.infrastructure.models import AgentActionApprovalModel
+from property_agent.agent.state import GraphState
+from property_agent.agent.tools.billing import build_billing_tools
 from property_agent.billing.application.service import (
     BillingService,
     ConsultationService,
@@ -46,11 +54,15 @@ from property_agent.billing.infrastructure.orm_models import (
 )
 from property_agent.billing.infrastructure.unit_of_work import SqlAlchemyBillingUnitOfWork
 from property_agent.platform.application.approval_service import ApprovalService
+from property_agent.platform.application.confirm_params import derive_confirmation_params
+from property_agent.platform.application.hashing import canonical_hash
 from property_agent.platform.context import RequestContext
 from property_agent.platform.infrastructure.orm_models import (
     AuditLogModel,
     Base,
     CommunityModel,
+    ConfirmationTokenModel,
+    IdempotencyRecordModel,
 )
 
 COMMUNITY_CODE = "阳光花园"
@@ -335,6 +347,79 @@ def test_query_is_audited(sessions, seed):
 
 
 # ── 财务咨询单 ───────────────────────────────────────────
+
+
+@pytest.mark.parametrize("bill_id", [None, "B001"])
+def test_agent_confirmation_binding_reaches_committed_consultation(sessions, seed, bill_id):
+    ctx = _ctx(seed, "resident")
+    suffix = bill_id or "none"
+    subject = f"确认参数绑定-{suffix}"
+    description = "从 Agent 确认到业务事务的完整回归"
+    authoritative_params = {
+        "subject": subject,
+        "description": description,
+        "bill_id": bill_id,
+    }
+    state = GraphState(
+        conversation_id=f"billing-confirm-{suffix}",
+        actor_id=ctx.actor_id,
+        community_id=ctx.community_id,
+        current_house_id=ctx.current_house_id,
+        slots=dict(authoritative_params),
+        pending_action={"tool": "billing_consult", "params": dict(authoritative_params)},
+    )
+    action, confirmation_params = derive_confirmation_params(state, announcement_service=object())
+    expected_hash = canonical_hash(authoritative_params)
+    assert action == "CREATE_CONSULTATION"
+    assert confirmation_params == authoritative_params
+    assert canonical_hash(confirmation_params) == expected_hash
+
+    state.confirmation_token = prepare_confirmation(
+        state,
+        session_factory=sessions,
+        approval_service=ApprovalService(sessions),
+        announcement_service=object(),
+    )
+    resumed_state = GraphState.from_dict(state.to_dict())
+    assert resumed_state.confirmation_token and resumed_state.approval_ref
+    consultation_service = ConsultationService(_uow_factory(sessions))
+    with sessions() as db:
+        executor = CapabilityExecutor(
+            default_capability_registry(),
+            CapabilityPolicy(),
+            {"billing_consult": BillingConsultAdapter(consultation_service, lambda _runtime: db)},
+        )
+        result = build_billing_tools(
+            object(),
+            consultation_service,
+            lambda _state: ctx,
+            lambda _state: db,
+            capability_executor=executor,
+        )["billing_consult"](resumed_state)
+        assert result["ok"] is True
+
+        consultation = db.query(ConsultationModel).filter_by(subject=subject).one()
+        approval = db.get(AgentActionApprovalModel, UUID(resumed_state.approval_ref))
+        token = (
+            db.query(ConfirmationTokenModel).filter_by(token=resumed_state.confirmation_token).one()
+        )
+        idempotency = (
+            db.query(IdempotencyRecordModel)
+            .filter_by(operation="CREATE_CONSULTATION", actor_id=ctx.actor_id)
+            .one()
+        )
+        audit = (
+            db.query(AuditLogModel)
+            .filter_by(action="BILLING_CONSULTATION_CREATE", resource_id=consultation.id)
+            .one()
+        )
+        assert consultation.bill_id == bill_id
+        assert approval.params_hash == expected_hash and approval.status == "CONSUMED"
+        assert approval.consumed_at is not None
+        assert token.parameter_hash == expected_hash and token.consumed_at is not None
+        assert idempotency.request_hash == expected_hash
+        assert UUID(idempotency.resource_id).hex == consultation.id
+        assert audit.actor_id == ctx.actor_id
 
 
 def test_create_consultation_idempotent(sessions, seed):

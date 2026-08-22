@@ -6,6 +6,11 @@
 
 from enum import StrEnum
 
+from property_agent.agent.capabilities.compatibility import (
+    migrated_tool_levels,
+    migrated_tool_slots,
+)
+
 
 class Intent(StrEnum):
     REPAIR = "REPAIR"
@@ -43,10 +48,6 @@ HIGH_RISK_TOOLS = {"close_high_risk_event"}
 # 工具名 -> 操作等级（确定性门控，PRD §6.5.7）。优先于意图判定，避免把
 # "查询类"工具误判为低风险写。
 TOOL_LEVELS: dict[str, str] = {
-    # 报修
-    "repair_list": OperationLevel.READ.value,
-    "repair_get": OperationLevel.READ.value,
-    "repair_create": OperationLevel.WRITE_LOW_RISK.value,
     # 公告
     "announcement_list": OperationLevel.READ.value,
     "announcement_get": OperationLevel.READ.value,
@@ -55,9 +56,6 @@ TOOL_LEVELS: dict[str, str] = {
     "announcement_create_draft": OperationLevel.WRITE_LOW_RISK.value,
     "announce_publish": OperationLevel.WRITE_LOW_RISK.value,
     "announcement_schedule_publish": OperationLevel.WRITE_LOW_RISK.value,
-    # 账单
-    "billing_query": OperationLevel.READ.value,
-    "billing_consult": OperationLevel.WRITE_LOW_RISK.value,
     # 巡检
     "inspection_list": OperationLevel.READ.value,
     "inspection_create": OperationLevel.WRITE_LOW_RISK.value,
@@ -71,14 +69,12 @@ TOOL_LEVELS: dict[str, str] = {
     "security_event_submit_disposal": OperationLevel.WRITE_LOW_RISK.value,
     "close_high_risk_event": OperationLevel.WRITE_HIGH_RISK.value,
 }
+TOOL_LEVELS.update(migrated_tool_levels())
 
 
 # 工具级必填槽位。比意图级更精确：同一意图下"查询"不需要写操作的参数，
 # 因此槽位补全在选定工具之后按工具校验（PRD §6.5.5 确定性必填校验）。
 TOOL_SLOTS: dict[str, list[str]] = {
-    "repair_list": [],
-    "repair_get": ["work_order_id"],
-    "repair_create": ["description", "location"],
     "announcement_list": [],
     "announcement_get": ["announcement_id"],
     "announcement_draft": ["topic", "audience"],
@@ -96,8 +92,6 @@ TOOL_SLOTS: dict[str, list[str]] = {
         "expected_version",
         "scheduled_at",
     ],
-    "billing_query": [],
-    "billing_consult": ["subject", "description"],
     "inspection_list": [],
     "inspection_create": ["title", "description", "point"],
     "inspection_create_task": ["title", "description", "point"],
@@ -111,6 +105,7 @@ TOOL_SLOTS: dict[str, list[str]] = {
     "security_event_submit_disposal": ["event_id", "expected_version", "note"],
     "close_high_risk_event": ["event_id"],
 }
+TOOL_SLOTS.update(migrated_tool_slots())
 
 
 def required_slots(intent: str) -> list[str]:
