@@ -14,7 +14,6 @@
     "src/property_agent/agent/nodes/explain_result.py:_success_message": 176,
     "src/property_agent/agent/read_planner.py:GatewayReadPlanner.deterministic_plan_read": 107,
     "src/property_agent/agent/tools/announcement.py:build_announcement_tools": 301,
-    "src/property_agent/agent/tools/billing.py:build_billing_tools": 89,
     "src/property_agent/agent/tools/repair.py:build_repair_tools": 114,
     "src/property_agent/inspection/application/service.py:SecurityEventService.create_event": 120,
     "src/property_agent/main.py:create_app": 126,

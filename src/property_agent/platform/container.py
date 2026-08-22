@@ -40,6 +40,7 @@ from property_agent.agent.application.memory_runtime import (
 )
 from property_agent.agent.application.recovery import AgentRecoveryService
 from property_agent.agent.application.runner import AgentSessionRunner
+from property_agent.agent.capabilities.bootstrap import build_capability_executor
 from property_agent.agent.graph import build_agent_graph
 from property_agent.agent.infrastructure.checkpointer import SqlAlchemyCheckpointer
 from property_agent.agent.infrastructure.run_lease import RunLeaseService
@@ -508,7 +509,13 @@ def _build_agent_tooling(
     agent_work_orders = build_agent_work_order_service(
         session_factory, app.state.work_order_service
     )
-    repair_tools = build_repair_tools(agent_work_orders, context_provider)
+    capability_executor = build_capability_executor(
+        work_order_service=agent_work_orders,
+        billing_service=app.state.billing_service,
+        consultation_service=app.state.consultation_service,
+        billing_session_provider=lambda runtime: session_provider(runtime.legacy_state),
+    )
+    repair_tools = build_repair_tools(agent_work_orders, context_provider, capability_executor)
     announcement_tools = build_announcement_tools(
         app.state.announcement_service, context_provider, gateway
     )
@@ -517,6 +524,7 @@ def _build_agent_tooling(
         app.state.consultation_service,
         context_provider,
         session_provider,
+        capability_executor,
     )
     inspection_tools = build_inspection_tools(
         app.state.task_service, app.state.event_service, inspection_context_provider
