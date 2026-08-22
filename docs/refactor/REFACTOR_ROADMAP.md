@@ -16,7 +16,7 @@ MUST NOT be pulled into an earlier stage merely because it is convenient.
 | Stage | Focus | Status |
 | --- | --- | --- |
 | PR1 | Correctness substrate | **DONE / MERGED / VERIFIED** |
-| PR2 | Capability Layer | Planned next stage |
+| PR2 | Capability Layer | **DONE / MERGED / VERIFIED** |
 | PR3 | Typed State and Runner de-domainization | Planned |
 | PR4 | LangGraph runtime foundation | Planned |
 | PR5 | Supervisor and stateless specialists | Planned |
@@ -59,6 +59,16 @@ Agent refactoring.
 - P0 remains closed unless a real correctness regression is discovered.
 
 ## 4. PR2 — Capability Layer
+
+**Status:** **DONE / MERGED / VERIFIED**
+
+**Final PR head:** `3d11a163c557aaa4768b6eeb41fd3b4fee0bb9f3`
+
+**Merged to `main`:** `6b567f5a223ec4e296c1b97d4a73f9cb23f56dc5`
+
+**Post-merge verification:** GitHub Quality Gates run
+[`32576252159`](https://github.com/dd11211637/property-community-agent/actions/runs/32576252159)
+passed backend, PostgreSQL, frontend, and browser E2E jobs on the merge commit.
 
 ### Goal
 
