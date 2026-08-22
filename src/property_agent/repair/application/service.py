@@ -62,7 +62,10 @@ class WorkOrderService:
         self._validate_create(command)
 
         confirmed_parameters = asdict(command)
-        confirmed_parameters.pop("confirmation_token")
+        confirmed_parameters.pop("confirmation_token", None)
+        # approval_ref 是服务端在确认时生成的"审批锁指针"，不是业务参数本身：
+        # 不应进入参数指纹（避免确认动作换一次 approval_ref 就被错判为参数变更）。
+        confirmed_parameters.pop("approval_ref", None)
         request_hash = canonical_hash(confirmed_parameters)
 
         if command.urgency == Urgency.HIGH_RISK:
@@ -96,6 +99,7 @@ class WorkOrderService:
                 request_id=context.request_id,
             )
             uow.confirmations.consume(
+                approval_ref=command.approval_ref,
                 token=command.confirmation_token,
                 actor_id=context.actor_id,
                 action=operation,
@@ -530,6 +534,7 @@ class WorkOrderService:
                 request_id=context.request_id,
             )
             uow.confirmations.consume(
+                approval_ref=command.approval_ref,
                 token=command.confirmation_token,
                 actor_id=context.actor_id,
                 action=operation,

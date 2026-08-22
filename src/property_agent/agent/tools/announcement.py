@@ -351,6 +351,7 @@ def build_announcement_tools(
                 AnnouncementAction.PUBLISH,
                 int(require_slot(state, "expected_version", "announce_publish")),
                 confirmation_token=token,
+                approval_ref=state.approval_ref,
             ),
             context,
             idempotency_key=idempotency_key(
@@ -370,7 +371,9 @@ def build_announcement_tools(
         )
         scheduled = service.schedule_publish(
             announcement.id,
-            ScheduleAnnouncementCommand(announcement.version, scheduled_at, token),
+            ScheduleAnnouncementCommand(
+                announcement.version, scheduled_at, token, approval_ref=state.approval_ref
+            ),
             context,
             idempotency_key=idempotency_key(
                 state,

@@ -147,7 +147,9 @@ class FakeConfirmation:
     def __init__(self) -> None:
         self.consumed: list[str] = []
 
-    def consume(self, *, token, actor_id, action, parameter_hash, request_id) -> None:
+    def consume(
+        self, *, approval_ref=None, token, actor_id, action, parameter_hash, request_id
+    ) -> None:
         if token != "confirmed" or token in self.consumed:
             from property_agent.platform.errors import BusinessError
 

@@ -81,18 +81,29 @@ def send_message_stream(
     runner: RunnerDep,
     context: ContextDep,
 ) -> StreamingResponse:
-    turn = runner.start(
-        conversation_id=conversation_id,
-        context=context,
-        user_text=payload.text,
-        house_id=_resolve_house(context, payload.house_id),
-        slots=dict(payload.slots or {}),
-    )
+    """真流式消息接口（P1 观测与流式）。
+
+    ``runner.stream_start`` 生成器先 yield ``run_started``（graph 完成前即发出），
+    再按图节点生命周期 yield ``tool_started`` / ``tool_finished``，最后 yield
+    ``("__turn__", AgentTurn)``；此处把 ``__turn__`` 展开为
+    intent / message / confirmation / facts / handover / done 事件序列。
+    """
 
     def _stream():
-        for event, data in sse_events(turn):
-            body = json.dumps(data, ensure_ascii=False, default=str)
-            yield f"event: {event}\ndata: {body}\n\n"
+        for event, data in runner.stream_start(
+            conversation_id=conversation_id,
+            context=context,
+            user_text=payload.text,
+            house_id=_resolve_house(context, payload.house_id),
+            slots=dict(payload.slots or {}),
+        ):
+            if event == "__turn__":
+                for sub_event, sub_data in sse_events(data):
+                    body = json.dumps(sub_data, ensure_ascii=False, default=str)
+                    yield f"event: {sub_event}\ndata: {body}\n\n"
+            else:
+                body = json.dumps(data, ensure_ascii=False, default=str)
+                yield f"event: {event}\ndata: {body}\n\n"
 
     return StreamingResponse(
         _stream(),

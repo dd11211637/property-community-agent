@@ -17,6 +17,7 @@ from __future__ import annotations
 import contextvars
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import StrEnum
 from typing import Annotated
 from uuid import UUID
 
@@ -44,6 +45,30 @@ _request_context_var: contextvars.ContextVar[RequestContext | None] = contextvar
 
 
 @dataclass(frozen=True, slots=True)
+class AgentLeaseContext:
+    """Trusted runtime lease context (P0 fencing).
+
+    Carried on ``RequestContext`` so that business write UoWs can verify the
+    current turn still owns the conversation lease before any mutation.
+    ``run_id`` + ``fence`` are the fencing token pair; ``lease_until`` is the
+    expiry snapshot at acquire time. The authoritative check is
+    ``assert_run_fence(session, lease)`` in the business UoW's own transaction.
+    """
+
+    thread_id: str
+    run_id: UUID
+    fence: int
+    lease_until: datetime
+
+
+class ExecutionSource(StrEnum):
+    """Trusted origin of a business operation within the current request."""
+
+    HUMAN = "HUMAN"
+    AGENT = "AGENT"
+
+
+@dataclass(frozen=True, slots=True)
 class RequestContext:
     """Coroutine-safe request context (PRD 5.2).
 
@@ -54,6 +79,11 @@ class RequestContext:
         request_id: trace identifier
         current_house_id: resolved current house (None until house selection)
         bound_house_ids: all active house bindings
+        agent_lease: P0 fencing lease for the current agent turn (None outside
+            a turn or when concurrency guard is disabled). Business write UoWs
+            read this to assert the turn still owns the conversation.
+        execution_source: trusted discriminator for human HTTP writes versus
+            writes initiated by an agent turn. It is never populated from model output.
     """
 
     actor_id: UUID
@@ -62,6 +92,8 @@ class RequestContext:
     request_id: str
     current_house_id: UUID | None = None
     bound_house_ids: frozenset[UUID] = field(default_factory=frozenset)
+    agent_lease: AgentLeaseContext | None = None
+    execution_source: ExecutionSource = ExecutionSource.HUMAN
 
     def __post_init__(self) -> None:
         if not self.request_id.strip() or len(self.request_id) > 64:

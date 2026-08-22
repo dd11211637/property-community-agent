@@ -15,7 +15,7 @@
 from collections.abc import Callable
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from property_agent.agent.infrastructure.models import AgentCheckpointModel
@@ -23,6 +23,19 @@ from property_agent.agent.state import GraphState
 from property_agent.platform.application.hashing import canonical_payload
 
 SessionFactory = Callable[[], Session]
+
+
+class CheckpointVersionConflict(Exception):
+    """CAS 失败：检查点版本已被其他写入者抢先更新。
+
+    语义上表示本 run 拿到的快照已经 stale（例如 lease 过期后被新 run 覆盖）。
+    调用方应**终止本 stale run**，而不是用旧状态覆盖新 checkpoint。
+    """
+
+    def __init__(self, thread_id: str, expected: int) -> None:
+        self.thread_id = thread_id
+        self.expected = expected
+        super().__init__(f"checkpoint version conflict for thread {thread_id}: expected {expected}")
 
 
 def _snapshot(state: GraphState) -> dict[str, Any]:
@@ -38,32 +51,90 @@ class SqlAlchemyCheckpointer:
 
     # ---- Checkpointer 协议 ----
 
-    def save(self, thread_id: str, state: GraphState) -> None:
+    def save(
+        self,
+        thread_id: str,
+        state: GraphState,
+        *,
+        expected_version: int | None = None,
+    ) -> None:
+        """持久化快照。
+
+        ``expected_version`` 传入时走 CAS：``UPDATE … WHERE version=:expected
+        RETURNING version``，0 行则抛 ``CheckpointVersionConflict``。这个值必须由
+        调用方在 **turn 开始** 时读取并传入——绝不能在 save 内部现读，否则 stale
+        worker 会读到最新版本导致 CAS 失效。
+
+        ``expected_version`` 为 ``None``（新线程 / 旧调用方 / 测试直接调用）时回退到
+        SELECT→+1→COMMIT；此时由 run lease 保证单写者，不会出现并发竞争。
+        """
         payload = _snapshot(state)
         pending = bool(state.pending_action) and state._interrupt_node is not None
         session = self._session_factory()
         try:
-            record = session.execute(
-                select(AgentCheckpointModel).where(AgentCheckpointModel.thread_id == thread_id)
-            ).scalar_one_or_none()
-            if record is None:
-                session.add(
-                    AgentCheckpointModel(
-                        thread_id=thread_id,
-                        version=1,
-                        state=payload,
-                        interrupt_node=state._interrupt_node,
-                        pending_confirm=pending,
-                    )
+            if expected_version is not None:
+                self._save_cas(
+                    session, thread_id, payload, pending, state._interrupt_node, expected_version
                 )
             else:
-                record.version = record.version + 1
-                record.state = payload
-                record.interrupt_node = state._interrupt_node
-                record.pending_confirm = pending
+                self._save_legacy(session, thread_id, payload, pending, state._interrupt_node)
             session.commit()
         finally:
             session.close()
+
+    @staticmethod
+    def _save_cas(
+        session: Session,
+        thread_id: str,
+        payload: dict[str, Any],
+        pending: bool,
+        interrupt_node: str | None,
+        expected: int,
+    ) -> None:
+        stmt = (
+            update(AgentCheckpointModel)
+            .where(
+                AgentCheckpointModel.thread_id == thread_id,
+                AgentCheckpointModel.version == expected,
+            )
+            .values(
+                version=AgentCheckpointModel.version + 1,
+                state=payload,
+                interrupt_node=interrupt_node,
+                pending_confirm=pending,
+            )
+            .returning(AgentCheckpointModel.version)
+        )
+        row = session.execute(stmt).scalar_one_or_none()
+        if row is None:
+            raise CheckpointVersionConflict(thread_id, expected)
+
+    @staticmethod
+    def _save_legacy(
+        session: Session,
+        thread_id: str,
+        payload: dict[str, Any],
+        pending: bool,
+        interrupt_node: str | None,
+    ) -> None:
+        record = session.execute(
+            select(AgentCheckpointModel).where(AgentCheckpointModel.thread_id == thread_id)
+        ).scalar_one_or_none()
+        if record is None:
+            session.add(
+                AgentCheckpointModel(
+                    thread_id=thread_id,
+                    version=1,
+                    state=payload,
+                    interrupt_node=interrupt_node,
+                    pending_confirm=pending,
+                )
+            )
+        else:
+            record.version = record.version + 1
+            record.state = payload
+            record.interrupt_node = interrupt_node
+            record.pending_confirm = pending
 
     def load(self, thread_id: str) -> GraphState | None:
         session = self._session_factory()

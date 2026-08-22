@@ -24,6 +24,9 @@ class GraphState:
     operation_level: str | None = None  # read / write-low-risk / write-high-risk
     pending_action: dict[str, Any] | None = None
     confirmation_token: str | None = None
+    # P0 审批原子化：服务端在确认时创建的 PENDING 审批引用，随确认回执下发，
+    # 由工具层透传到业务 Service，在业务 UoW 内与 mutation 同事务消费（CONSUMED）。
+    approval_ref: str | None = None
     tool_result: dict[str, Any] | None = None
     retry_count: int = 0
     handover_required: bool = False
@@ -61,6 +64,7 @@ class GraphState:
             "operation_level": self.operation_level,
             "pending_action": self.pending_action,
             "confirmation_token": self.confirmation_token,
+            "approval_ref": self.approval_ref,
             "tool_result": self.tool_result,
             "retry_count": self.retry_count,
             "handover_required": self.handover_required,

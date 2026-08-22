@@ -18,9 +18,7 @@ import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from datetime import datetime
 from typing import Any
-from uuid import UUID
 
 from fastapi import FastAPI
 from sqlalchemy import text
@@ -31,6 +29,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from property_agent.agent.application.confirmation_provider import prepare_confirmation
 from property_agent.agent.application.conversation_service import ConversationService
 from property_agent.agent.application.memory_runtime import (
     _display_part as _display_part,
@@ -43,6 +42,7 @@ from property_agent.agent.application.recovery import AgentRecoveryService
 from property_agent.agent.application.runner import AgentSessionRunner
 from property_agent.agent.graph import build_agent_graph
 from property_agent.agent.infrastructure.checkpointer import SqlAlchemyCheckpointer
+from property_agent.agent.infrastructure.run_lease import RunLeaseService
 from property_agent.agent.model_gateway import (
     DeepSeekModelGateway,
     DeterministicModelGateway,
@@ -58,10 +58,8 @@ from property_agent.agent.tools import (
     build_inspection_tools,
     build_repair_tools,
 )
-from property_agent.agent.tools.repair import normalize_repair_category
 from property_agent.announcement.application.scheduler import AnnouncementScheduler
 from property_agent.announcement.application.service import AnnouncementService
-from property_agent.announcement.domain.enums import AnnouncementAction
 from property_agent.announcement.infrastructure.shared_ports import build_announcement_ports
 from property_agent.announcement.infrastructure.uow import SqlAlchemyAnnouncementUnitOfWork
 from property_agent.billing.application.service import BillingService, ConsultationService
@@ -74,7 +72,7 @@ from property_agent.inspection.application.service import (
 )
 from property_agent.inspection.infrastructure.shared_ports import build_inspection_ports
 from property_agent.inspection.infrastructure.uow import SqlAlchemyInspectionUnitOfWork
-from property_agent.platform.application.confirmation_service import ConfirmationService
+from property_agent.platform.application.approval_service import ApprovalService
 from property_agent.platform.context import RequestContext
 from property_agent.platform.infrastructure.database import (
     dispose_engine,
@@ -84,7 +82,6 @@ from property_agent.platform.infrastructure.orm_models import MessageRecordModel
 from property_agent.platform.infrastructure.outbox_dispatcher import OutboxDispatcher
 from property_agent.repair.application.auto_assignment import build_agent_work_order_service
 from property_agent.repair.application.service import WorkOrderService
-from property_agent.repair.domain.enums import Urgency
 from property_agent.repair.infrastructure.shared_ports import build_shared_ports
 from property_agent.repair.infrastructure.uow import SqlAlchemyRepairUnitOfWork
 
@@ -307,7 +304,7 @@ def build_outbox_dispatcher() -> OutboxDispatcher:
 # ---------------------------------------------------------------------------
 
 
-def build_work_order_service() -> WorkOrderService:
+def build_work_order_service(approval_service: ApprovalService) -> WorkOrderService:
     """Assemble the production repair service.
 
     Wires the sync SQLAlchemy session factory into the repair Unit of Work and
@@ -315,17 +312,23 @@ def build_work_order_service() -> WorkOrderService:
     staff directory, attachment, audit, message outbox, handover). Each request
     gets a fresh session; the repository and every port share it, so a single
     ``commit()`` persists the work order, timeline, audit trail and outbox
-    message atomically.
+    message atomically. ``approval_service`` 注入端口用于 P0 审批原子消费。
     """
     session_factory = get_session_factory()
 
     def unit_of_work_factory() -> SqlAlchemyRepairUnitOfWork:
-        return SqlAlchemyRepairUnitOfWork(session_factory, build_shared_ports)
+        # P0-1: 显式闭包绑定 approval_service，避免运行时
+        # ``build_shared_ports(session)`` 缺参 TypeError（审查报告 composition-root
+        # 错误）。测试 fixture 已手工绑定，生产路径必须同样绑定。
+        return SqlAlchemyRepairUnitOfWork(
+            session_factory,
+            lambda session: build_shared_ports(session, approval_service),
+        )
 
     return WorkOrderService(unit_of_work_factory)
 
 
-def build_announcement_service() -> AnnouncementService:
+def build_announcement_service(approval_service: ApprovalService) -> AnnouncementService:
     """Assemble the production announcement service (PRD 6.2).
 
     Wires the sync SQLAlchemy session factory into the announcement Unit of
@@ -338,33 +341,56 @@ def build_announcement_service() -> AnnouncementService:
     session_factory = get_session_factory()
 
     def unit_of_work_factory() -> SqlAlchemyAnnouncementUnitOfWork:
-        return SqlAlchemyAnnouncementUnitOfWork(session_factory, build_announcement_ports)
+        return SqlAlchemyAnnouncementUnitOfWork(
+            session_factory,
+            lambda session: build_announcement_ports(
+                session, approval_service, enforce_fence=settings.agent_concurrency_guard
+            ),
+        )
 
     return AnnouncementService(unit_of_work_factory)
 
 
-def build_billing_service() -> BillingService:
+def build_billing_service(
+    approval_service: ApprovalService, *, enforce_fence: bool = False
+) -> BillingService:
     """Assemble the production billing service (PRD 6.3).
 
     The billing read path is isolated behind ``BillingSourcePort`` (the local
-    SQLAlchemy source is the default adapter). Bill
-    Queries are scoped by community + current house and audited via the
-    platform ``AuditService``. Billing tables, audit and idempotency rows share
-    the request transaction on the unified application database.
+    SQLAlchemy source is the default adapter). Bill Queries are scoped by
+    community + current house and audited via the platform ``AuditService``.
+    Billing tables, audit and idempotency rows share the request transaction on
+    the unified application database.
     """
-    return BillingService(SqlAlchemyBillingUnitOfWork)
+
+    def uow_factory(transaction: Any) -> SqlAlchemyBillingUnitOfWork:
+        return SqlAlchemyBillingUnitOfWork(
+            transaction, approval_service, enforce_fence=enforce_fence
+        )
+
+    return BillingService(uow_factory)
 
 
-def build_consultation_service() -> ConsultationService:
+def build_consultation_service(
+    approval_service: ApprovalService, *, enforce_fence: bool = False
+) -> ConsultationService:
     """Assemble the production financial-consultation service (PRD 6.3).
 
     Persists the consultation lifecycle, idempotency record and audit event in
     the same request transaction. The service is stateless and stores no session.
     """
-    return ConsultationService(SqlAlchemyBillingUnitOfWork)
+
+    def uow_factory(transaction: Any) -> SqlAlchemyBillingUnitOfWork:
+        return SqlAlchemyBillingUnitOfWork(
+            transaction, approval_service, enforce_fence=enforce_fence
+        )
+
+    return ConsultationService(uow_factory)
 
 
-def build_inspection_services() -> tuple[InspectionTaskService, SecurityEventService]:
+def build_inspection_services(
+    approval_service: ApprovalService,
+) -> tuple[InspectionTaskService, SecurityEventService]:
     """Assemble the production inspection task + security event services (PRD 6.4).
 
     Both share one Unit-of-Work factory backed by the platform SQLAlchemy
@@ -378,13 +404,27 @@ def build_inspection_services() -> tuple[InspectionTaskService, SecurityEventSer
     session_factory = get_session_factory()
 
     def unit_of_work_factory() -> SqlAlchemyInspectionUnitOfWork:
-        return SqlAlchemyInspectionUnitOfWork(session_factory, build_inspection_ports)
+        return SqlAlchemyInspectionUnitOfWork(
+            session_factory,
+            lambda session: build_inspection_ports(
+                session, approval_service, enforce_fence=settings.agent_concurrency_guard
+            ),
+        )
 
     return InspectionTaskService(unit_of_work_factory), SecurityEventService(unit_of_work_factory)
 
 
-def build_agent_runner(app: FastAPI) -> AgentSessionRunner:
+def build_agent_runner(
+    app: FastAPI,
+    *,
+    approval_service: ApprovalService,
+    run_lease_service: RunLeaseService,
+) -> AgentSessionRunner:
     """Assemble the production agent session runner (PRD §6.5).
+
+    P1 观测与流式：注入 ``AgentObservability``（4 关键指标 + ``agent.turn`` root
+    span）。未安装 opentelemetry 时自动降级为进程内计数器 + NullTracer，不影响
+    正确性底座。
 
     Wires the compiled agent graph with the real business services already on
     ``app.state`` (repair / announcement / billing / inspection), a persistent
@@ -396,10 +436,64 @@ def build_agent_runner(app: FastAPI) -> AgentSessionRunner:
     Identity in tools comes from the trusted ``RequestContext`` activated by the
     platform auth layer (``RequestContext.current()``); a GraphState fallback is
     used only outside a request scope (background scans / tests).
+
+    P0 正确性底座：
+      * ``confirmation_token_provider`` 创建 PENDING 审批并把 ``approval_ref``
+        写回 state（不再"签发即消费"），业务 UoW 在同一事务内消费审批 + 令牌。
+      * Runner 在 turn 开始读取 checkpoint 版本作为 CAS 期望值，并在长 turn
+        期间持有 run lease 防止同会话并发 lost-update。
     """
+    from property_agent.agent.observability import AgentObservability
+
+    observability = AgentObservability.build(settings)
+
     session_factory = get_session_factory()
     checkpointer = SqlAlchemyCheckpointer(session_factory)
     gateway = build_model_gateway()
+
+    context_loader = build_agent_context_loader(session_factory)
+    graph, *_ = _build_agent_tooling(
+        app=app,
+        session_factory=session_factory,
+        gateway=gateway,
+        context_loader=context_loader,
+        checkpointer=checkpointer,
+    )
+    conversations = ConversationService(session_factory)
+    recovery = AgentRecoveryService(conversations=conversations, checkpointer=checkpointer)
+
+    def confirmation_token_provider(state: GraphState) -> str:
+        """见 ``_make_confirmation_token_provider``；P0 正确性底座。"""
+        return prepare_confirmation(
+            state,
+            session_factory=session_factory,
+            approval_service=approval_service,
+            announcement_service=app.state.announcement_service,
+        )
+
+    return AgentSessionRunner(
+        graph=graph,
+        conversations=conversations,
+        recovery=recovery,
+        confirmation_token_provider=confirmation_token_provider,
+        turn_recorder=build_turn_recorder(session_factory),
+        checkpointer=checkpointer,
+        run_lease=run_lease_service,
+        approval_service=approval_service,
+        enforce_concurrency=settings.agent_concurrency_guard,
+        observability=observability,
+    )
+
+
+def _build_agent_tooling(
+    *,
+    app: FastAPI,
+    session_factory: Any,
+    gateway: ModelGateway,
+    context_loader: Any,
+    checkpointer: SqlAlchemyCheckpointer,
+) -> tuple:
+    """拼装 agent graph 与四个业务工具集，返回 ``(graph, repair, ... )``。"""
 
     def context_provider(state: GraphState) -> RequestContext:
         return resolve_agent_request_context(state)
@@ -410,8 +504,6 @@ def build_agent_runner(app: FastAPI) -> AgentSessionRunner:
 
     def session_provider(state: GraphState) -> Any:
         return session_factory()
-
-    context_loader = build_agent_context_loader(session_factory)
 
     agent_work_orders = build_agent_work_order_service(
         session_factory, app.state.work_order_service
@@ -435,7 +527,6 @@ def build_agent_runner(app: FastAPI) -> AgentSessionRunner:
         repair_tools=repair_tools,
         inspection_tools=inspection_tools,
     )
-
     graph = build_agent_graph(
         gateway=gateway,
         repair_tools=repair_tools,
@@ -448,94 +539,14 @@ def build_agent_runner(app: FastAPI) -> AgentSessionRunner:
         read_tool_specs=read_tool_specs(),
         read_tools=controlled_read_tools,
     )
-    conversations = ConversationService(session_factory)
-    recovery = AgentRecoveryService(conversations=conversations, checkpointer=checkpointer)
-
-    def confirmation_token_provider(state: GraphState) -> str:
-        pending = state.pending_action or {}
-        tool = str(pending.get("tool") or "")
-        if tool in {"announce_publish", "announcement_schedule_publish"}:
-            context = resolve_agent_request_context(state)
-            announcement = app.state.announcement_service.get(
-                UUID(str(state.slots["announcement_id"])), context
-            )
-            reviewed_version = int(state.slots["expected_version"])
-            if reviewed_version != announcement.version:
-                raise RuntimeError("公告内容已发生变化，请重新查看后再确认发布。")
-            if tool == "announce_publish":
-                parameters = {
-                    "announcement_id": announcement.id,
-                    "expected_version": announcement.version,
-                    "action": AnnouncementAction.PUBLISH,
-                }
-                action = "ANNOUNCEMENT_PUBLISH"
-            else:
-                scheduled_at = datetime.fromisoformat(str(state.slots["scheduled_at"]))
-                parameters = {
-                    "announcement_id": announcement.id,
-                    "expected_version": announcement.version,
-                    "scheduled_at": scheduled_at,
-                }
-                action = "ANNOUNCEMENT_SCHEDULE"
-        elif tool == "inspection_submit_records":
-            parameters = {
-                "note": str(state.slots.get("note") or ""),
-                "record_type": str(state.slots.get("record_type") or "COMPLETION"),
-                "point": str(state.slots.get("point") or ""),
-            }
-            action = "INSPECTION_TASK_SUBMIT_RECORDS"
-        elif tool == "security_event_create":
-            parameters = {
-                "event_type": str(state.slots.get("event_type") or "OTHER"),
-                "risk_level": str(state.slots.get("risk_level") or "MEDIUM"),
-                "location": str(state.slots.get("location") or ""),
-            }
-            action = "SECURITY_EVENT_CREATE"
-        elif tool != "repair_create":
-            # 其余受控写工具也必须拿到服务端签发、绑定当前待确认参数的令牌；
-            # 禁止再用可伪造的固定字符串充当确认凭据。
-            parameters = dict(pending.get("params") or {})
-            action = f"AGENT_{tool.upper()}"
-        else:
-            urgency_value = str(state.slots.get("urgency") or "NORMAL").upper()
-            category = normalize_repair_category(state.slots.get("category"))
-            try:
-                urgency = Urgency(urgency_value)
-            except ValueError:
-                urgency = Urgency.NORMAL
-            parameters = {
-                "house_id": state.current_house_id,
-                "category": category,
-                "location": str(state.slots.get("location") or ""),
-                "description": str(state.slots.get("description") or ""),
-                "urgency": urgency,
-                "attachment_ids": (),
-            }
-            action = "CREATE_WORK_ORDER"
-        with session_factory() as session:
-            confirmation_service = ConfirmationService(session)
-            token = confirmation_service.generate_token(
-                actor_id=state.actor_id,
-                action=action,
-                params=parameters,
-            )
-            if action.startswith("AGENT_"):
-                confirmation_service.validate_and_consume_token(
-                    token=token,
-                    actor_id=state.actor_id,
-                    action=action,
-                    params=parameters,
-                )
-            session.commit()
-            return token
-
-    return AgentSessionRunner(
-        graph=graph,
-        conversations=conversations,
-        recovery=recovery,
-        confirmation_token_provider=confirmation_token_provider,
-        turn_recorder=build_turn_recorder(session_factory),
-    )
+    return (
+        graph,
+        repair_tools,
+        announcement_tools,
+        billing_tools,
+        inspection_tools,
+        controlled_read_tools,
+    )  # noqa: E501
 
 
 def build_model_gateway() -> ModelGateway:
@@ -597,25 +608,43 @@ def _build_services(app: FastAPI) -> dict[str, Any]:
     services["confirmation_service"] = "configured"
     services["message_outbox_service"] = "configured"
 
+    # P0 正确性底座：审批服务（同一会话的 PENDING/APPROVED/CONSUMED 生命周期）
+    # 与运行 lease（fencing）由容器一次性装配，业务 Service 通过端口复用。
+    session_factory = get_session_factory()
+    approval_service = ApprovalService(
+        session_factory,
+        ttl_minutes=settings.agent_approval_ttl_minutes,
+    )
+    services["approval_service"] = approval_service
+    run_lease_service = RunLeaseService(
+        session_factory,
+        lease_seconds=settings.agent_run_lease_seconds,
+    )
+    services["run_lease_service"] = run_lease_service
+
     # Business services are long-lived: they hold a Unit-of-Work factory
     # rather than a session, so a single instance is safe to share.
-    work_order_service = build_work_order_service()
+    work_order_service = build_work_order_service(approval_service)
     app.state.work_order_service = work_order_service
     services["work_order_service"] = work_order_service
 
-    announcement_service = build_announcement_service()
+    announcement_service = build_announcement_service(approval_service)
     app.state.announcement_service = announcement_service
     services["announcement_service"] = announcement_service
 
-    billing_service = build_billing_service()
+    billing_service = build_billing_service(
+        approval_service, enforce_fence=settings.agent_concurrency_guard
+    )
     app.state.billing_service = billing_service
     services["billing_service"] = billing_service
 
-    consultation_service = build_consultation_service()
+    consultation_service = build_consultation_service(
+        approval_service, enforce_fence=settings.agent_concurrency_guard
+    )
     app.state.consultation_service = consultation_service
     services["consultation_service"] = consultation_service
 
-    task_service, event_service = build_inspection_services()
+    task_service, event_service = build_inspection_services(approval_service)
     app.state.task_service = task_service
     app.state.event_service = event_service
     services["task_service"] = task_service
@@ -623,7 +652,11 @@ def _build_services(app: FastAPI) -> dict[str, Any]:
 
     # 统一智能体运行时（PRD §6.5）：依赖上面全部业务 service，装配后对话接口
     # 不再返回 503；模型用确定性关键词路由，无 LLM Key 也可跑通（R-02）。
-    agent_runner = build_agent_runner(app)
+    agent_runner = build_agent_runner(
+        app,
+        approval_service=approval_service,
+        run_lease_service=run_lease_service,
+    )
     app.state.agent_runner = agent_runner
     services["agent_runner"] = agent_runner
 

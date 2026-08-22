@@ -302,7 +302,9 @@ class FakeConfirmationPort(ConfirmationPort):
     def __init__(self, state: FakeState) -> None:
         self.state = state
 
-    def consume(self, *, token, actor_id, action, parameter_hash, request_id) -> None:
+    def consume(
+        self, *, approval_ref=None, token, actor_id, action, parameter_hash, request_id
+    ) -> None:
         self.state.confirmed.append((token, action, parameter_hash))
 
 

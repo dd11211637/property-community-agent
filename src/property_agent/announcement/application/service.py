@@ -231,6 +231,7 @@ class AnnouncementService:
             if snapshot.count <= 0 or not snapshot.member_ids:
                 raise empty_audience()
             uow.confirmations.consume(
+                approval_ref=command.approval_ref,
                 token=command.confirmation_token.strip(),
                 actor_id=context.actor_id,
                 action=operation,
@@ -314,6 +315,7 @@ class AnnouncementService:
             if snapshot.count <= 0 or not snapshot.member_ids:
                 raise empty_audience()
             uow.confirmations.consume(
+                approval_ref=command.approval_ref,
                 token=command.confirmation_token.strip(),
                 actor_id=context.actor_id,
                 action=operation,

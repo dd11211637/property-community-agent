@@ -26,9 +26,12 @@ jobs:
       - name: Verify committed OpenAPI contract is current
         run: python scripts/export_openapi.py && git diff --exit-code -- docs/api/openapi.json
       - run: python -m pytest -rs
+      - name: Deterministic agent eval gate (P1)
+        run: python testing/agent_harness.py tests/agent/data/controlled_read_cases.json
 
   postgres:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16-alpine
@@ -55,8 +58,10 @@ jobs:
       - run: python -m pip install ".[dev]"
       - run: alembic upgrade head
       - run: alembic check
-      - name: Run PostgreSQL suite without skips
-        run: python -m pytest -rs | tee pytest-postgres.log && ! grep -q "SKIPPED \[" pytest-postgres.log
+      - name: Run PostgreSQL concurrency suite (no skips allowed)
+        run: python -m pytest -m postgres -v -rs --junitxml=pytest-postgres.xml
+      - name: Enforce zero skips
+        run: python scripts/check_postgres_no_skip.py pytest-postgres.xml
 
   frontend:
     runs-on: ubuntu-latest

@@ -22,7 +22,9 @@ export function BillingPage() {
   const [consultBill, setConsultBill] = useState<string | null>(null);
   const [selectedConsultation, setSelectedConsultation] = useState<Consultation | null>(null);
   async function createConsultation(values: Record<string, string>) {
-    const created = await apiRequest<Consultation>("/api/billing/consultations", { method: "POST", idempotencyKey: createIdempotencyKey("billing-consultation"), body: { subject: values.subject, description: values.description, bill_id: consultBill } });
+    const parameters = { subject: values.subject, description: values.description, bill_id: consultBill };
+    const confirmation = await apiRequest<{ token: string }>("/api/confirmations", { method: "POST", body: { action: "CREATE_CONSULTATION", parameters } });
+    const created = await apiRequest<Consultation>("/api/billing/consultations", { method: "POST", idempotencyKey: createIdempotencyKey("billing-consultation"), body: { ...parameters, confirmation_token: confirmation.token } });
     setSelectedConsultation(created); await consultations.reload();
   }
   async function transition(action: "submit" | "appeal") {

@@ -1,10 +1,11 @@
 {
   "classes": {
-    "src/property_agent/announcement/application/service.py:AnnouncementService": 704,
-    "src/property_agent/inspection/application/service.py:InspectionTaskService": 575,
-    "src/property_agent/inspection/application/service.py:SecurityEventService": 442,
+    "src/property_agent/announcement/application/service.py:AnnouncementService": 706,
+    "src/property_agent/inspection/application/service.py:InspectionTaskService": 576,
+    "src/property_agent/inspection/application/service.py:SecurityEventService": 455,
     "src/property_agent/inspection/infrastructure/repository.py:SqlAlchemyInspectionRepository": 436,
-    "src/property_agent/repair/application/service.py:WorkOrderService": 770
+    "src/property_agent/repair/application/service.py:WorkOrderService": 775,
+    "src/property_agent/agent/application/runner.py:AgentSessionRunner": 617
   },
   "functions": {
     "src/property_agent/agent/adapters/api/presentation.py:_generic_slot_prompt": 87,
@@ -13,9 +14,9 @@
     "src/property_agent/agent/nodes/explain_result.py:_success_message": 176,
     "src/property_agent/agent/read_planner.py:GatewayReadPlanner.deterministic_plan_read": 107,
     "src/property_agent/agent/tools/announcement.py:build_announcement_tools": 301,
-    "src/property_agent/agent/tools/billing.py:build_billing_tools": 83,
-    "src/property_agent/agent/tools/repair.py:build_repair_tools": 110,
-    "src/property_agent/inspection/application/service.py:SecurityEventService.create_event": 107,
+    "src/property_agent/agent/tools/billing.py:build_billing_tools": 89,
+    "src/property_agent/agent/tools/repair.py:build_repair_tools": 114,
+    "src/property_agent/inspection/application/service.py:SecurityEventService.create_event": 120,
     "src/property_agent/main.py:create_app": 126,
     "src/property_agent/platform/adapters/api/dependencies.py:get_current_house_context": 85,
     "src/property_agent/platform/adapters/api/dependencies.py:get_current_user": 87,
@@ -23,19 +24,19 @@
     "src/property_agent/platform/application/audit_service.py:audit_log": 109,
     "src/property_agent/platform/application/audit_service.py:audit_log.decorator": 85,
     "src/property_agent/platform/application/message_admin_service.py:AdminDashboardService.get_dashboard": 85,
-    "src/property_agent/platform/container.py:build_agent_runner": 173,
-    "src/property_agent/repair/application/service.py:WorkOrderService._hand_over_high_risk": 111,
-    "src/property_agent/repair/application/service.py:WorkOrderService.create": 102
+    "src/property_agent/repair/application/service.py:WorkOrderService._hand_over_high_risk": 112,
+    "src/property_agent/repair/application/service.py:WorkOrderService.create": 106
   },
   "modules": {
-    "src/property_agent/announcement/application/service.py": 766,
-    "src/property_agent/billing/application/ports.py": 578,
+    "src/property_agent/announcement/application/service.py": 767,
+    "src/property_agent/billing/application/ports.py": 598,
     "src/property_agent/billing/domain/entities.py": 567,
     "src/property_agent/billing/infrastructure/orm_models.py": 526,
     "src/property_agent/billing/infrastructure/repositories.py": 979,
-    "src/property_agent/inspection/application/service.py": 1101,
-    "src/property_agent/platform/container.py": 653,
+    "src/property_agent/inspection/application/service.py": 1114,
+    "src/property_agent/platform/container.py": 687,
     "src/property_agent/platform/infrastructure/orm_models.py": 580,
-    "src/property_agent/repair/application/service.py": 819
+    "src/property_agent/repair/application/service.py": 823,
+    "src/property_agent/agent/application/runner.py": 754
   }
 }

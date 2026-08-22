@@ -826,6 +826,11 @@
             ],
             "title": "Bill Id"
           },
+          "confirmation_token": {
+            "minLength": 1,
+            "title": "Confirmation Token",
+            "type": "string"
+          },
           "description": {
             "title": "Description",
             "type": "string"
@@ -837,7 +842,8 @@
         },
         "required": [
           "subject",
-          "description"
+          "description",
+          "confirmation_token"
         ],
         "title": "CreateConsultationRequest",
         "type": "object"
@@ -903,6 +909,70 @@
           "route_points"
         ],
         "title": "CreateInspectionTaskRequest",
+        "type": "object"
+      },
+      "CreateMemoryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Content",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "house_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "House Id"
+          },
+          "memory_type": {
+            "enum": [
+              "PREFERENCE",
+              "COMMUNICATION",
+              "ACCESSIBILITY",
+              "SERVICE_NOTE"
+            ],
+            "title": "Memory Type",
+            "type": "string"
+          },
+          "source_conversation_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Conversation Id"
+          }
+        },
+        "required": [
+          "memory_type",
+          "content"
+        ],
+        "title": "CreateMemoryRequest",
         "type": "object"
       },
       "CreateSecurityEventRequest": {
@@ -1019,6 +1089,21 @@
           "confirmation_token"
         ],
         "title": "CreateWorkOrderRequest",
+        "type": "object"
+      },
+      "DeleteMemoryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_version"
+        ],
+        "title": "DeleteMemoryRequest",
         "type": "object"
       },
       "EditAnnouncementRequest": {
@@ -1925,6 +2010,28 @@
         "title": "TaskRecordType",
         "type": "string"
       },
+      "UpdateMemoryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Content",
+            "type": "string"
+          },
+          "expected_version": {
+            "minimum": 1.0,
+            "title": "Expected Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "content",
+          "expected_version"
+        ],
+        "title": "UpdateMemoryRequest",
+        "type": "object"
+      },
       "Urgency": {
         "enum": [
           "NORMAL",
@@ -2212,6 +2319,51 @@
         ]
       }
     },
+    "/api/agent/conversations": {
+      "get": {
+        "operationId": "list_conversations_api_agent_conversations_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Conversations",
+        "tags": [
+          "agent-memory"
+        ]
+      }
+    },
     "/api/agent/conversations/{conversation_id}": {
       "delete": {
         "operationId": "close_conversation_api_agent_conversations__conversation_id__delete",
@@ -2353,6 +2505,46 @@
       }
     },
     "/api/agent/conversations/{conversation_id}/messages": {
+      "get": {
+        "operationId": "list_messages_api_agent_conversations__conversation_id__messages_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Messages",
+        "tags": [
+          "agent-memory"
+        ]
+      },
       "post": {
         "operationId": "send_message_api_agent_conversations__conversation_id__messages_post",
         "parameters": [
@@ -2408,6 +2600,7 @@
     },
     "/api/agent/conversations/{conversation_id}/messages/stream": {
       "post": {
+        "description": "真流式消息接口（P1 观测与流式）。\n\n``runner.stream_start`` 生成器先 yield ``run_started``（graph 完成前即发出），\n再按图节点生命周期 yield ``tool_started`` / ``tool_finished``，最后 yield\n``(\"__turn__\", AgentTurn)``；此处把 ``__turn__`` 展开为\nintent / message / confirmation / facts / handover / done 事件序列。",
         "operationId": "send_message_stream_api_agent_conversations__conversation_id__messages_stream_post",
         "parameters": [
           {
@@ -2455,6 +2648,170 @@
         "summary": "Send Message Stream",
         "tags": [
           "agent"
+        ]
+      }
+    },
+    "/api/agent/memories": {
+      "get": {
+        "operationId": "list_memories_api_agent_memories_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Memories",
+        "tags": [
+          "agent-memory"
+        ]
+      },
+      "post": {
+        "operationId": "create_memory_api_agent_memories_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMemoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Memory",
+        "tags": [
+          "agent-memory"
+        ]
+      }
+    },
+    "/api/agent/memories/{memory_id}": {
+      "delete": {
+        "operationId": "delete_memory_api_agent_memories__memory_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Memory Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteMemoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Memory",
+        "tags": [
+          "agent-memory"
+        ]
+      },
+      "patch": {
+        "operationId": "update_memory_api_agent_memories__memory_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "memory_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Memory Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMemoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Memory",
+        "tags": [
+          "agent-memory"
         ]
       }
     },

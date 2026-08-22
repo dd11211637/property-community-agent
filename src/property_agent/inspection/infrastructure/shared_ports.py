@@ -36,8 +36,10 @@ from sqlalchemy.orm import Session
 
 from property_agent.inspection.application.ports import IdempotencyRecord
 from property_agent.inspection.domain.errors import BusinessError, forbidden, validation_error
+from property_agent.platform.application.approval_service import ApprovalError, ApprovalService
 from property_agent.platform.application.audit_service import AuditService
 from property_agent.platform.application.confirmation_service import ConfirmationService
+from property_agent.platform.application.platform_confirmation_port import enforce_agent_fence
 from property_agent.platform.domain.exceptions import InvalidConfirmationTokenException
 from property_agent.platform.infrastructure.orm_models import (
     ATTACHMENT_ALLOWED_CONTENT_TYPES,
@@ -136,22 +138,59 @@ class SqlAlchemyIdempotencyPort:
 
 
 class PlatformConfirmationPort:
-    """Consume a platform confirmation token, translating platform errors."""
+    """原子化消费确认令牌 + 审批（P0 正确性底座）。
 
-    def __init__(self, session: Session) -> None:
+    与 repair / announcement 同形：先消费审批（同一 UoW 内 ``FOR UPDATE``，
+    校验 actor/action/params_hash 后置 ``CONSUMED``），再消费令牌作为纵深防御。
+    巡检任务提交、安防事件上报等受控写操作均走这条路径。
+    """
+
+    def __init__(
+        self,
+        session: Session,
+        approval_service: ApprovalService,
+        *,
+        error_factory: Any,
+        enforce_fence: bool = False,
+    ) -> None:
+        self._session = session
+        self._approval_service = approval_service
         self._service = ConfirmationService(session)
+        self._error_factory = error_factory
+        # 生产 fencing 失败关闭开关：开启时若当前 turn 没有有效 lease（未经 runner
+        # 注入），任何业务 mutation 都禁止落地。测试环境保持 False（mock 放行）。
+        self._enforce_fence = enforce_fence
 
     def consume(
         self,
         *,
+        approval_ref: str | None,
         token: str,
         actor_id: UUID,
         action: str,
         parameter_hash: str,
         request_id: str,
     ) -> None:
+        # P0-4: 在任何 mutation / 审批消费之前校验当前 turn 仍拥有 conversation
+        # lease（fencing）。lease 从 trusted RequestContext 取，不由模型 slots 传入。
+        enforce_agent_fence(self._session, enforce_fence=self._enforce_fence)
+        if approval_ref:
+            try:
+                self._approval_service.consume(
+                    approval_id=UUID(approval_ref),
+                    actor_id=actor_id,
+                    action=action,
+                    params_hash=parameter_hash,
+                    session=self._session,
+                )
+            except ApprovalError as exc:
+                raise self._error_factory(
+                    f"CONFIRMATION_{exc.code}",
+                    exc.message,
+                    exc.status_code,
+                ) from exc
         if not token or not token.strip():
-            raise BusinessError(
+            raise self._error_factory(
                 "CONFIRMATION_REQUIRED",
                 "This operation requires a confirmation token.",
                 422,
@@ -165,7 +204,7 @@ class PlatformConfirmationPort:
                 request_id=request_id,
             )
         except InvalidConfirmationTokenException as exc:
-            raise BusinessError("CONFIRMATION_INVALID", exc.message, 422) from exc
+            raise self._error_factory("CONFIRMATION_INVALID", exc.message, 422) from exc
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -402,13 +441,17 @@ class SqlAlchemyEscalationPort:
 # ═══════════════════════════════════════════════════════════════
 
 
-def build_inspection_ports(session: Session):
+def build_inspection_ports(
+    session: Session, approval_service: ApprovalService, *, enforce_fence: bool = False
+):
     """Create every production shared port bound to one SQLAlchemy session."""
     from property_agent.inspection.application.ports import SharedPorts
 
     return SharedPorts(
         idempotency=SqlAlchemyIdempotencyPort(session),
-        confirmations=PlatformConfirmationPort(session),
+        confirmations=PlatformConfirmationPort(
+            session, approval_service, error_factory=BusinessError, enforce_fence=enforce_fence
+        ),
         staff_directory=SqlAlchemyStaffDirectoryPort(session),
         attachments=SqlAlchemyAttachmentPort(session),
         audit=PlatformAuditPort(session),

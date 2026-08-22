@@ -48,8 +48,10 @@ from property_agent.announcement.application.ports import (
 )
 from property_agent.announcement.domain.entities import AudienceSnapshot
 from property_agent.announcement.domain.policies import AUDIENCE_FIELDS
+from property_agent.platform.application.approval_service import ApprovalError, ApprovalService
 from property_agent.platform.application.audit_service import AuditService
 from property_agent.platform.application.confirmation_service import ConfirmationService
+from property_agent.platform.application.platform_confirmation_port import enforce_agent_fence
 from property_agent.platform.domain.exceptions import InvalidConfirmationTokenException
 from property_agent.platform.errors import BusinessError
 from property_agent.platform.infrastructure.orm_models import (
@@ -154,29 +156,59 @@ class SqlAlchemyIdempotencyPort:
 
 
 class PlatformConfirmationPort:
-    """Consume the platform confirmation token required before publishing.
+    """原子化消费确认令牌 + 审批（P0 正确性底座，与 repair 端口一致语义）。
 
-    PRD 6.2 / 11: publishing is a high-risk write — the operator must see the
-    title, body, audience and schedule echoed back and confirm. The token is
-    bound to (actor, action, parameter_hash); because both sides hash through
-    ``platform.application.hashing.canonical_hash`` the token stops matching
-    the moment any of those parameters change.
+    发布是高风险写操作（PRD 6.2/11）。``approval_ref`` 由服务端在确认时
+    创建的 PENDING 审批引用，在业务 UoW 内与 mutation / 审计 / Outbox 同
+    事务消费（CONSUMED）；令牌仍按既有规则消费作为纵深防御。
     """
 
-    def __init__(self, session: Session) -> None:
+    def __init__(
+        self,
+        session: Session,
+        approval_service: ApprovalService,
+        *,
+        error_factory: Any,
+        enforce_fence: bool = False,
+    ) -> None:
+        self._session = session
+        self._approval_service = approval_service
         self._service = ConfirmationService(session)
+        self._error_factory = error_factory
+        # 生产 fencing 失败关闭开关：开启时若当前 turn 没有有效 lease（未经 runner
+        # 注入），任何业务 mutation 都禁止落地。测试环境保持 False（mock 放行）。
+        self._enforce_fence = enforce_fence
 
     def consume(
         self,
         *,
+        approval_ref: str | None,
         token: str,
         actor_id: UUID,
         action: str,
         parameter_hash: str,
         request_id: str,
     ) -> None:
+        # P0-4: 在任何 mutation / 审批消费之前校验当前 turn 仍拥有 conversation
+        # lease（fencing）。lease 从 trusted RequestContext 取，不由模型 slots 传入。
+        enforce_agent_fence(self._session, enforce_fence=self._enforce_fence)
+        if approval_ref:
+            try:
+                self._approval_service.consume(
+                    approval_id=UUID(approval_ref),
+                    actor_id=actor_id,
+                    action=action,
+                    params_hash=parameter_hash,
+                    session=self._session,
+                )
+            except ApprovalError as exc:
+                raise self._error_factory(
+                    f"CONFIRMATION_{exc.code}",
+                    exc.message,
+                    exc.status_code,
+                ) from exc
         if not token or not token.strip():
-            raise BusinessError(
+            raise self._error_factory(
                 "CONFIRMATION_REQUIRED",
                 "A confirmation token is required for publishing.",
                 422,
@@ -190,7 +222,7 @@ class PlatformConfirmationPort:
                 request_id=request_id,
             )
         except InvalidConfirmationTokenException as exc:
-            raise BusinessError("CONFIRMATION_INVALID", exc.message, 422) from exc
+            raise self._error_factory("CONFIRMATION_INVALID", exc.message, 422) from exc
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -362,11 +394,15 @@ class AnnouncementSharedPorts:
     messages: MessagePort
 
 
-def build_announcement_ports(session: Session) -> AnnouncementSharedPorts:
+def build_announcement_ports(
+    session: Session, approval_service: ApprovalService, *, enforce_fence: bool = False
+) -> AnnouncementSharedPorts:
     """Create every production shared port bound to one SQLAlchemy session."""
     return AnnouncementSharedPorts(
         idempotency=SqlAlchemyIdempotencyPort(session),
-        confirmations=PlatformConfirmationPort(session),
+        confirmations=PlatformConfirmationPort(
+            session, approval_service, error_factory=BusinessError, enforce_fence=enforce_fence
+        ),
         audiences=SqlAlchemyAudienceResolverPort(session),
         audit=PlatformAuditPort(session),
         messages=PlatformMessagePort(session),

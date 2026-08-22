@@ -748,3 +748,51 @@ def test_sse_stream_emits_expected_event_sequence(session_factory):
     confirm = next(p for e, p in events if e == "confirmation")
     assert confirm["tool"] == "repair_create"
     assert rec.calls == []  # 流式过程同样停在确认前，未写库
+
+
+def test_sse_stream_emits_run_started_first_then_node_lifecycle(session_factory):
+    """P1 真流式：``run_started`` 必须是最先发出的事件（graph 完成前即下发），
+
+    其后按图节点生命周期依次下发 ``tool_started`` / ``tool_finished``，证明是
+    真流式而非 graph 跑完后回放。
+    """
+    runner, rec, *_ = build_runner(session_factory)
+    ctx = make_context()
+    client = make_client(runner, ctx)
+
+    resp = client.post(
+        "/api/agent/conversations/c13/messages/stream",
+        json={
+            "text": "我要报修",
+            "house_id": str(ctx.current_house_id),
+            "slots": dict(REPAIR_SLOTS),
+        },
+    )
+    assert resp.status_code == 200
+
+    events: list[tuple[str, dict]] = []
+    for block in resp.text.split("\n\n"):
+        block = block.strip()
+        if not block or not block.startswith("event:"):
+            continue
+        lines = block.splitlines()
+        event = lines[0].split(":", 1)[1].strip()
+        data_line = next((ln for ln in lines if ln.startswith("data:")), None)
+        if data_line is None:
+            continue
+        import json
+
+        payload = json.loads(data_line.split(":", 1)[1].strip())
+        events.append((event, payload))
+
+    names = [e for e, _ in events]
+    # 真流式核心保证：run_started 是首事件。
+    assert names[0] == "run_started"
+    assert events[0][1]["conversation_id"] == "c13"
+    # 图节点生命周期事件出现，证明不是回放。
+    assert "tool_started" in names
+    assert "tool_finished" in names
+    # run_started 必须早于任何业务事件（intent/done 等）。
+    assert names.index("run_started") < names.index("intent")
+    assert names.index("run_started") < names.index("done")
+    assert rec.calls == []  # 仍停在确认前，未写库

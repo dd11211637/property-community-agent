@@ -159,6 +159,9 @@ def mint_token(sessions, *, action: str, body: dict) -> str:
     )
     params = asdict(command)
     params.pop("confirmation_token")
+    # P0: approval_ref 是服务端签发的审批锁指针，不参与业务参数指纹
+    # （与 repair service.create 的 hash 计算保持一致）。
+    params.pop("approval_ref", None)
 
     token = f"tok_{uuid4().hex}"
     with sessions() as session:

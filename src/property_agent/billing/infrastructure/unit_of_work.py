@@ -12,24 +12,26 @@ from property_agent.billing.infrastructure.repositories import (
     SqlAlchemyBillRepository,
     SqlAlchemyConsultationRepository,
 )
-from property_agent.billing.infrastructure.shared_ports import (
-    PlatformBillingAuditPort,
-    SqlAlchemyBillingIdempotencyPort,
-)
+from property_agent.billing.infrastructure.shared_ports import build_billing_ports
 from property_agent.billing.infrastructure.source_port import LocalBillingSourcePort
+from property_agent.platform.application.approval_service import ApprovalService
 from property_agent.platform.infrastructure.orm_models import CommunityModel
 
 
 class SqlAlchemyBillingUnitOfWork:
-    """Bind billing repositories, audit and idempotency to one request Session."""
+    """Bind billing repositories, audit, idempotency and confirmation to one Session."""
 
-    def __init__(self, session: Session) -> None:
+    def __init__(
+        self, session: Session, approval_service: ApprovalService, *, enforce_fence: bool = False
+    ) -> None:
         self._session = session
         self.source = LocalBillingSourcePort(SqlAlchemyBillRepository(session))
         self.rules = SqlAlchemyBillingRuleRepository(session)
         self.consultations = SqlAlchemyConsultationRepository(session)
-        self.idempotency = SqlAlchemyBillingIdempotencyPort(session)
-        self.audit = PlatformBillingAuditPort(session)
+        ports = build_billing_ports(session, approval_service, enforce_fence=enforce_fence)
+        self.idempotency = ports["idempotency"]
+        self.audit = ports["audit"]
+        self.confirmations = ports["confirmations"]
 
     def community_code(self, community_id: UUID) -> str:
         community = self._session.get(CommunityModel, community_id)

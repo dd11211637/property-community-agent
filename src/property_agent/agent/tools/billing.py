@@ -144,6 +144,10 @@ def build_billing_tools(
             "billing_consult",
             {"subject": subject, "description": description, "bill_id": bill_id},
         )
+        # P0：把服务端签发的 confirmation_token 与 approval_ref 一起透传，
+        # create_draft 在同一 UoW 内原子消费审批 + 令牌并提交落库。
+        confirmation_token = state.confirmation_token or ""
+        approval_ref = state.approval_ref
         try:
             ticket = consultation_service.create_draft(
                 ctx,
@@ -152,6 +156,8 @@ def build_billing_tools(
                 description=description,
                 bill_id=str(bill_id) if bill_id else None,
                 idempotency_key=key,
+                confirmation_token=confirmation_token,
+                approval_ref=approval_ref,
             )
         except BillingError as exc:
             return _failure("billing_consult", exc)

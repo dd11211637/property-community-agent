@@ -152,6 +152,7 @@ class FakeConfirmation:
     def consume(
         self,
         *,
+        approval_ref: str | None = None,
         token: str,
         actor_id: UUID,
         action: str,

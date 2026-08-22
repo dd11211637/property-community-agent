@@ -16,6 +16,7 @@ class AgentSessionErrorCode(StrEnum):
     HOUSE_BINDING_REVOKED = "HOUSE_BINDING_REVOKED"
     CONFIRMATION_EXPIRED = "CONFIRMATION_EXPIRED"
     CONFIRMATION_PARAMS_CHANGED = "CONFIRMATION_PARAMS_CHANGED"
+    CONVERSATION_BUSY = "CONVERSATION_BUSY"
 
 
 _DEFAULT_MESSAGES = {
@@ -27,6 +28,7 @@ _DEFAULT_MESSAGES = {
     AgentSessionErrorCode.HOUSE_BINDING_REVOKED: "房屋绑定已变更，请重新选择房屋后再试。",
     AgentSessionErrorCode.CONFIRMATION_EXPIRED: "确认已超时失效，请重新发起并确认。",
     AgentSessionErrorCode.CONFIRMATION_PARAMS_CHANGED: "操作内容已变化，请重新确认。",
+    AgentSessionErrorCode.CONVERSATION_BUSY: "该会话正在被另一个请求处理，请稍后重试。",
 }
 
 _STATUS_CODES = {
@@ -38,6 +40,7 @@ _STATUS_CODES = {
     AgentSessionErrorCode.HOUSE_BINDING_REVOKED: 409,
     AgentSessionErrorCode.CONFIRMATION_EXPIRED: 409,
     AgentSessionErrorCode.CONFIRMATION_PARAMS_CHANGED: 409,
+    AgentSessionErrorCode.CONVERSATION_BUSY: 409,
 }
 
 

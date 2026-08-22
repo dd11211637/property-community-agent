@@ -17,7 +17,7 @@ from enum import StrEnum
 from typing import Protocol
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from property_agent.agent.application.errors import (
@@ -141,41 +141,105 @@ class ConversationService:
             session.close()
 
     def sync_from_state(self, state: GraphState, *, waiting_confirm: bool) -> ConversationSnapshot:
-        """把一轮执行结果同步回业务表：当前房屋 / 接管状态 / 生命周期。"""
+        """把一轮执行结果同步回业务表：当前房屋 / 接管状态 / 生命周期。
+
+        P0-7: CLOSED conversation 不允许被旧 run 恢复为 ACTIVE / WAITING_CONFIRM /
+        HANDOVER。使用**原子条件 UPDATE**（``status <> 'CLOSED'``），0 行返回即
+        ``CONVERSATION_CLOSED``——消除原先「读后判断再更新」的 TOCTOU 窗口：即使
+        close() 在读取之后、更新之前发生，原子 UPDATE 也会拦截复活，旧 turn 的写
+        被拒绝，杜绝 "已关闭会话被复活"。
+        """
+
         session = self._session_factory()
         try:
             row = self._find(session, state.conversation_id)
             if row is None:
                 raise AgentSessionError(AgentSessionErrorCode.CONVERSATION_NOT_FOUND)
-            row.current_house_id = state.current_house_id
-            row.last_intent = state.intent
-            row.handover_required = bool(state.handover_required)
-            if state.handover_required:
-                row.status = ConversationStatus.HANDOVER.value
-            elif waiting_confirm:
-                row.status = ConversationStatus.WAITING_CONFIRM.value
-            else:
-                row.status = ConversationStatus.ACTIVE.value
+            new_status = self._status_for(state, waiting_confirm)
+            if row.status == ConversationStatus.CLOSED.value:
+                # 快速路径：读到已是 CLOSED，直接拒绝（原子 UPDATE 仍作为兜底保证）。
+                raise AgentSessionError(AgentSessionErrorCode.CONVERSATION_CLOSED)
+            # 原子条件更新：仅更新非 CLOSED 会话，0 行即被并发 close 抢先，不复活。
+            # 注意：current_house_id 为 UUID，原始 SQL 绑定在 SQLite 下需先转 str
+            # （PostgreSQL/psycopg 亦可接受字符串形式的 UUID）。
+            current_house_id = (
+                str(state.current_house_id) if state.current_house_id is not None else None
+            )
+            result = session.execute(
+                text(
+                    """
+                    UPDATE agent_conversations
+                    SET current_house_id = :current_house_id,
+                        last_intent = :last_intent,
+                        handover_required = :handover_required,
+                        status = :status
+                    WHERE conversation_id = :conversation_id AND status <> 'CLOSED'
+                    RETURNING conversation_id
+                    """
+                ),
+                {
+                    "current_house_id": current_house_id,
+                    "last_intent": state.intent,
+                    "handover_required": bool(state.handover_required),
+                    "status": new_status,
+                    "conversation_id": state.conversation_id,
+                },
+            ).fetchone()
+            if result is None:
+                # 0 行：并发 close 已在读取后将会话置为 CLOSED，原子 UPDATE 拦截了
+                # 复活，拒绝旧 turn 的写。
+                raise AgentSessionError(AgentSessionErrorCode.CONVERSATION_CLOSED)
             session.commit()
+            # 原始 SQL UPDATE 不更新内存中的 ORM 对象；expire_on_commit=False 下
+            # 需显式 refresh 才能拿到原子更新后的状态。
             session.refresh(row)
             return _to_snapshot(row)
         finally:
             session.close()
+
+    @staticmethod
+    def _status_for(state: GraphState, waiting_confirm: bool) -> str:
+        if state.handover_required:
+            return ConversationStatus.HANDOVER.value
+        if waiting_confirm:
+            return ConversationStatus.WAITING_CONFIRM.value
+        return ConversationStatus.ACTIVE.value
 
     def mark_handover(
         self, conversation_id: str, *, ticket_id: UUID | None = None
     ) -> ConversationSnapshot:
         session = self._session_factory()
         try:
-            row = self._find(session, conversation_id)
-            if row is None:
-                raise AgentSessionError(AgentSessionErrorCode.CONVERSATION_NOT_FOUND)
-            row.handover_required = True
-            row.status = ConversationStatus.HANDOVER.value
+            set_clause = (
+                "status = :target_status, "
+                "handover_required = :handover_required, "
+                "updated_at = :updated_at"
+            )
+            params: dict[str, object] = {
+                "target_status": ConversationStatus.HANDOVER.value,
+                "handover_required": True,
+                "updated_at": datetime.now(timezone.utc),
+                "conversation_id": conversation_id,
+            }
             if ticket_id is not None:
-                row.handover_ticket_id = ticket_id
+                set_clause += ", handover_ticket_id = :ticket_id"
+                params["ticket_id"] = ticket_id
+            result = session.execute(
+                text(
+                    "UPDATE agent_conversations SET "
+                    + set_clause
+                    + " WHERE conversation_id = :conversation_id AND status <> 'CLOSED'"
+                ),
+                params,
+            )
+            if result.rowcount == 0:
+                row = self._find(session, conversation_id)
+                if row is None:
+                    raise AgentSessionError(AgentSessionErrorCode.CONVERSATION_NOT_FOUND)
+                # 唯一其余 0 行原因：会话已 CLOSED（被 WHERE status <> 'CLOSED' 过滤）。
+                raise AgentSessionError(AgentSessionErrorCode.CONVERSATION_CLOSED)
             session.commit()
-            session.refresh(row)
+            row = self._find(session, conversation_id)
             return _to_snapshot(row)
         finally:
             session.close()
@@ -186,9 +250,23 @@ class ConversationService:
             row = self._find(session, conversation_id)
             if row is None:
                 raise AgentSessionError(AgentSessionErrorCode.CONVERSATION_NOT_FOUND)
-            row.status = ConversationStatus.CLOSED.value
-            row.closed_at = datetime.now(timezone.utc)
+            # 原子条件关闭：仅当未关闭时置 CLOSED；重复 close 幂等（0 行也无妨）。
+            session.execute(
+                text(
+                    """
+                    UPDATE agent_conversations
+                    SET status = 'CLOSED', closed_at = :closed_at
+                    WHERE conversation_id = :conversation_id AND status <> 'CLOSED'
+                    """
+                ),
+                {
+                    "closed_at": datetime.now(timezone.utc),
+                    "conversation_id": conversation_id,
+                },
+            )
             session.commit()
+            # 原始 SQL UPDATE 不更新内存中的 ORM 对象；本服务 session_factory 使用
+            # expire_on_commit=False，需显式 refresh 才能拿到原子更新后的状态。
             session.refresh(row)
             return _to_snapshot(row)
         finally:

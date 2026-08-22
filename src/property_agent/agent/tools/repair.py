@@ -144,6 +144,7 @@ def build_repair_tools(service: Any, context_provider: ContextProvider) -> dict[
             description=description,
             urgency=_as_urgency(state.slots.get("urgency")),
             confirmation_token=token,
+            approval_ref=state.approval_ref,
         )
         key = idempotency_key(
             state,

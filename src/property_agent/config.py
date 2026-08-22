@@ -61,6 +61,21 @@ class Settings(BaseSettings):
     deepseek_read_timeout_seconds: float = 12.0
     deepseek_total_timeout_seconds: float = 6.0
 
+    # ── Agent concurrency guards (P0 正确性底座) ──────────────────
+    # 关闭后回退到「单凭 confirmation token」旧行为，便于回滚/排错；
+    # 默认开启。生产环境必须保持开启，避免同会话并发 lost-update。
+    agent_concurrency_guard: bool = True
+    # 审批有效窗口：与 ConfirmationService 的 5 分钟 TTL 对齐（PF-04）。
+    agent_approval_ttl_minutes: int = 5
+    # 单 turn lease 时长：足够覆盖一次 LLM 调用，又短到过期后能快速抢占。
+    agent_run_lease_seconds: int = 30
+
+    # ── OpenTelemetry 可观测性（P1 观测与流式） ──────────────────
+    # 不安装 opentelemetry 依赖时自动降级为进程内计数器 + NullTracer，不影响业务；
+    # 生产建议安装 ``opentelemetry-api``/``opentelemetry-sdk`` 并设好导出端点。
+    otel_enabled: bool = True
+    otel_service_name: str = "property-agent"
+
     def validate_runtime_security(self) -> None:
         """Reject development credentials when the production profile is selected."""
         if self.env.strip().lower() != "production":
@@ -93,6 +108,16 @@ class Settings(BaseSettings):
             problems.append("LOG_LEVEL must be a supported Python logging level")
         if self.slow_request_threshold_ms <= 0:
             problems.append("SLOW_REQUEST_THRESHOLD_MS must be positive")
+
+        # ── Agent concurrency guards（P0 正确性底座，禁止在生产关闭）──
+        # 关闭 guard 会回退到「单凭 confirmation token」旧行为，导致同会话
+        # 并发 lost-update；lease / approval 窗口非正也会让抢占与审批失效。
+        if not self.agent_concurrency_guard:
+            problems.append("AGENT_CONCURRENCY_GUARD must stay enabled in production")
+        if self.agent_run_lease_seconds <= 0:
+            problems.append("AGENT_RUN_LEASE_SECONDS must be positive")
+        if self.agent_approval_ttl_minutes <= 0:
+            problems.append("AGENT_APPROVAL_TTL_MINUTES must be positive")
 
         if problems:
             raise RuntimeError("Unsafe production configuration: " + "; ".join(problems))

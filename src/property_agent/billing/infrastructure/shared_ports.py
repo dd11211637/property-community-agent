@@ -1,9 +1,10 @@
 """
 infrastructure/shared_ports.py     账单模块生产端口（PRD 6.3）
 
-提供幂等端口（复用平台 idempotency_records 表）与审计端口（复用平台
-AuditService）。与 announcement/repair 一致：所有适配器共享同一 SQLAlchemy
-Session，平台异常翻译为 billing BusinessError。
+提供幂等端口（复用平台 idempotency_records 表）、审计端口（复用平台
+AuditService）与原子确认端口（消费 confirmation_tokens 与 agent_action_approvals）。
+与 announcement/repair 一致：所有适配器共享同一 SQLAlchemy Session，
+平台异常翻译为 billing BusinessError。
 """
 
 from __future__ import annotations
@@ -15,7 +16,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from property_agent.billing.application.ports import IdempotencyRecord
+from property_agent.billing.errors import BillingError
+from property_agent.platform.application.approval_service import ApprovalService
 from property_agent.platform.application.audit_service import AuditService
+from property_agent.platform.application.platform_confirmation_port import (
+    PlatformConfirmationPort,
+)
 from property_agent.platform.infrastructure.orm_models import IdempotencyRecordModel
 
 
@@ -87,3 +93,30 @@ class PlatformBillingAuditPort:
             result="DENIED" if action.startswith("UNAUTHORIZED") else "SUCCESS",
             request_id=str(event.get("request_id", "")),
         )
+
+
+class PlatformBillingConfirmationPort(PlatformConfirmationPort):
+    """Billing error adapter for the shared atomic confirmation port."""
+
+    def __init__(
+        self, session: Session, approval_service: ApprovalService, *, enforce_fence: bool = False
+    ) -> None:
+        super().__init__(
+            session,
+            approval_service,
+            error_factory=BillingError,
+            enforce_fence=enforce_fence,
+        )
+
+
+def build_billing_ports(
+    session: Session, approval_service: ApprovalService, *, enforce_fence: bool = False
+) -> dict[str, Any]:
+    """组装 billing UoW 需要的全部生产端口（approval_service 由容器装配后传入）。"""
+    return {
+        "idempotency": SqlAlchemyBillingIdempotencyPort(session),
+        "audit": PlatformBillingAuditPort(session),
+        "confirmations": PlatformBillingConfirmationPort(
+            session, approval_service, enforce_fence=enforce_fence
+        ),
+    }
