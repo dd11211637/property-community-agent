@@ -58,7 +58,13 @@ model inferred from directory names:
   follow-up rules, slot copying/filtering, draft continuation, and correction parsing;
   and
 - repair and billing use the PR2 Capability Layer, while announcement and inspection
-  business tools still execute through their legacy registries.
+  business tools still execute through their legacy registries; and
+- announcement publish/schedule, inspection task submit-records, and security-event
+  create already consume confirmation/approval inside their Application Service UoW,
+  but several other announcement/inspection Agent writes currently stop at legacy
+  orchestration `require_confirmation()` and have no authoritative consumption in the
+  business transaction. Section 6 records those paths as
+  `KNOWN_BASELINE_AUTHORITY_GAP`.
 
 These facts are constraints on migration. They do not authorize retaining mixed trust
 or untyped state indefinitely.
@@ -76,7 +82,8 @@ dictionary:
 | Identity and scope | `actor_id`, `community_id`, `roles`, `bound_house_ids`, `current_house_id` | Authenticated/reloaded platform context; never copied from model arguments as authority. |
 | Request and origin | `request_id`, `execution_source` | Server request/Agent composition only. |
 | Conversation and run | `conversation_id`, `run_id`, active lease/fence data | Conversation service and turn guard; fence validity is rechecked at the protected boundary. |
-| Observation | trace/span correlation and bounded invocation state | Server instrumentation and executor controls. |
+| Execution policy constraints | maximum step/call ceilings, deadline/budget limits, allowlist and policy configuration | Immutable server-created constraints; they bound execution but do not record mutable progress. |
+| Observation | trace/span correlation | Server instrumentation only. |
 | Prepared write | optional confirmation token, idempotency key, and approval reference | Server-issued `CapabilityWriteContext`; opaque to model input and not proof that a write is authorized. |
 
 `RuntimeContext` MAY wrap the existing platform `RequestContext`, lease context, and PR2
@@ -94,6 +101,11 @@ remain inside the existing Application Service/UoW transaction. Putting server-i
 write material in `RuntimeContext` does not move approval consumption into the Runner,
 policy, executor, or adapter.
 
+`RuntimeContext` MUST NOT own checkpointable invocation progress. In particular,
+`step`, `calls_made`, prior fingerprints, retry progress, selected capability, and resume
+cursor data do not belong beside immutable server policy ceilings. A mutable execution
+datum MUST have exactly one canonical mutable owner.
+
 ### 4.2 Typed mutable AgentState
 
 `AgentState` is a checkpointable mutable orchestration value. Its target contract MUST
@@ -102,7 +114,9 @@ make these concepts explicit and typed:
 - conversation correlation and schema version;
 - typed messages and current user turn input;
 - intent/classification and confidence;
-- selected capability and bounded orchestration progress;
+- selected capability and a checkpointable `CapabilityInvocationState` containing
+  current step, calls made, prior fingerprints, retry/progress state, and related resume
+  progress;
 - a discriminated domain working-state union;
 - missing-input and clarification state;
 - a proposed pending action and interrupt/resume position;
@@ -118,6 +132,13 @@ fence validity, transaction state, or a live domain transition.
 Private transport flags such as `_resume`, `_interrupt_node`, `_continuation`, and
 `_contextual_followup` MUST become named typed orchestration fields or codec-owned
 compatibility data. They MUST NOT remain an open-ended escape hatch.
+
+`AgentState`/`CapabilityInvocationState` own mutable progress; immutable maximums,
+deadlines, allowlists, and server policy inputs come from `RuntimeContext`. Implementations
+MUST NOT keep `step`, `calls_made`, or prior fingerprints mutable in both places. The
+model cannot declare human confirmation. Orchestration MAY checkpoint a server-observed
+human-confirmation event for resume routing, but that event is not authoritative approval
+truth and cannot replace Application Service/UoW validation and consumption.
 
 ### 4.3 Domain working states derived from the current slot scan
 
@@ -170,6 +191,7 @@ readable only through the legacy checkpoint adapter, not a second source of trut
 | `request_id`, `execution_source` | Platform request composition | Trusted | Frozen | Origin and trace input, not domain truth | Recreated per request/turn | `RuntimeContext.request_origin` | MIGRATE |
 | `AgentLeaseContext` (`thread_id`, `run_id`, `fence`, `lease_until`) | Turn guard/platform context | Trusted but time-sensitive | New value per acquired turn | Lease store/UoW fence check is authoritative | Never trusted merely because checkpointed; reacquired and checked on resume | `RuntimeContext.run`; existing turn guard remains owner | RETAIN |
 | PR2 `CapabilityRuntimeContext` / `CapabilityWriteContext` | Capability composition | Trusted server seam | Frozen per invocation | Write material is not approval truth | Rebuilt for each invocation; secrets are not model fields | Typed projection from `RuntimeContext` | RETAIN |
+| PR2 `CapabilityInvocationState` (`allowlist`, `step`/`max_steps`, `calls_made`/`max_calls`, deadline, fingerprints, `human_confirmed`) | Capability caller/policy/executor | Mixed server constraints and observed invocation data in one frozen per-call value | Recreated per call; progress is not checkpointed today | No | Repair/billing wrappers currently create a fresh value; tests also inject bounds/progress directly | Split immutable constraints to `RuntimeContext.execution_policy`; move mutable progress and server-observed confirmation event to checkpointable `AgentState.capability_invocation` | SPLIT |
 | `GraphState.actor_id`, `community_id`, `current_house_id` | Legacy graph state | Mixed: copied trusted values become stale snapshot data | Mutable | No | Serialized in checkpoint; actor/community rebound on restore, house checked | Correlation projection only; authority remains in `RuntimeContext` | COMPAT |
 | `GraphState.conversation_id` | Runner/graph state | Server-correlated identifier | Stable for lifecycle | Conversation table owns lifecycle and ownership | Checkpoint key and payload; validated against Conversation service | `AgentState.conversation_ref` plus `RuntimeContext.conversation_id` | MIGRATE |
 | `messages` | Graph state | User/model content, untrusted | Append/migrate | No | Last messages copied for same-house continuation; full snapshot persisted | Typed `AgentState.messages` with bounded retention | MIGRATE |
@@ -199,23 +221,70 @@ PR3 MUST register and invoke announcement and inspection operations through the 
 PR2 registry, policy, executor, result/error contract, and observation hook. It MUST NOT
 create a parallel executor or allow a migrated legacy tool to bypass policy.
 
+### 6.1 Current authority-path audit
+
+For this contract:
+
+- **A — orchestration confirmation only** means the legacy Agent tool calls
+  `require_confirmation()`, but the invoked Application Service/UoW does not validate,
+  bind, and consume that confirmation/approval atomically with the mutation.
+- **B — authoritative transaction consumption** means the Application Service passes
+  the server-issued token/reference into its UoW, which validates/binds/consumes it in
+  the same transaction as mutation, idempotency, audit/outbox, and commit.
+
+The current-main audit is:
+
+| Legacy Agent write | Current Application Service path | Current authority class | PR3 migration requirement |
+| --- | --- | --- | --- |
+| `announcement_create_draft` | `AnnouncementService.create_draft()` | A — tool confirmation only; command/service has no authoritative confirmation/approval consumption | `KNOWN_BASELINE_AUTHORITY_GAP`; add the minimum typed command and Service/UoW contract correction before activating the migrated capability. |
+| `announce_publish` | `AnnouncementService.publish()` | B — `ANNOUNCEMENT_PUBLISH` consumption in the mutation UoW | Preserve as the announcement reference implementation. |
+| `announcement_schedule_publish` | `AnnouncementService.schedule_publish()` | B — `ANNOUNCEMENT_SCHEDULE` consumption in the mutation UoW | Preserve as the announcement reference implementation. |
+| `inspection_create` | `InspectionTaskService.create_task()` | A — tool confirmation only | `KNOWN_BASELINE_AUTHORITY_GAP`; correct narrowly in the typed command and mutation UoW. |
+| `inspection_start_task` | `InspectionTaskService.execute_task_action(START)` | A — tool confirmation only | `KNOWN_BASELINE_AUTHORITY_GAP`; correct narrowly for the migrated Agent write. |
+| `inspection_add_record` | `InspectionTaskService.execute_task_action(ADD_RECORD)` | A — the tool confirms, then deliberately omits token/reference for the non-final record command | `KNOWN_BASELINE_AUTHORITY_GAP`; correct narrowly for the migrated Agent write. |
+| `inspection_submit_records` | `InspectionTaskService.execute_task_action(SUBMIT_RECORDS)` | B — `INSPECTION_TASK_SUBMIT_RECORDS` consumption in `_submit_records()` within the task UoW | Preserve as the inspection-task reference implementation. |
+| legacy `inspection_submit_record` compatibility entry | `InspectionTaskService.execute_task_action(ADD_RECORD)` | A — token/reference are passed on the command but `_add_record()` does not consume them | `KNOWN_BASELINE_AUTHORITY_GAP`; map deliberately during compatibility migration and do not claim equivalence with submit-records. |
+| `inspection_ai_suggest` | `InspectionTaskService.add_ai_suggestion()` | A — tool confirmation only; service persists the suggestion without authoritative consumption | `KNOWN_BASELINE_AUTHORITY_GAP`; correct narrowly if this Agent mutation remains a migrated capability. |
+| `security_event_create` | `SecurityEventService.create_event()` | B — `SECURITY_EVENT_CREATE` consumption in the event-creation UoW | Preserve as the security-event reference implementation. |
+| `security_event_submit_disposal` | `SecurityEventService.execute_event_action(SUBMIT_DISPOSAL)` | A — tool confirmation only | `KNOWN_BASELINE_AUTHORITY_GAP`; correct narrowly for the migrated Agent write. |
+| `close_high_risk_event` | No Agent mutation; returns handover | Not applicable — existing Agent path is human-only/non-mutating | Preserve `HUMAN_ONLY`; do not add an Agent mutation adapter. |
+
+`KNOWN_BASELINE_AUTHORITY_GAP` is not `BLOCKING_BASELINE_DEFECT`, does not reopen P0,
+and does not imply that the Application Service has ceased to be the sole business
+authority. It identifies a legacy Agent write selected for PR3 migration whose current
+confirmation stops at orchestration and therefore does not yet meet the already-governing
+North Star transaction boundary.
+
+Before each migrated write is activated, PR3 MUST audit its current path and, for every
+class-A entry, make the minimum targeted contract correction so the existing Application
+Service/UoW validates and binds authoritative confirmation/approval and atomically
+commits or rolls it back with the mutation. `CapabilityExecutor` and adapters MUST NOT
+consume approval. This narrowly scoped compatibility/correctness work is permitted PR3
+scope; it is not an approval subsystem redesign, Application Service rewrite, or P0
+redesign. A change to the North Star authority model, rather than conformance to it,
+requires `ARCHITECTURE_CONFLICT` and an ADR.
+
+### 6.2 Target capability migration
+
 The migration inventory is:
 
 | Current operation family | PR3 capability treatment |
 | --- | --- |
 | Announcement list/get and community knowledge search | Typed read/advisory capabilities with scope from `RuntimeContext`; service/provider observations remain non-authoritative. |
 | Announcement draft/revise | Typed proposal capabilities. They may produce mutable draft state but MUST NOT publish or establish business truth. |
-| Announcement create draft | Typed write capability calling the existing Announcement Application Service and preserving confirmation/idempotency behavior. |
+| Announcement create draft | Typed write capability calling the existing Announcement Application Service; close its recorded authority gap so authoritative consumption and mutation share the UoW. |
 | Announcement publish/schedule | Separate typed write capabilities calling the existing Application Service with candidate id/version/time; policy gate and authoritative approval transaction remain distinct. |
 | Inspection list/get task/get event | Typed read capabilities scoped by trusted context. |
-| Inspection create/start task, add/submit records | Separate typed write capabilities calling existing Inspection Application Services. |
+| Inspection create/start task, add/submit records | Separate typed write capabilities calling existing Inspection Application Services; preserve the authoritative submit-records reference and close each recorded class-A gap before activation. |
 | Security event create/submit disposal | Separate typed write capabilities; live risk/domain rules remain in the Application Service. |
-| Inspection AI suggestion | Typed advisory capability whose result cannot authorize or mutate a task/event. |
+| Inspection AI suggestion | The current operation persists a pending suggestion and is therefore a write, not a read-only advisory call. If retained for Agent invocation, migrate it as a typed write and close its recorded authority gap; its result still cannot authorize another task/event transition. |
 | High-risk event close | Registered static `HUMAN_ONLY` posture and deterministic policy outcome; the Agent path MUST NOT gain a mutation adapter. |
 | `__prepare_inspection__` | Not a business capability. Replace it with typed state projection/selection preparation before capability invocation. |
 
-Stable public tool names and response/error/confirmation behavior MUST remain available
-through explicit compatibility projections where they are contracts. New canonical
+Stable public tool names and response/error behavior MUST remain available through
+explicit compatibility projections where they are contracts. Confirmation UX/gates MUST
+remain compatible, but compatibility MUST NOT preserve tool-only confirmation as the
+final authority boundary for a migrated write. New canonical
 capability names MUST be unique registry identities; aliases MUST NOT create a second
 active invocation path. Each migrated write has exactly one route:
 
@@ -267,17 +336,40 @@ inside the business transaction.
 ## 8. Legacy checkpoint compatibility and removal conditions
 
 PR3 MUST introduce an explicit versioned state codec/adapter at the checkpointer
-boundary. The required migration behavior is:
+boundary. Legacy decode/conversion and durable checkpoint migration are separate
+actions.
 
-1. read both the current unversioned `GraphState` snapshot and the new versioned typed
-   snapshot;
-2. map every legacy field listed in the inventory deterministically, rejecting malformed
-   security-sensitive state rather than guessing;
-3. write only the new schema after successful conversion, while preserving checkpointer
-   CAS and stable conversation/thread identity;
-4. keep one active business invocation path; compatibility converts representation and
-   MUST NOT replay or double-execute a write; and
-5. re-run all existing recovery gates after conversion and before resume.
+The ordinary read path is pure:
+
+```text
+legacy snapshot -> decode -> in-memory typed conversion -> caller
+```
+
+`peek`, status, and other read-only inspection MUST NOT write an upgraded checkpoint
+merely because they encountered the old schema. Conversion failure or malformed
+security-sensitive legacy state MUST fail closed and MUST leave the original checkpoint
+unchanged.
+
+For pending/resume migration the required order is:
+
+1. acquire required turn ownership and lease;
+2. read the legacy checkpoint;
+3. perform pure in-memory decode/conversion;
+4. reconstruct/rebind trusted `RuntimeContext` from current server facts;
+5. execute all existing recovery gates before resume: conversation ownership/lifecycle,
+   actor/community rebinding, house binding, confirmation expiry, parameter binding,
+   and relevant lease/fence checks at their protected boundaries; and
+6. only after safe acceptance, persist the new schema using existing checkpoint CAS, or
+   persist it as part of the next normal checkpoint save.
+
+`load old -> auto-write upgraded schema -> run recovery checks` is forbidden. A rejected
+wrong-house, expired, wrong-actor, wrong-parameter, stale-run, or otherwise unsafe
+snapshot MUST NOT be silently upgraded first. A conversion CAS conflict MUST retain the
+existing stale-run termination semantics and MUST NOT overwrite newer state.
+
+The codec MUST map every legacy inventory field deterministically. Compatibility keeps
+one active business invocation path: conversion MUST NOT invoke an adapter, replay a
+business write, or double-execute a mutation.
 
 Legacy `pending`/`WAITING_CONFIRM` snapshots MUST retain the exact action, canonical
 parameter hash, issued time, interrupt cursor, current house correlation, and opaque
@@ -310,9 +402,10 @@ Implementation MUST proceed as reviewable slices:
 4. convert one domain continuation path at a time, preserving external behavior and
    removing the corresponding magic-key ownership from Runner preparation;
 5. add announcement typed contracts/adapters/registry entries, then migrate one read and
-   one write before expanding to the remaining listed operations;
+   one write before expanding to the remaining listed operations; audit each write's
+   authority class and close any recorded gap before activating it;
 6. repeat the same controlled migration for inspection, including the human-only close
-   path;
+   path and the targeted UoW corrections required by its authority matrix;
 7. remove Runner domain imports and verify that only the neutral preparation interface
    remains; and
 8. collect full local, PostgreSQL, remote CI, and compatibility/drain evidence.
@@ -326,6 +419,10 @@ PR3 MUST add or update focused tests under `tests/` for:
 
 - immutable `RuntimeContext` construction and rejection of model attempts to inject
   identity, roles, scope, execution source, lease/fence, or prepared-write material;
+- immutable server execution-policy ceilings/configuration and checkpointed mutable
+  invocation progress having no duplicated canonical owner;
+- model output being unable to assert human confirmation; only a server-observed event
+  may drive orchestration resume, and it never substitutes for authoritative approval;
 - typed `AgentState` and every admitted domain-state variant, including invalid
   cross-domain combinations;
 - optional billing `bill_id=None` preservation through state conversion and
@@ -333,9 +430,19 @@ PR3 MUST add or update focused tests under `tests/` for:
 - legacy active, missing-slot, contextual-follow-up, failed-retry, pending-confirm,
   cancelled, expired, wrong-house, wrong-actor, wrong-parameter, and closed snapshots;
 - checkpoint schema conversion, CAS, restart/resume, and no write replay;
+- `peek` of a legacy snapshot performing no durable write;
+- a rejected wrong-house legacy snapshot remaining unmodified rather than being upgraded
+  before recovery checks;
+- an expired pending snapshot being rejected before resume;
+- conversion CAS conflict terminating the stale run without overwriting newer state;
+- successful pending conversion resuming exactly once with no business mutation replay;
 - repair, billing, announcement, and inspection continuation behavior equivalence;
 - every announcement/inspection capability class in section 6, including trusted scope,
   typed errors, effective policy, idempotency, audit/outbox, and no shadow double-write;
+- the section 6 authority matrix: every class-B reference path retains atomic
+  consumption/mutation, and each class-A `KNOWN_BASELINE_AUTHORITY_GAP` receives focused
+  proof that the Application Service/UoW—not executor or adapter—now consumes the bound
+  confirmation/approval atomically with the migrated write;
 - high-risk inspection close remaining human-only and non-mutating from the Agent path;
 - Runner contract equivalence plus a structural check that it no longer imports or
   branches on domain continuation policy; and
@@ -373,6 +480,10 @@ PR3 MUST NOT introduce or undertake:
 PR4 through PR7 direction remains governed by the Roadmap and North Star. PR3 extension
 points MUST NOT become speculative implementation of those stages.
 
+The narrow command/Application Service/UoW contract corrections enumerated as
+`KNOWN_BASELINE_AUTHORITY_GAP` in section 6 are allowed conformance work, not a redesign
+exception for unrelated services or writes.
+
 ## 12. Exit criteria
 
 PR3 is complete only when:
@@ -386,18 +497,23 @@ PR3 is complete only when:
    target owner;
 4. announcement and inspection business actions use the PR2 Registry, Policy, Executor,
    and typed adapters with exactly one active mutation path;
-5. all business writes still enter existing Application Services, and authoritative
-   approval consumption remains atomic with business mutation in the UoW;
-6. the Runner owns only generic turn coordination and no longer imports, filters, or
+5. every migrated announcement/inspection write has a recorded authority-path audit;
+   class-B references remain intact and no class-A `KNOWN_BASELINE_AUTHORITY_GAP` is
+   activated without the minimum authoritative Application Service/UoW correction;
+6. all business writes still enter existing Application Services, and authoritative
+   approval validation/binding/consumption remains atomic with business mutation in the
+   UoW; no executor or adapter consumes approval;
+7. the Runner owns only generic turn coordination and no longer imports, filters, or
    branches on domain continuation state;
-7. current public API/tool behavior, fallback order, confirmation gates, idempotency,
+8. current public API/tool behavior, fallback order, confirmation UX/gates, idempotency,
    audit/outbox, lease/fencing, CAS, and terminal lifecycle semantics are preserved;
-8. old checkpoints, especially pending/`WAITING_CONFIRM` snapshots, convert and resume
-   safely through explicit compatibility code without replay or authority escalation;
-9. compatibility code has measured removal conditions and is not prematurely deleted;
-10. no PR4+ runtime, Supervisor, specialist, memory, or productionization scope is
+9. old checkpoints, especially pending/`WAITING_CONFIRM` snapshots, convert in memory,
+   pass recovery gates before any durable upgrade, and resume safely exactly once without
+   write-on-read, replay, or authority escalation;
+10. compatibility code has measured removal conditions and is not prematurely deleted;
+11. no PR4+ runtime, Supervisor, specialist, memory, or productionization scope is
     introduced; and
-11. focused, complete local, real PostgreSQL zero-skip, Agent evaluation,
+12. focused, complete local, real PostgreSQL zero-skip, Agent evaluation,
     frontend/browser, OpenAPI, and required remote quality gates are green.
 
 PR3 MUST NOT claim completion based only on type declarations, unit tests, or a clean
