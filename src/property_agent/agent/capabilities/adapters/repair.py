@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any
 from uuid import UUID
 
@@ -16,6 +17,15 @@ from property_agent.agent.capabilities.contracts import (
 from property_agent.repair.application.commands import CreateWorkOrderCommand, WorkOrderSearch
 from property_agent.repair.domain.classification import classify_repair_category
 from property_agent.repair.domain.enums import Urgency
+from property_agent.repair.domain.errors import BusinessError as RepairBusinessError
+
+
+@contextmanager
+def _translate_public_repair_errors():
+    try:
+        yield
+    except RepairBusinessError as exc:
+        raise CapabilityDomainError(exc.code, exc.message, details=dict(exc.details or {})) from exc
 
 
 class WorkOrderBrief(CapabilityOutput):
@@ -106,7 +116,8 @@ class RepairListAdapter:
             statuses=request.statuses,
             limit=request.limit,
         )
-        items = self._service.search(search, runtime.request_context)
+        with _translate_public_repair_errors():
+            items = self._service.search(search, runtime.request_context)
         return RepairListOutput(count=len(items), items=tuple(_brief(item) for item in items))
 
 
@@ -118,8 +129,9 @@ class RepairGetAdapter:
         self, request: RepairGetInput, runtime: CapabilityRuntimeContext
     ) -> RepairGetOutput:
         value = request.work_order_id.strip()
-        work_order = self._resolve(value, runtime)
-        timeline = self._service.timeline(work_order.id, runtime.request_context)
+        with _translate_public_repair_errors():
+            work_order = self._resolve(value, runtime)
+            timeline = self._service.timeline(work_order.id, runtime.request_context)
         return RepairGetOutput(
             work_order=_brief(work_order),
             timeline=tuple(
@@ -182,11 +194,12 @@ class RepairCreateAdapter:
             confirmation_token=request.confirmation_token,
             approval_ref=request.approval_ref,
         )
-        work_order = self._service.create(
-            command,
-            runtime.request_context,
-            idempotency_key=request.idempotency_key,
-        )
+        with _translate_public_repair_errors():
+            work_order = self._service.create(
+                command,
+                runtime.request_context,
+                idempotency_key=request.idempotency_key,
+            )
         return RepairCreateOutput(
             work_order=_brief(work_order), idempotency_key=request.idempotency_key
         )

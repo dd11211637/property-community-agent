@@ -30,6 +30,7 @@ from property_agent.agent.capabilities.compatibility import (
 )
 from property_agent.agent.capabilities.contracts import (
     ApprovalRequirement,
+    CapabilityDomainError,
     CapabilityInvocationState,
     CapabilityPolicyDecision,
     CapabilityRisk,
@@ -44,6 +45,7 @@ from property_agent.agent.capabilities.registry import (
     UnknownCapabilityError,
 )
 from property_agent.agent.policies import TOOL_LEVELS, TOOL_SLOTS
+from property_agent.billing.errors import BillingError
 
 
 def _runtime(context: object, house_id=None) -> CapabilityRuntimeContext:
@@ -92,8 +94,54 @@ def test_typed_input_and_output_are_enforced():
     adapter.assert_not_called()
 
     invalid_output = executor.execute("repair_list", {"limit": 1}, _runtime(object()))
-    assert invalid_output.error.code == "INVALID_CAPABILITY_OUTPUT"
+    assert invalid_output.error.code == "CAPABILITY_EXECUTION_FAILED"
+    assert invalid_output.error.message == "Capability execution failed."
+    assert invalid_output.error.details == {}
+    assert invalid_output.error.cause is not None
     adapter.assert_called_once()
+
+
+def test_public_capability_domain_error_contract_is_preserved():
+    domain_error = CapabilityDomainError(
+        "PUBLIC_BUSINESS_ERROR", "Stable public message.", details={"field": "value"}
+    )
+    result = _executor({"repair_list": Mock(side_effect=domain_error)}).execute(
+        "repair_list", {}, _runtime(object())
+    )
+
+    assert result.error.code == "PUBLIC_BUSINESS_ERROR"
+    assert result.error.message == "Stable public message."
+    assert result.error.details == {"field": "value"}
+    assert result.error.cause is domain_error
+
+
+def test_project_public_business_error_contract_is_preserved():
+    business_error = BillingError(
+        "BILL_NOT_FOUND", "Stable billing message.", 404, {"bill_id": "B-404"}
+    )
+    result = _executor({"repair_list": Mock(side_effect=business_error)}).execute(
+        "repair_list", {}, _runtime(object())
+    )
+
+    assert result.error.code == "BILL_NOT_FOUND"
+    assert result.error.message == "Stable billing message."
+    assert result.error.details == {"bill_id": "B-404"}
+    assert result.error.cause is business_error
+
+
+def test_unexpected_adapter_error_is_sanitized_but_retains_internal_cause():
+    secret = "postgresql://secret-user:secret-pass@db/internal SQL SELECT credentials"
+    internal_error = RuntimeError(secret)
+    result = _executor({"repair_list": Mock(side_effect=internal_error)}).execute(
+        "repair_list", {}, _runtime(object())
+    )
+
+    assert result.error.code == "CAPABILITY_EXECUTION_FAILED"
+    assert result.error.message == "Capability execution failed."
+    assert result.error.details == {}
+    assert secret not in f"{result.error.code}{result.error.message}{result.error.details}"
+    assert result.error.cause is internal_error
+    assert secret in str(result.error.cause)
 
 
 @pytest.mark.parametrize(

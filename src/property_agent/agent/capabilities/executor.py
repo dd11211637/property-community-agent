@@ -1,4 +1,4 @@
-"""Bounded, exactly-once-invocation boundary for typed capabilities."""
+"""Single-adapter bounded invocation boundary for typed capabilities."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from property_agent.agent.capabilities.contracts import (
 from property_agent.agent.capabilities.policy import CapabilityPolicy
 from property_agent.agent.capabilities.registry import CapabilityRegistry, UnknownCapabilityError
 from property_agent.platform.application.hashing import canonical_hash
+from property_agent.platform.domain.exceptions import PlatformError
 
 ObservationHook = Callable[[str, dict[str, Any]], None]
 
@@ -122,20 +123,20 @@ class CapabilityExecutor:
     def _adapter_failure(name, decision, fingerprint, exc: Exception) -> CapabilityResult:
         if isinstance(exc, CapabilityDomainError):
             error = CapabilityError(exc.code, exc.message, "business", exc.details, exc)
-        elif isinstance(exc, ValidationError):
+        elif isinstance(exc, PlatformError):
             error = CapabilityError(
-                "INVALID_CAPABILITY_OUTPUT",
-                "Capability output validation failed.",
-                "validation",
-                {"errors": exc.errors(include_url=False)},
+                exc.code,
+                exc.message,
+                "business",
+                dict(getattr(exc, "details", None) or {}),
                 exc,
             )
         else:
             error = CapabilityError(
-                str(getattr(exc, "code", "CAPABILITY_EXECUTION_FAILED")),
-                str(getattr(exc, "message", exc)),
-                "business" if hasattr(exc, "code") else "execution",
-                dict(getattr(exc, "details", None) or {}),
+                "CAPABILITY_EXECUTION_FAILED",
+                "Capability execution failed.",
+                "execution",
+                {},
                 exc,
             )
         return CapabilityResult(name, decision, error=error, fingerprint=fingerprint)
