@@ -151,8 +151,10 @@ through LangGraph without changing business authority.
 
 - LangGraph root graph;
 - durable PostgreSQL-backed checkpoint integration;
-- API compatibility adapter;
-- one specialist execution path;
+- API compatibility adapter (an `AgentRuntimeFacade` above a shared lifecycle owner and a
+  `GraphEngine` split, per the PR4 Stage Contract);
+- exactly one pilot specialist (Repair); the Supervisor and the complete four-specialist
+  topology remain PR5;
 - interrupt/resume and checkpoint recovery; and
 - runtime feature flag plus conversation-level runtime pinning.
 

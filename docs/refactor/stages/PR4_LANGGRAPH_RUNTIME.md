@@ -72,11 +72,15 @@ All facts below were read from that tree, not inferred from the task narrative.
    **not** consume; authoritative consumption stays in the business UoW. `AgentSessionRunner`
    re-issues the token from the *restored* state during `_plan_resume` (HTTP never accepts
    a client token).
-9. **Current Conversation runtime_version usage** — `ConversationModel.runtime_version`
-   exists, default `"v1"`, column added by
-   `alembic/versions/20260820_0002_add_concurrency_guards.py`. It is the **single
-   authoritative runtime pin owner**; persisted at conversation creation, never derived
-   from model/API/checkpoint.
+9. **Current `runtime_version` persistence seam (not yet an active dispatcher)** —
+   `ConversationModel.runtime_version` exists, default `"v1"`, column added by
+   `alembic/versions/20260820_0002_add_concurrency_guards.py`. **Current repository fact:**
+   the column is a *prepared persistence seam*; `ConversationSnapshot` does **not** yet expose
+   `runtime_version`, `ConversationService` does **not** yet dispatch on it, and **no**
+   `RuntimeSelectionPolicy` exists yet. **PR4 target:** activate this existing column as the
+   **sole authoritative runtime pin owner** (persisted at conversation creation, never derived
+   from model/API/checkpoint). The current repository does **not** implement that dispatch; this
+   contract MUST NOT describe the not-yet-built dispatch as a present-day fact.
 10. **Current API-to-runner dependency** — `adapters/api/router.py` depends on the
     concrete `AgentSessionRunner` via `dependencies.get_agent_runner`, which does
     `isinstance(runner, AgentSessionRunner)` against `request.app.state.agent_runner` and
@@ -145,11 +149,17 @@ the Capability Layer, not Application Services, and not the public API contract.
 
 - official LangGraph `StateGraph` runtime as the v2 engine;
 - durable PostgreSQL-backed LangGraph checkpointer (`PostgresSaver`);
-- an API-compatible runtime facade / `GraphRuntime` protocol (`start`, `stream_start`,
-  `resume`, `stream_resume`, `status`, `close`);
-- persisted conversation runtime pinning (`runtime_version` v1/v2);
+- an **`AgentRuntimeFacade` / `AgentSessionFacade`** (API-only dependency) layered above a
+  shared `TurnLifecycle` / `LifecycleCoordinator` and a `GraphEngine` /
+  `GraphRuntimeEngine` split (see §10 / §11);
+- persisted conversation runtime pinning (`runtime_version` v1/v2), activating the existing
+  column as the sole authoritative pin owner;
 - coexistence of legacy v1 and LangGraph v2 for the same deployment;
-- one real end-to-end vertical slice (Repair, see §21);
+- **exactly one pilot specialist execution path (Repair, see §21.1)** — stateless,
+  capability-only, with no durable / RBAC / business / approval authority;
+- a real end-to-end vertical slice implemented as the Repair pilot specialist, **plus**
+  explicit v2 compatibility orchestration for the remaining current public intents so a
+  v2-pinned conversation never loses existing capability (see §21.2);
 - interrupt/resume through official LangGraph `interrupt` / `Command(resume=…)` semantics;
 - restart recovery (process restart → accepted checkpoint → safe resume);
 - a server-only runtime rollout feature policy (default disabled / 0%);
@@ -163,7 +173,8 @@ the Capability Layer, not Application Services, and not the public API contract.
 - writing a LangGraph production runtime in this docs PR;
 - modifying business code, Application Services, the Capability Layer, or Capability
   contracts;
-- creating a Supervisor, full specialist agents, or memory;
+- creating a Supervisor, the complete four-specialist topology, multi-specialist
+  collaboration, broad replanning, or long-term memory;
 - adding a new database runtime-implementation migration in this docs PR;
 - changing production runtime selection, the public API, or `AgentState` business
   authority;
@@ -230,8 +241,11 @@ LangGraph (v2)
 
 ## 8. Runtime version pinning
 
-- `ConversationModel.runtime_version` (default `"v1"`) is the **single authoritative
-  runtime pin owner**. PR4 MUST NOT create a second runtime-ownership source.
+- The `ConversationModel.runtime_version` column **already exists** (default `"v1"`) as the
+  prepared persistence seam; **current `main` does not yet dispatch on it** (`ConversationSnapshot`
+  does not expose it, `ConversationService` does not select on it, and no `RuntimeSelectionPolicy`
+  exists). PR4 is the stage that **activates** this existing column as the sole authoritative
+  runtime pin owner. PR4 MUST NOT create a second runtime-ownership source.
 - Canonical versions: `v1` = legacy custom runtime; `v2` = LangGraph runtime.
 - **New conversation:** server-side `RuntimeSelectionPolicy` selects the runtime, persists
   `runtime_version` at creation, before the first runtime-dependent execution.
@@ -254,7 +268,7 @@ LangGraph (v2)
   - **(B)** retire/disable the v2 runtime entirely → **unsafe while live v2-pinned
     conversations exist**; PR4 MUST NOT allow (B).
 
-## 10. API compatibility facade
+## 10. API compatibility facade (two layers)
 
 The current public API is unchanged by PR4:
 
@@ -264,16 +278,54 @@ The current public API is unchanged by PR4:
 - `GET /api/agent/conversations/{id}`
 - `DELETE /api/agent/conversations/{id}`
 
-Define a stable runtime facade / protocol, e.g.:
+PR4 MUST separate the **API-facing facade** from the **graph-engine contract**. Mixing
+conversation lifecycle with the graph-engine contract (a single `GraphRuntime` exposing
+`start`/`stream_start`/`resume`/`stream_resume`/`status`/`close`) is no longer acceptable.
+
+**Layer 1 — `AgentRuntimeFacade` / `AgentSessionFacade` (API-only dependency):**
 
 ```text
-GraphRuntime:
+AgentRuntimeFacade:
   start / stream_start / resume / stream_resume / status / close
 ```
 
-The API layer MUST NOT depend long-term on a concrete `AgentSessionRunner` `isinstance`
-check (`dependencies.get_agent_runner`). It MUST depend on the stable `GraphRuntime`
-protocol/facade so v1 and v2 are interchangeable behind the same surface.
+The API layer MUST depend *only* on this facade. It MUST NOT depend on a concrete
+`AgentSessionRunner` `isinstance` check (`dependencies.get_agent_runner`), and it MUST NOT
+depend on any graph-engine type. v1 and v2 are interchangeable behind this single surface.
+
+**Layer 2 — `TurnLifecycle` / `LifecycleCoordinator` (shared, sole lifecycle owner):**
+
+Exactly one component owns conversation lifecycle and all P0 correctness for *both* runtimes:
+
+```text
+TurnLifecycle / LifecycleCoordinator sole owner:
+  - run lease acquisition / heartbeat
+  - checkpoint expected_version CAS
+  - recovery gates (§20)
+  - runtime selection / pin activation
+  - confirmation preparation
+  - conversation sync
+  - close-race handling
+  - transcript
+  - observability
+```
+
+**Layer 3 — `GraphEngine` / `GraphRuntimeEngine` (graph only):**
+
+```text
+GraphEngine:
+  - graph invoke
+  - graph resume (Command(resume=…))
+  - graph streaming
+  - graph state / result / interrupt translation
+```
+
+Implementations: `LegacyGraphEngine` (v1 custom `graph_core`) and `LangGraphEngine` (v2
+official LangGraph). A `GraphEngine` MUST NOT own `status`, `close`, conversation creation,
+lease, recovery, confirmation preparation, or any business/approval authority.
+
+The facade delegates lifecycle to `TurnLifecycle` and delegates graph work to a selected
+`GraphEngine`. This preserves **one canonical P0 lifecycle owner** (see §11).
 
 ## 11. Shared turn lifecycle ownership
 
@@ -282,12 +334,20 @@ its own lease, heartbeat, checkpoint CAS, recovery, confirmation preparation, co
 sync, close-race handling, transcript, and observability. P0 correctness logic MUST NOT
 form two driftable implementations.
 
+The three-layer split in §10 fixes the ownership boundary: the **`TurnLifecycle` /
+`LifecycleCoordinator`** is the single canonical owner of lease/heartbeat/fence, checkpoint
+CAS, recovery gates, runtime selection, confirmation preparation, conversation sync,
+close-race, transcript, and observability. The `AgentRuntimeFacade` (§10) only exposes those
+to the API; the `GraphEngine` implementations only run graph steps.
+
 Allowed implementation shapes (Codex MAY choose in the implementation plan based on real
 dependencies):
 
-- **(A)** existing `AgentSessionRunner` becomes a generic lifecycle coordinator + a
-  `GraphRuntime` protocol; or
-- **(B)** a thin `RuntimeDispatcher` + shared `TurnLifecycle` + v1/v2 graph engines.
+- **(A)** existing `AgentSessionRunner` becomes the `TurnLifecycle` / `LifecycleCoordinator`
+  (generic lifecycle owner) behind the `AgentRuntimeFacade`, with `LegacyGraphEngine` and
+  `LangGraphEngine` as pluggable `GraphEngine` implementations; or
+- **(B)** a thin `AgentRuntimeFacade` + explicit `TurnLifecycle` / `LifecycleCoordinator` +
+  v1/v2 `GraphEngine` implementations.
 
 In either case there is **one canonical turn-lifecycle / correctness owner**. The
 lease/heartbeat/fence CAS/recovery/confirmation/conversation-sync/close-race/transcript/
@@ -374,6 +434,10 @@ PR4 MUST reuse the PR3 trusted prepared-write seam.
   preferred; strict `msgpack` / explicit allowed modules per the installed supported
   version.
 - LangGraph DB tables are **orchestration infrastructure**, not Application Service tables.
+- Any LangGraph checkpoint that may later become an application accepted-head pointer MUST be
+  persisted with verified **synchronous durability** (official `durability="sync"`, or an
+  explicitly verified equivalent). PR4 MUST NOT rely on async persistence for a checkpoint
+  that an accepted-head CAS will reference (see §18.1).
 
 ## 18. Application accepted-head / CAS contract
 
@@ -386,33 +450,93 @@ PR4 MUST reuse the PR3 trusted prepared-write seam.
   deleted." The application CAS and accepted head remain authoritative for resume
   correlation.
 
-Implementation MUST define an explicit **accepted LangGraph checkpoint pointer** (at least
-`thread_id` + checkpoint namespace + checkpoint id). This pointer is orchestration
-correlation, **not** business/trust authority.
+Implementation MUST define an explicit **accepted LangGraph checkpoint pointer** (the complete
+LangGraph config/cursor needed to locate the exact checkpoint — at minimum `thread_id` +
+checkpoint namespace + `checkpoint_id`). This pointer is orchestration correlation, **not**
+business/trust authority, and is stored only *after* the internal checkpoint is durably
+persisted (see the publication protocol below).
 
-Legal resume order:
+### 18.1 Accepted-head publication protocol (hard invariant)
+
+A LangGraph checkpoint MUST be durably persisted **before** the application accepted-head CAS
+may reference it.
+
+Legal order:
+
+1. execute a LangGraph super-step / reach an interrupt boundary;
+2. the internal checkpoint is synchronously durable (verified `durability="sync"` or
+   equivalent);
+3. obtain the exact persisted checkpoint config — internal `thread_id`, checkpoint
+   namespace (if applicable), and `checkpoint_id`;
+4. the application checkpoint CAS publishes atomically: the accepted `AgentState` **and** the
+   accepted LangGraph pointer;
+5. only after CAS success is that pointer canonical.
+
+Failure semantics:
+
+- internal checkpoint persists **+** application CAS fails → the internal checkpoint is an
+  **ORPHAN**; it MUST NOT become a legal resume source.
+- internal checkpoint persistence fails → the application accepted head MUST NOT advance.
+
+PR4 MUST NOT publish an accepted pointer before internal durability is guaranteed. For the
+installed LangGraph version, use `durability="sync"` (or an explicitly verified equivalent)
+for checkpoints that may become application accepted heads; async persistence MUST NOT back an
+accepted pointer.
+
+### 18.2 Accepted head governs ALL v2 executions (not only `Command(resume)`)
+
+For **any** existing v2-pinned conversation — a next normal message, `stream_start`, a
+confirmation resume, or a restart recovery — canonical continuity MUST NOT be decided by
+`thread_id → "latest internal LangGraph checkpoint"`. The source of continuity is always the
+**application accepted head**:
+
+- accepted app checkpoint → exact accepted internal cursor (the published pointer); **or**
+- accepted `AgentState` → seed a fresh, isolated internal execution.
+
+A stale/orphan LangGraph checkpoint MUST NOT poison:
+
+- confirmation resume;
+- the next normal user turn;
+- a streaming turn (`stream_start`);
+- restart recovery.
+
+Legal resolution order (all v2 executions):
 
 ```text
 Conversation / runtime pin
   -> recovery gates (§20)
-  -> accepted app checkpoint
-  -> accepted LangGraph checkpoint pointer
-  -> exact LangGraph resume
+  -> accepted app checkpoint            (authoritative source of continuity)
+  -> accepted LangGraph checkpoint pointer (exact cursor, not "latest")
+  -> exact LangGraph execution / resume
 ```
 
 Resume MUST NOT be `conversation_id → "find latest internal LangGraph checkpoint" → resume`,
 because orphan/stale checkpoints MUST NOT poison the canonical resume.
 
-## 19. Checkpoint namespace / stale-run isolation
+## 19. Internal execution identity / stale-run isolation
 
-- Implementation MUST research and define a per-turn / per-execution checkpoint namespace
-  or equivalent isolation so a stale turn's internal LangGraph checkpoints cannot
-  overwrite/impersonate the accepted turn.
-- A new normal turn MAY use a fresh isolated execution namespace.
-- A `WAITING_CONFIRM` resume MUST restore the exact accepted namespace/checkpoint of the
-  originally interrupted execution.
-- The new lease `run_id` still comes from the trusted current turn; the checkpoint
-  namespace MUST NOT inherit old lease authority.
+- Implementation MUST define stale-run isolation using a **supported internal execution
+  identity / cursor** so a stale turn's internal LangGraph checkpoints cannot overwrite or
+  impersonate the accepted turn. This is **not** yet a confirmed mechanism; it MUST be
+  verified against the installed official LangGraph version before being treated as settled.
+- Allowed candidates (after version verification):
+  - exact `checkpoint_id` anchoring;
+  - an isolated internal LangGraph `thread_id`;
+  - supported `checkpoint_namespace` usage — **only if** the installed version documents it
+    as a valid isolation mechanism (it MUST NOT be assumed to be an arbitrary free-form
+    fencing key);
+  - an equivalent tested mechanism.
+- `application conversation_id` remains the business conversation identity. LangGraph internal
+  `thread_id` / `checkpoint_ns` are correlation only, **not** authority.
+- If `checkpoint_ns` is used for per-run isolation, PR4 MUST prove with the installed official
+  version that this usage is supported; it cannot be assumed.
+- The accepted pointer MUST store the actual complete LangGraph config/cursor needed to locate
+  the exact checkpoint (not a partial or inferred reference).
+- A new normal turn MAY use a fresh isolated execution identity.
+- A `WAITING_CONFIRM` resume MUST restore the exact accepted cursor of the originally
+  interrupted execution.
+- The new lease `run_id` still comes from the trusted current turn; the internal execution
+  identity MUST NOT inherit old lease authority.
 
 ## 20. Recovery and resume ordering
 
@@ -436,29 +560,52 @@ Before v2 `Command(resume=…)`, implementation MUST re-validate at least:
 Authoritative approval is still validated/consumed by AppService/UoW inside the mutation
 transaction. **Resume is not authorization.**
 
-## 21. Repair vertical slice
+## 21. Repair pilot specialist and v2 cross-domain continuity
 
-PR4 MUST NOT pre-build the full Supervisor / Repair / Billing / Announcement /
-Inspection specialists (those are PR5). Use **Repair** as the pilot (unless the repository
-scan surfaces a stronger reason).
+### 21.1 One pilot specialist (Repair)
+
+The parent Roadmap PR4 deliverable requires **one specialist execution path**. PR4 MUST
+provide **exactly one** pilot specialist, recommended **Repair** (unless the repository scan
+surfaces a stronger reason). This pilot specialist is a PR4 deliverable; the complete
+four-specialist topology, multi-specialist collaboration, broad replanning, and the Supervisor
+are **deferred to PR5** (§28).
+
+The PR4 pilot specialist MUST be:
+
+- **stateless** (no owned repository / session / conversation state beyond the passed
+  projection);
+- free of **durable authority**;
+- free of **RBAC / business authority**;
+- free of **approval authority**;
+- invoking all business actions **only through the Capability Layer**
+  (`CapabilityRegistry` → `CapabilityPolicy` → `CapabilityExecutor` → typed adapter →
+  Application Service → UoW);
+- receiving a **minimum typed projection** of `AgentState` + `RuntimeContext` (read-only
+  inputs; it MUST NOT treat the projection as trusted authority); and
+- performing **no cross-domain planning / replanning**.
+
+It MUST NOT pre-build the full Supervisor / Repair / Billing / Announcement / Inspection
+specialists (those are PR5).
 
 At minimum prove:
 
 **READ:**
 
 ```text
-LangGraph v2 -> repair capability read -> CapabilityExecutor
+LangGraph v2 -> Repair pilot specialist (stateless)
+  -> repair capability read -> CapabilityExecutor
   -> AppService -> response
 ```
 
 **WRITE / HITL:**
 
 ```text
-LangGraph v2 -> repair create proposal
-  -> HITL interrupt
-  -> durable PostgreSQL checkpoint
+LangGraph v2 -> Repair pilot specialist (stateless)
+  -> repair create proposal
+  -> HITL interrupt (replay-safe, §14)
+  -> durable PostgreSQL checkpoint (§17 / §18.1)
   -> process restart
-  -> recovery gates
+  -> recovery gates (§20)
   -> server confirmation preparation
   -> Command(resume)
   -> CapabilityExecutor
@@ -472,8 +619,44 @@ LangGraph v2 -> repair create proposal
 
 **cancel:** no business mutation.
 
-If Codex believes another domain is clearly smaller and equivalent, it MAY only **propose**
-it in the Stage Contract report — it MUST NOT alter the North Star / Roadmap unilaterally.
+If Codex believes another domain is clearly smaller and equivalent, it MAY only **propose** it
+in the Stage Contract report — it MUST NOT alter the North Star / Roadmap unilaterally.
+
+### 21.2 Non-pilot domain behavior for v2-pinned conversations
+
+The contract requires both (a) a v2-pinned conversation's runtime is immutable for its
+lifecycle, and (b) a Repair-only native vertical slice. It therefore MUST define what happens
+when a v2-pinned conversation later receives a **non-Repair** intent (Billing / Announcement /
+Inspection). This is a mandatory architecture hole to close.
+
+**Hard invariant:** a v2-pinned conversation MUST NOT switch to the v1 graph runtime for a
+later non-Repair turn. The following are forbidden:
+
+```text
+if intent != REPAIR:
+    legacy_compiled_graph.invoke(...)        # forbidden: turn-level runtime switch
+```
+
+Turn-level runtime switching is forbidden. A v2-pinned conversation is executed by the v2
+runtime for its entire lifecycle.
+
+**Preferred implementation policy (record and follow in implementation):** the official
+LangGraph v2 root retains a **behavior-compatible orchestration path** for all current public
+intents:
+
+- **Repair** → native pilot specialist execution path (§21.1);
+- **Billing / Announcement / Inspection** → explicit **compatibility orchestration inside
+  v2** that reuses the existing typed capability paths → Application Services.
+
+These compatibility paths MUST NOT invoke the entire v1 `CompiledGraph` runtime, and MUST NOT
+form a second runtime owner. They are v2-internal orchestration that delegates business work
+to the Capability Layer, exactly like the pilot specialist.
+
+**Fallback (if PR4 cannot deliver all public-intent compatibility):** if implementation cannot
+provide every current public intent's compatibility path in PR4, then `RuntimeSelectionPolicy`
+MUST keep the **general / public v2 rollout at a hard 0%**, and v2 MAY be exercised only by
+explicit server-owned test / internal eligibility until PR5. An ordinary user MUST NOT be
+pinned to v2 and then lose an already-shipped business capability.
 
 ## 22. No-shadow-write invariant
 
@@ -607,6 +790,51 @@ PR4 implementation MUST provide at least:
 - stale LangGraph internal checkpoint cannot become accepted head;
 - stale runtime cannot poison resume.
 
+**SPECIALIST (pilot)**
+
+- exactly one PR4 pilot specialist path (Repair);
+- pilot specialist is stateless;
+- pilot specialist has no DB / session / repository ownership;
+- pilot specialist has no durable / RBAC / business / approval authority;
+- pilot specialist executes business actions only through the Capability Layer;
+- pilot specialist receives a minimum typed `AgentState` + `RuntimeContext` projection only.
+
+**V2 CROSS-DOMAIN CONTINUITY**
+
+- a v2-pinned conversation cannot switch to the v1 engine for a later non-Repair turn;
+- non-pilot intent (Billing / Announcement / Inspection) behavior is explicitly tested;
+- no hidden `LegacyGraphEngine` / v1 `CompiledGraph` fallback for a v2-pinned turn;
+- Repair first turn → then Billing: runtime remains v2, no v1 engine dispatch, safe
+  compatible response;
+- Repair first turn → then Announcement: runtime remains v2, safe compatible response;
+- Repair first turn → then Inspection: runtime remains v2, safe compatible response;
+- if general/public rollout is hard-zeroed, prove the general production selector cannot
+  select an incomplete v2 runtime.
+
+**ACCEPTED-HEAD PUBLISH**
+
+- internal LangGraph checkpoint is durably persisted *before* the accepted-head CAS
+  references it;
+- accepted-head CAS failure leaves the internal checkpoint as an orphan only (never a legal
+  resume source);
+- internal checkpoint persistence failure leaves the accepted head unchanged (no advance);
+- the accepted pointer always resolves to an existing durable checkpoint.
+
+**FRESH TURN STALE SAFETY**
+
+- a stale internal LangGraph checkpoint cannot poison the next normal user message;
+- a stale internal LangGraph checkpoint cannot poison `stream_start`;
+- a stale internal LangGraph checkpoint cannot poison restart recovery;
+- a stale internal LangGraph checkpoint cannot poison confirmation resume.
+
+**LAYERING**
+
+- the API depends only on `AgentRuntimeFacade` / `AgentSessionFacade`;
+- `GraphEngine` implementations do not own `status` / `close` / conversation creation /
+  lease / recovery / confirmation preparation / business authority;
+- the shared `TurnLifecycle` / `LifecycleCoordinator` is the sole lifecycle owner for both
+  runtimes.
+
 **DUPLICATE / IDEMPOTENCY**
 
 - duplicate invocation protected;
@@ -666,23 +894,29 @@ justified.
 
 ## 28. PR5+ deferrals
 
-PR4 forbids:
+PR4 delivers **exactly one** pilot specialist (Repair, §21.1). It forbids:
 
-- full Supervisor;
-- multi-agent planning;
-- all specialist agents;
-- multi-domain replanning;
+- the **Supervisor**;
+- the **complete four-specialist topology** (Repair / Billing / Announcement / Inspection
+  working together);
+- **multi-specialist collaboration**;
+- **broad / multi-domain replanning**;
+- treating non-Repair public intents as native specialists (they use v2 compatibility
+  orchestration, §21.2, not separate specialists);
 - long-term memory;
 - pgvector;
 - memory writer;
 - procedural learning;
-- production default 100% v2;
+- production default 100% v2 (general / public rollout stays 0% unless all public-intent
+  compatibility ships, §21.2);
 - legacy drain;
 - legacy runtime removal;
 - full production canary framework;
 - chaos/load programme.
 
-These belong to PR5 / PR6 / PR7 respectively.
+**PR5** expands to the Repair / Billing / Announcement / Inspection specialists **plus** the
+Supervisor, governed multi-domain routing, and HITL on the durable runtime. These belong to
+PR5 / PR6 / PR7 respectively.
 
 ## 29. Exit criteria
 
@@ -692,8 +926,9 @@ PR4 is complete only when:
    custom `graph_core`);
 2. durable PostgreSQL `PostgresSaver` persists internal graph checkpoints, with an explicit
    accepted-LangGraph-checkpoint pointer and an accepted app-checkpoint head;
-3. the API-compatible runtime facade/protocol is the only API dependency (no concrete
-   `AgentSessionRunner` `isinstance` coupling);
+3. the API depends only on the `AgentRuntimeFacade` / `AgentSessionFacade`; the shared
+   `TurnLifecycle` / `LifecycleCoordinator` is the sole lifecycle owner; `GraphEngine`
+   implementations do not own status/close/lease/recovery (three-layer split, §10/§11);
 4. P0 lease/heartbeat/fence, application checkpoint CAS, and approval atomicity are
    unchanged and regression-covered for v2;
 5. runtime pinning is persisted at creation and immutable for the lifecycle;
@@ -707,7 +942,18 @@ PR4 is complete only when:
 11. controlled-read safety semantics are preserved (v1/compat path retained if not
     migrated); and
 12. focused, full local, real PostgreSQL zero-skip, Agent evaluation, frontend/browser,
-    OpenAPI, and required remote quality gates are green.
+    OpenAPI, and required remote quality gates are green;
+13. exactly one pilot specialist (Repair) is stateless, capability-only, holds no authority,
+    and proves the READ + WRITE/HITL slice (§21.1);
+14. a v2-pinned conversation keeps v2 for non-Repair turns with explicit compatibility
+    orchestration and no v1-engine fallback, **or** — if PR4 cannot ship all public-intent
+    compatibility — general/public v2 rollout is hard 0% and v2 is server-owned test/internal
+    only (§21.2);
+15. the accepted-head publication protocol (§18.1) is enforced: internal checkpoint durable
+    before accepted CAS; CAS failure → orphan only; accepted pointer always resolvable; and
+16. the accepted head governs every v2 execution (next message, stream_start, confirmation
+    resume, restart recovery) — a stale/orphan internal checkpoint cannot poison any of them
+    (§18.2).
 
 PR4 MUST NOT claim completion based only on dependency addition, a passing import, or a
 clean static scan.
@@ -724,6 +970,18 @@ clean static scan.
 - [ ] Recovery order explicit (≥12 gates before `Command(resume)`).
 - [ ] No shadow double-write explicit.
 - [ ] PR5+ exclusions explicit.
+- [ ] Exactly one PR4 pilot specialist (Repair), stateless, capability-only, no authority (§21.1).
+- [ ] Non-pilot v2-pinned behavior defined: no v1 switch, no hidden v1 fallback; hard-zero
+  public rollout fallback recorded if compatibility is incomplete (§21.2).
+- [ ] Accepted-head publication protocol explicit: internal durable before accepted CAS;
+  CAS failure → orphan only; pointer always resolvable (§18.1).
+- [ ] Accepted head governs all v2 executions, not only `Command(resume)` (§18.2).
+- [ ] `checkpoint_ns` not overloaded as a free-form fence; isolation via verified supported
+  mechanism; accepted pointer stores full cursor (§19).
+- [ ] `runtime_version` baseline fact corrected: column exists as seam, PR4 activates it; no
+  not-yet-built dispatch described as current fact (§2.1 / §8).
+- [ ] Two-layer facade: `AgentRuntimeFacade` (API-only) above `TurnLifecycle` (sole lifecycle
+  owner) above `GraphEngine` (graph only) (§10 / §11).
 - [ ] Testable implementation exit criteria explicit (§26 / §29).
 - [ ] Docs-only: no code, dependency, or behavior change in this PR.
 - [ ] No `ARCHITECTURE_CONFLICT`; no reopened P0 fencing defect.
