@@ -72,7 +72,8 @@ def _invoke_capability(
     )
     invocation = replace(
         state.capability_invocation,
-        prior_fingerprints=frozenset(),
+        # Preserve checkpointed prior_fingerprints so CapabilityPolicy can
+        # detect DUPLICATE_INVOCATION across the same turn / resumed invocation.
         fingerprint=None,
         selected_capability=name,
         human_confirmed=confirmed,
