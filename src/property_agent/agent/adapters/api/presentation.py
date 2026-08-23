@@ -24,26 +24,10 @@ def _pending_card(pending: dict[str, Any] | None) -> dict[str, Any] | None:
     if not pending:
         return None
     summaries = {
-        "inspection_create": "确认创建这项巡检任务吗？",
-        "inspection_create_task": "确认创建这项巡检任务吗？",
-        "inspection_start_task": "确认开始执行这项巡检任务吗？",
-        "inspection_add_record": "确认追加这条巡检记录吗？",
-        "inspection_submit_record": "确认提交这条巡检记录吗？",
-        "inspection_submit_records": "确认提交最终巡检记录吗？",
-        "inspection_ai_suggest": "确认保存这条异常建议吗？",
-        "security_event_create": "确认上报这项安防事件吗？",
-        "security_event_submit_disposal": "确认提交这项事件处置结果吗？",
-        "announcement_create_draft": "确认采用这份 AI 稿件并保存为公告草稿吗？",
-        "announce_publish": "您已审阅最终稿，确认立即发布这份公告吗？",
-        "announcement_schedule_publish": "您已审阅最终稿，确认按指定时间发布吗？",
+        name: str(metadata["confirmation_title"])
+        for name, metadata in migrated_presentation().items()
+        if metadata["confirmation_title"]
     }
-    summaries.update(
-        {
-            name: str(metadata["confirmation_title"])
-            for name, metadata in migrated_presentation().items()
-            if metadata["confirmation_title"]
-        }
-    )
     tool = pending.get("tool")
     params = pending.get("params", {})
     if tool == "security_event_create" and params.get("risk_level") == "HIGH_RISK":

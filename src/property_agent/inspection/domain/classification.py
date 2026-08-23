@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from property_agent.inspection.domain.enums import EventRiskLevel, EventType
 
 _EVENT_CUES: tuple[tuple[EventType, tuple[str, ...]], ...] = (
@@ -32,3 +34,32 @@ def classify_security_event(description: str) -> tuple[EventType, EventRiskLevel
         else EventRiskLevel.MEDIUM
     )
     return event_type, risk
+
+
+@dataclass(frozen=True, slots=True)
+class NormalizedSecurityEvent:
+    event_type: EventType
+    risk_level: EventRiskLevel
+
+
+def normalize_security_event(
+    description: str,
+    requested_risk: str | EventRiskLevel | None = None,
+) -> NormalizedSecurityEvent:
+    """Derive event type and enforce a deterministic risk floor.
+
+    Caller-controlled risk may raise the result, but can never lower the floor
+    derived from the reported facts. Event type is always fact-derived.
+    """
+    event_type, minimum = classify_security_event(description)
+    try:
+        requested = EventRiskLevel(str(requested_risk).upper()) if requested_risk else minimum
+    except ValueError:
+        requested = minimum
+    rank = {
+        EventRiskLevel.LOW: 0,
+        EventRiskLevel.MEDIUM: 1,
+        EventRiskLevel.HIGH_RISK: 2,
+    }
+    effective = requested if rank[requested] > rank[minimum] else minimum
+    return NormalizedSecurityEvent(event_type, effective)

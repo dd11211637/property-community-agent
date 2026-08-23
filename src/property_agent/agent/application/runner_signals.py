@@ -12,6 +12,15 @@ from typing import Any
 
 from property_agent.agent.policies import Intent
 from property_agent.agent.state import GraphState
+from property_agent.agent.working_state import (
+    DomainWorkingState,
+    EmptyWorkingState,
+    InspectionEventWorkingState,
+    InspectionTaskWorkingState,
+    RepairWorkingState,
+    domain_from_legacy,
+    project_domain_to_legacy_slots,
+)
 
 # 巡检 / 安防写信号
 _INSPECTION_ACTION_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -167,7 +176,9 @@ def explicit_repair_corrections(text: str) -> dict[str, str]:
 
 def explicit_inspection_corrections(text: str, previous: GraphState | None) -> dict[str, str]:
     """Map a user correction to the active inspection field, never to identity fields."""
-    if previous is None or previous.intent != "INSPECTION":
+    if previous is None or not isinstance(
+        previous.domain, (InspectionTaskWorkingState, InspectionEventWorkingState)
+    ):
         return {}
     if not any(marker in text for marker in ("不是", "改成", "换成")):
         return {}
@@ -185,7 +196,7 @@ def explicit_inspection_corrections(text: str, previous: GraphState | None) -> d
     if not mentioned:
         return {}
     value = max(mentioned, key=len)
-    action = str(previous.slots.get("action") or "")
+    action = str(previous.domain.action or "")
     field = "location" if action in {"report_event", "create_event", "event_create"} else "point"
     return {field: value}
 
@@ -196,16 +207,19 @@ def resolve_repair_followup(
     explicit_corrections: dict[str, str],
 ) -> tuple[dict[str, Any], str | None]:
     """若上一轮已有活跃工单且用户改口/回归，直接说明不重复建单。"""
-    if previous is None or not previous.slots.get("work_order_id"):
+    if previous is None or not isinstance(previous.domain, RepairWorkingState):
+        return {}, None
+    repair = previous.domain
+    if not repair.work_order_id:
         return {}, None
     correction_or_return = any(
         marker in user_text for marker in ("不是", "改成", "换成", "回到", "刚才")
     )
     if not correction_or_return:
         return {}, None
-    business_no = str(previous.slots["work_order_id"])
-    location = explicit_corrections.get("location") or previous.slots.get("location") or ""
-    description = explicit_corrections.get("description") or previous.slots.get("description") or ""
+    business_no = str(repair.work_order_id)
+    location = explicit_corrections.get("location") or repair.location or ""
+    description = explicit_corrections.get("description") or repair.description or ""
     followup = {
         "work_order_id": business_no,
         "location": location,
@@ -222,7 +236,8 @@ def resolve_repair_followup(
 class ContinuationState:
     """Runner 内私有槽位续接状态（仅供 ``runner._build_continuation`` 使用）。"""
 
-    previous_slots: dict[str, Any]
+    previous_domain: DomainWorkingState
+    legacy_projection: dict[str, Any]
     previous_messages: list[dict[str, Any]]
     previous_intent: str | None
     single_slot_reply: dict[str, Any]
@@ -241,30 +256,32 @@ def build_initial_state(
     inspection_override: dict[str, str],
     explicit_corrections: dict[str, str],
     continuation: ContinuationState,
-    roles: tuple[str, ...],
     active_draft: dict[str, Any] | None,
     announcement_followup: Any,
     repair_followup: dict[str, Any],
 ) -> GraphState:
+    intent = Intent.INSPECTION.value if inspection_override else continuation.previous_intent
+    compatibility_slots = {
+        **continuation.legacy_projection,
+        **explicit_corrections,
+        **continuation.single_slot_reply,
+        "_user_corrected_fields": sorted(
+            set(explicit_corrections) | set((announcement_followup.slot_updates or {}).keys())
+        ),
+        "_active_announcement_draft": active_draft,
+        "user_text": user_text,
+        **repair_followup,
+        **(slots or {}),
+    }
+    domain = domain_from_legacy(intent, compatibility_slots) if intent else EmptyWorkingState()
     return GraphState(
         conversation_id=conversation_id,
         actor_id=context.actor_id,
         community_id=context.community_id,
         current_house_id=current_house_id,
-        intent=(Intent.INSPECTION.value if inspection_override else continuation.previous_intent),
-        slots={
-            **continuation.previous_slots,
-            **explicit_corrections,
-            **continuation.single_slot_reply,
-            "roles": list(roles),
-            "_user_corrected_fields": sorted(
-                set(explicit_corrections) | set((announcement_followup.slot_updates or {}).keys())
-            ),
-            "_active_announcement_draft": active_draft,
-            "user_text": user_text,
-            **repair_followup,
-            **(slots or {}),
-        },
+        intent=intent,
+        domain=domain,
+        slots=project_domain_to_legacy_slots(domain, compatibility_slots),
         messages=continuation.previous_messages,
         _continuation=continuation.continuing,
         _contextual_followup=continuation.contextual_followup,

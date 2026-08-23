@@ -7,6 +7,7 @@
 from collections.abc import Mapping
 
 from property_agent.agent.state import GraphState
+from property_agent.agent.working_state import synchronize_typed_domain
 
 
 def execute_tool_node(registry: Mapping):
@@ -22,6 +23,7 @@ def execute_tool_node(registry: Mapping):
         except Exception as exc:  # 工具失败展示真实错误（PRD §6.5.10）
             state.error = str(exc)
             state.retry_count += 1
+        synchronize_typed_domain(state)
         return state
 
     return node

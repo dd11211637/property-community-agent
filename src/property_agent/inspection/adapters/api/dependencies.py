@@ -47,6 +47,8 @@ def to_inspection_context(
         roles=roles,
         request_id=request_id or platform_context.request_id,
         house_ids=house_ids,
+        execution_source=platform_context.execution_source,
+        agent_lease=platform_context.agent_lease,
     )
 
 

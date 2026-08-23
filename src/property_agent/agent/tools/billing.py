@@ -8,6 +8,7 @@
 """
 
 from collections.abc import Callable
+from dataclasses import replace
 from functools import partial
 from typing import Any
 
@@ -20,7 +21,6 @@ from property_agent.agent.capabilities.adapters.billing import (
 )
 from property_agent.agent.capabilities.catalog import default_capability_registry
 from property_agent.agent.capabilities.contracts import (
-    CapabilityInvocationState,
     CapabilityResult,
     CapabilityRuntimeContext,
     CapabilityWriteContext,
@@ -28,6 +28,7 @@ from property_agent.agent.capabilities.contracts import (
 from property_agent.agent.capabilities.executor import CapabilityExecutor
 from property_agent.agent.capabilities.policy import CapabilityPolicy
 from property_agent.agent.policies import OperationLevel
+from property_agent.agent.runtime import ExecutionPolicy, RuntimeContext
 from property_agent.agent.state import GraphState
 from property_agent.agent.tools.base import (
     ContextProvider,
@@ -55,14 +56,43 @@ def _invoke_capability(
     confirmed: bool = False,
     write: CapabilityWriteContext | None = None,
 ) -> CapabilityResult:
-    return executor.execute(
+    context = context_provider(state)
+    trusted_runtime = RuntimeContext.from_request_context(
+        context,
+        conversation_id=state.conversation_id,
+        current_house_id=state.current_house_id,
+        execution_policy=ExecutionPolicy(allowlist=frozenset({name})),
+    )
+    invocation = replace(
+        state.capability_invocation,
+        # Preserve checkpointed prior_fingerprints so CapabilityPolicy can
+        # detect DUPLICATE_INVOCATION across the same turn / resumed invocation.
+        fingerprint=None,
+        selected_capability=name,
+        human_confirmed=confirmed,
+    )
+    result = executor.execute(
         name,
         payload,
         CapabilityRuntimeContext(
-            context_provider(state), state.current_house_id, legacy_state=state, write=write
+            context,
+            state.current_house_id,
+            legacy_state=state,
+            write=write,
+            trusted_runtime=trusted_runtime,
         ),
-        CapabilityInvocationState(allowlist=frozenset({name}), human_confirmed=confirmed),
+        invocation,
     )
+    if result.fingerprint is not None:
+        state.capability_invocation = replace(
+            invocation,
+            step=invocation.step + 1,
+            calls_made=invocation.calls_made + 1,
+            prior_fingerprints=state.capability_invocation.prior_fingerprints
+            | {result.fingerprint},
+            fingerprint=result.fingerprint,
+        )
+    return result
 
 
 def build_billing_tools(

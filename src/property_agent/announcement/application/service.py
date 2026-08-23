@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
+from property_agent.announcement.application import agent_authority as agent_auth
 from property_agent.announcement.application.commands import (
     AnnouncementSearch,
     CreateAnnouncementCommand,
@@ -10,6 +11,7 @@ from property_agent.announcement.application.commands import (
     ReviewActionCommand,
     ScheduleAnnouncementCommand,
 )
+from property_agent.announcement.application.content_validation import validated_content
 from property_agent.announcement.application.ports import (
     AnnouncementUnitOfWork,
     AnnouncementUnitOfWorkFactory,
@@ -36,11 +38,8 @@ from property_agent.announcement.domain.errors import (
     not_found,
     version_conflict,
 )
-from property_agent.announcement.domain.policies import (
-    HIGH_RISK_CATEGORIES,
-    normalize_audience_condition,
-    validate_category,
-)
+from property_agent.announcement.domain.policies import HIGH_RISK_CATEGORIES
+from property_agent.platform.application.agent_write_authority import business_command
 from property_agent.platform.application.hashing import canonical_hash
 from property_agent.platform.context import RequestContext
 from property_agent.platform.roles import Role
@@ -70,13 +69,15 @@ class AnnouncementService:
     ) -> Announcement:
         require_role(context, *CREATE_ROLES)
         require_idempotency_key(idempotency_key)
-        title, body, category, audience = self._validated_content(command)
-        request_hash = canonical_hash(asdict(command))
+        title, body, category, audience = validated_content(command)
+        confirmation_params = agent_auth.create_draft_parameters(title, body, category, audience)
+        request_hash = canonical_hash(business_command(command))
         operation = "ANNOUNCEMENT_CREATE"
         with self._unit_of_work_factory() as uow:
             replay = self._replay(uow, context, operation, idempotency_key, request_hash)
             if replay is not None:
                 return replay
+            agent_auth.consume_create_draft(uow, context, command, operation, confirmation_params)
             now = datetime.now(UTC)
             announcement = Announcement(
                 id=uuid4(),
@@ -114,7 +115,7 @@ class AnnouncementService:
     ) -> Announcement:
         require_role(context, *CREATE_ROLES)
         require_idempotency_key(idempotency_key)
-        title, body, category, audience = self._validated_content(command)
+        title, body, category, audience = validated_content(command)
         operation = "ANNOUNCEMENT_EDIT"
         request_hash = canonical_hash({"announcement_id": announcement_id, **asdict(command)})
         with self._unit_of_work_factory() as uow:
@@ -591,19 +592,6 @@ class AnnouncementService:
             announcement.id, announcement.community_id
         )
         return snapshot is not None and actor_id in snapshot.member_ids
-
-    @staticmethod
-    def _validated_content(
-        command: CreateAnnouncementCommand | EditAnnouncementCommand,
-    ) -> tuple[str, str, str, dict[str, list[str]]]:
-        title = required_text(command.title, "title is required.")
-        body = required_text(command.body, "body is required.")
-        if len(title) > 128:
-            from property_agent.announcement.domain.errors import validation_error
-
-            raise validation_error("title must not exceed 128 characters.")
-        category = validate_category(command.category)
-        return title, body, category, normalize_audience_condition(command.audience_condition)
 
     @staticmethod
     def _get(

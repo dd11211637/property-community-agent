@@ -11,6 +11,7 @@ from property_agent.inspection.application.commands import (
 )
 from property_agent.inspection.domain.entities import InspectionTask, SecurityEvent
 from property_agent.inspection.domain.enums import Role
+from property_agent.platform.context import AgentLeaseContext, ExecutionSource
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,7 +20,9 @@ class RequestContext:
     community_id: UUID
     roles: frozenset[Role]
     request_id: str
+    execution_source: ExecutionSource
     house_ids: frozenset[UUID] = frozenset()
+    agent_lease: AgentLeaseContext | None = None
 
     def __post_init__(self) -> None:
         if not self.request_id.strip() or len(self.request_id) > 64:

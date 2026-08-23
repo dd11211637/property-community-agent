@@ -33,6 +33,7 @@ from property_agent.inspection.infrastructure.models import (
     SecurityEventStatusLogModel,
 )
 from property_agent.inspection.infrastructure.uow import SqlAlchemyInspectionUnitOfWork
+from property_agent.platform.context import ExecutionSource
 from tests.inspection_support import (
     FakeAttachmentPort,
     FakeAuditPort,
@@ -105,6 +106,7 @@ def test_task_persists_through_real_repository(env):
         community_id=community,
         roles=frozenset({Role.MANAGER}),
         request_id="pg-mgr",
+        execution_source=ExecutionSource.HUMAN,
     )
 
     task = task_service.create_task(
@@ -136,6 +138,7 @@ def test_task_persists_through_real_repository(env):
         community_id=community,
         roles=frozenset({Role.SECURITY_STAFF}),
         request_id="pg-sec",
+        execution_source=ExecutionSource.HUMAN,
     )
     event = event_service.create_event(
         CreateSecurityEventCommand(

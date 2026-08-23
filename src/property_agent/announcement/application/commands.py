@@ -17,6 +17,8 @@ class CreateAnnouncementCommand:
     audience_condition: dict[str, Any]
     scheduled_at: datetime | None = None
     source: VersionSource = VersionSource.MANUAL
+    confirmation_token: str | None = None
+    approval_ref: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

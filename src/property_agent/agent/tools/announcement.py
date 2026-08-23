@@ -2,6 +2,7 @@
 
 import re
 from datetime import date, datetime, timedelta
+from functools import partial
 from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -11,6 +12,20 @@ from property_agent.agent.announcement_time import (
     materialize_relative_dates,
     temporal_writing_guidance,
 )
+from property_agent.agent.capabilities.adapters.announcement import (
+    AnnouncementCreateAdapter,
+    AnnouncementDraftAdapter,
+    AnnouncementGetAdapter,
+    AnnouncementListAdapter,
+    AnnouncementPublishAdapter,
+    AnnouncementReviseAdapter,
+    AnnouncementScheduleAdapter,
+    CommunityKnowledgeAdapter,
+)
+from property_agent.agent.capabilities.catalog import default_capability_registry
+from property_agent.agent.capabilities.contracts import CapabilityWriteContext
+from property_agent.agent.capabilities.executor import CapabilityExecutor
+from property_agent.agent.capabilities.policy import default_capability_policy
 from property_agent.agent.policies import OperationLevel
 from property_agent.agent.state import GraphState
 from property_agent.agent.tools.base import (
@@ -23,16 +38,10 @@ from property_agent.agent.tools.base import (
     require_confirmation,
     require_slot,
 )
-from property_agent.announcement.application.commands import (
-    AnnouncementSearch,
-    CreateAnnouncementCommand,
-    ReviewActionCommand,
-    ScheduleAnnouncementCommand,
-)
+from property_agent.agent.tools.capability_bridge import invoke_capability
 from property_agent.announcement.domain.classification import (
     classify_announcement_category,
 )
-from property_agent.announcement.domain.enums import AnnouncementAction, VersionSource
 from property_agent.platform.roles import Role
 
 
@@ -99,17 +108,59 @@ def _effective_date(announcement: Any) -> date | None:
     return None
 
 
+def _effective_date_brief(announcement: dict[str, Any]) -> date | None:
+    for key in ("scheduled_at", "published_at"):
+        raw = announcement.get(key)
+        if raw:
+            return datetime.fromisoformat(str(raw)).astimezone(ZoneInfo("Asia/Shanghai")).date()
+    return None
+
+
+def _announcement_executor(service, model_gateway, provided):
+    if provided is not None:
+        return provided
+    gateway = model_gateway
+    if gateway is None:
+        from property_agent.agent.model_gateway import DeterministicModelGateway
+
+        gateway = DeterministicModelGateway()
+    return CapabilityExecutor(
+        default_capability_registry(),
+        default_capability_policy(),
+        {
+            "announcement_list": AnnouncementListAdapter(service),
+            "announcement_get": AnnouncementGetAdapter(service),
+            "community_knowledge_search": CommunityKnowledgeAdapter(service),
+            "announcement_draft": AnnouncementDraftAdapter(gateway),
+            "announcement_revise": AnnouncementReviseAdapter(gateway),
+            "announcement_create_draft": AnnouncementCreateAdapter(service),
+            "announce_publish": AnnouncementPublishAdapter(service),
+            "announcement_schedule_publish": AnnouncementScheduleAdapter(service),
+        },
+    )
+
+
 def build_announcement_tools(
-    service: Any, context_provider: ContextProvider, model_gateway: Any | None = None
+    service: Any,
+    context_provider: ContextProvider,
+    model_gateway: Any | None = None,
+    capability_executor: CapabilityExecutor | None = None,
 ) -> dict[str, Tool]:
+    executor = _announcement_executor(service, model_gateway, capability_executor)
+
+    invoke = partial(invoke_capability, executor, context_provider)
+
     def announcement_list(state: GraphState) -> dict[str, Any]:
         assert_level("announcement_list", OperationLevel.READ)
-        context = context_provider(state)
-        search = AnnouncementSearch(
-            statuses=tuple(state.slots.get("statuses") or ()),
-            limit=int(state.slots.get("limit") or 20),
+        data = invoke(
+            state,
+            "announcement_list",
+            {
+                "statuses": tuple(state.slots.get("statuses") or ()),
+                "limit": int(state.slots.get("limit") or 20),
+            },
         )
-        items = service.search(search, context)
+        items = list(data["items"])
         topic = str(state.slots.get("topic") or "").upper()
         target_date_text = str(state.slots.get("target_date") or "").strip()
         if topic in _TOPIC_TERMS:
@@ -117,10 +168,7 @@ def build_announcement_tools(
             items = [
                 item
                 for item in items
-                if any(
-                    term in f"{getattr(item, 'title', '')} {getattr(item, 'body', '')}"
-                    for term in terms
-                )
+                if any(term in f"{item.get('title', '')} {item.get('body', '')}" for term in terms)
             ]
         undated_matches = 0
         if target_date_text:
@@ -129,12 +177,12 @@ def build_announcement_tools(
             except ValueError:
                 target_date = None
             if target_date is not None:
-                undated_matches = sum(_effective_date(item) is None for item in items)
-                items = [item for item in items if _effective_date(item) == target_date]
+                undated_matches = sum(_effective_date_brief(item) is None for item in items)
+                items = [item for item in items if _effective_date_brief(item) == target_date]
         return ok(
             "announcement_list",
             count=len(items),
-            items=[_brief(i) for i in items],
+            items=items,
             topic=topic or None,
             target_date=target_date_text or None,
             undated_matches=undated_matches,
@@ -147,61 +195,37 @@ def build_announcement_tools(
 
     def announcement_get(state: GraphState) -> dict[str, Any]:
         assert_level("announcement_get", OperationLevel.READ)
-        context = context_provider(state)
         raw = require_slot(state, "announcement_id", "announcement_get")
-        announcement = service.get(UUID(str(raw)), context)
+        announcement = invoke(state, "announcement_get", {"announcement_id": UUID(str(raw))})[
+            "announcement"
+        ]
         state.slots.update(
             {
-                "announcement_id": str(announcement.id),
-                "expected_version": announcement.version,
-                "title": announcement.title,
-                "body": announcement.body,
-                "category": announcement.category.value,
-                "audience": announcement.audience_condition,
+                "announcement_id": announcement["id"],
+                "expected_version": announcement["version"],
+                "title": announcement["title"],
+                "body": announcement["body"],
+                "category": announcement["category"],
+                "audience": announcement["audience"],
             }
         )
-        return ok("announcement_get", announcement=_brief(announcement))
+        return ok("announcement_get", announcement=announcement)
 
     def community_knowledge_search(state: GraphState) -> dict[str, Any]:
         """Search only resident-visible published material; never synthesize rules."""
         assert_level("community_knowledge_search", OperationLevel.READ)
-        context = context_provider(state)
         query = str(require_slot(state, "query", "community_knowledge_search")).strip()
         limit = min(int(state.slots.get("limit") or 10), 20)
-        candidates = service.search(AnnouncementSearch(statuses=("PUBLISHED",), limit=20), context)
-        domain_terms = (
-            "物业电话",
-            "联系方式",
-            "停车",
-            "装修",
-            "门禁",
-            "垃圾",
-            "开放时间",
-            "社区规定",
-            "物业规定",
-        )
-        terms = [term for term in domain_terms if term in query]
-        if any(term in query for term in ("物业电话", "联系方式", "联系电话")):
-            terms.extend(("物业电话", "联系方式", "联系电话"))
-        terms.extend(
-            term for term in re.split(r"[\s，。？！、,.!?]+", query) if 2 <= len(term) <= 8
-        )
-        matches = [
-            item
-            for item in candidates
-            if any(
-                term in f"{getattr(item, 'title', '')} {getattr(item, 'body', '')}"
-                for term in terms
-            )
-        ][:limit]
+        data = invoke(state, "community_knowledge_search", {"query": query, "limit": limit})
+        matches = data["items"]
         return ok(
             "community_knowledge_search",
             count=len(matches),
             items=[
                 {
-                    **_brief(item),
-                    "source_name": getattr(item, "title", "社区公告"),
-                    "applicability": getattr(item, "audience_condition", {}) or {},
+                    **item,
+                    "source_name": item.get("title", "社区公告"),
+                    "applicability": item.get("audience", {}) or {},
                 }
                 for item in matches
             ],
@@ -225,14 +249,11 @@ def build_announcement_tools(
         )
         if time_guidance:
             requirements = f"{requirements}\n服务端可信时间事实：{time_guidance}。"
-        gateway = model_gateway
-        if gateway is None or not hasattr(gateway, "draft_announcement"):
-            from property_agent.agent.model_gateway import DeterministicModelGateway
-
-            gateway = DeterministicModelGateway()
-        draft = gateway.draft_announcement(
-            topic=topic, audience=audience, requirements=requirements
-        )
+        draft = invoke(
+            state,
+            "announcement_draft",
+            {"topic": topic, "audience": audience, "requirements": requirements},
+        )["draft"]
         for field in ("title", "body"):
             if isinstance(draft.get(field), str):
                 draft[field] = materialize_relative_dates(
@@ -268,16 +289,17 @@ def build_announcement_tools(
         current["category"] = classify_announcement_category(
             current["title"], current["body"]
         ).value
-        gateway = model_gateway
-        if gateway is None or not hasattr(gateway, "revise_announcement"):
-            from property_agent.agent.model_gateway import DeterministicModelGateway
-
-            gateway = DeterministicModelGateway()
-        revised = gateway.revise_announcement(
-            draft=current,
-            audience=audience,
-            instruction=instruction,
-        )
+        revised = invoke(
+            state,
+            "announcement_revise",
+            {
+                "title": current["title"],
+                "body": current["body"],
+                "category": current["category"],
+                "audience": audience,
+                "revision_instruction": instruction,
+            },
+        )["draft"]
         for field in ("title", "body"):
             if isinstance(revised.get(field), str):
                 revised[field] = materialize_relative_dates(
@@ -302,8 +324,7 @@ def build_announcement_tools(
 
     def announcement_create_draft(state: GraphState) -> dict[str, Any]:
         assert_level("announcement_create_draft", OperationLevel.WRITE_LOW_RISK)
-        require_confirmation(state, "announcement_create_draft")
-        context = context_provider(state)
+        token = require_confirmation(state, "announcement_create_draft")
         title = str(require_slot(state, "title", "announcement_create_draft"))
         body = str(require_slot(state, "body", "announcement_create_draft"))
         params = {
@@ -312,55 +333,62 @@ def build_announcement_tools(
             "category": classify_announcement_category(title, body).value,
             "audience": _require_audience(state, "announcement_create_draft"),
         }
-        announcement = service.create_draft(
-            CreateAnnouncementCommand(
-                str(params["title"]),
-                str(params["body"]),
-                str(params["category"]),
-                params["audience"],
-                source=VersionSource.AI_SUGGESTION_ADOPTED,
+        announcement = invoke(
+            state,
+            "announcement_create_draft",
+            {"title": title, "body": body, "audience": params["audience"]},
+            confirmed=True,
+            write=CapabilityWriteContext(
+                confirmation_token=token,
+                approval_ref=state.approval_ref,
+                idempotency_key=idempotency_key(state, "announcement_create_draft", params),
             ),
-            context,
-            idempotency_key=idempotency_key(state, "announcement_create_draft", params),
-        )
+        )["announcement"]
         state.slots.update(
             {
-                "announcement_id": str(announcement.id),
-                "expected_version": announcement.version,
+                "announcement_id": announcement["id"],
+                "expected_version": announcement["version"],
             }
         )
-        return ok("announcement_create_draft", announcement=_brief(announcement))
+        return ok("announcement_create_draft", announcement=announcement)
 
     def _approved_for_manager(state: GraphState, tool: str):
         context = context_provider(state)
         if not context.has_any_role(Role.MANAGER):
             raise PermissionError("只有管理者可以确认发布公告。")
-        announcement = service.get(UUID(str(require_slot(state, "announcement_id", tool))), context)
+        announcement = invoke(
+            state,
+            "announcement_get",
+            {"announcement_id": UUID(str(require_slot(state, "announcement_id", tool)))},
+        )["announcement"]
         reviewed_version = int(require_slot(state, "expected_version", tool))
-        if reviewed_version != announcement.version:
+        if reviewed_version != announcement["version"]:
             raise RuntimeError("公告内容已发生变化，请重新查看后再确认发布。")
         return context, announcement
 
     def announce_publish(state: GraphState) -> dict[str, Any]:
         assert_level("announce_publish", OperationLevel.WRITE_LOW_RISK)
         token = require_confirmation(state, "announce_publish")
-        context, announcement = _approved_for_manager(state, "announce_publish")
-        published = service.publish(
-            announcement.id,
-            ReviewActionCommand(
-                AnnouncementAction.PUBLISH,
-                int(require_slot(state, "expected_version", "announce_publish")),
+        _context, announcement = _approved_for_manager(state, "announce_publish")
+        published = invoke(
+            state,
+            "announce_publish",
+            {
+                "announcement_id": announcement["id"],
+                "expected_version": announcement["version"],
+            },
+            confirmed=True,
+            write=CapabilityWriteContext(
                 confirmation_token=token,
                 approval_ref=state.approval_ref,
+                idempotency_key=idempotency_key(
+                    state,
+                    "announce_publish",
+                    {"id": announcement["id"], "version": announcement["version"]},
+                ),
             ),
-            context,
-            idempotency_key=idempotency_key(
-                state,
-                "announce_publish",
-                {"id": str(announcement.id), "version": announcement.version},
-            ),
-        )
-        return ok("announce_publish", announcement=_brief(published))
+        )["announcement"]
+        return ok("announce_publish", announcement=published)
 
     def announcement_schedule_publish(state: GraphState) -> dict[str, Any]:
         assert_level("announcement_schedule_publish", OperationLevel.WRITE_LOW_RISK)
@@ -369,23 +397,30 @@ def build_announcement_tools(
         scheduled_at = datetime.fromisoformat(
             str(require_slot(state, "scheduled_at", "announcement_schedule_publish"))
         )
-        scheduled = service.schedule_publish(
-            announcement.id,
-            ScheduleAnnouncementCommand(
-                announcement.version, scheduled_at, token, approval_ref=state.approval_ref
+        scheduled = invoke(
+            state,
+            "announcement_schedule_publish",
+            {
+                "announcement_id": announcement["id"],
+                "expected_version": announcement["version"],
+                "scheduled_at": scheduled_at,
+            },
+            confirmed=True,
+            write=CapabilityWriteContext(
+                confirmation_token=token,
+                approval_ref=state.approval_ref,
+                idempotency_key=idempotency_key(
+                    state,
+                    "announcement_schedule_publish",
+                    {
+                        "id": announcement["id"],
+                        "version": announcement["version"],
+                        "scheduled_at": scheduled_at,
+                    },
+                ),
             ),
-            context,
-            idempotency_key=idempotency_key(
-                state,
-                "announcement_schedule_publish",
-                {
-                    "id": str(announcement.id),
-                    "version": announcement.version,
-                    "scheduled_at": scheduled_at,
-                },
-            ),
-        )
-        return ok("announcement_schedule_publish", announcement=_brief(scheduled))
+        )["announcement"]
+        return ok("announcement_schedule_publish", announcement=scheduled)
 
     return {
         "announcement_list": announcement_list,

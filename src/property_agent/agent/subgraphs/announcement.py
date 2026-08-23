@@ -8,8 +8,16 @@ from property_agent.agent.announcement_actions import (
     normalize_announcement_audience,
 )
 from property_agent.agent.graph_core import StateGraph
+from property_agent.agent.selector_context import current_selector_context
 from property_agent.agent.state import GraphState
 from property_agent.agent.subgraphs.base import attach_subgraph
+from property_agent.agent.working_state import (
+    AnnouncementDraftingState,
+    AnnouncementPublishState,
+    AnnouncementQueryState,
+    EmptyWorkingState,
+    synchronize_typed_domain,
+)
 from property_agent.announcement.domain.classification import (
     classify_announcement_category,
 )
@@ -18,11 +26,22 @@ NAME = "announcement"
 
 
 def select_announcement_tool(state: GraphState) -> str:
-    action = normalize_announcement_action(state.slots.get("action"))
+    if isinstance(state.domain, EmptyWorkingState) and state.intent is None:
+        state.intent = "ANNOUNCEMENT"
+    if isinstance(state.domain, EmptyWorkingState) and state.intent == "ANNOUNCEMENT":
+        synchronize_typed_domain(state)
+    domain = state.domain
+    if not isinstance(
+        domain,
+        (AnnouncementQueryState, AnnouncementDraftingState, AnnouncementPublishState),
+    ):
+        return "announcement_list"
+    action = normalize_announcement_action(getattr(domain, "action", None))
     # 角色守卫（确定性）：住户/无发布权限角色不得触发任何公告写动作。
     # 写工具名不允许进入 trace，越权请求直接以只读列表 + 明确拒绝收尾。
-    roles = set(state.slots.get("roles") or ())
-    if roles and not (roles & {"MANAGER", "SYSTEM_ADMIN", "CUSTOMER_SERVICE"}):
+    trusted = current_selector_context()
+    roles = set(trusted.roles) if trusted is not None else set()
+    if not (roles & {"MANAGER", "SYSTEM_ADMIN", "CUSTOMER_SERVICE"}):
         if action in {
             AnnouncementAgentAction.CREATE,
             AnnouncementAgentAction.PUBLISH,
@@ -35,9 +54,9 @@ def select_announcement_tool(state: GraphState) -> str:
     # 降级为建稿流程，而不是追问一条已存在公告的编号。
     if (
         action in {AnnouncementAgentAction.PUBLISH, AnnouncementAgentAction.SCHEDULE}
-        and not state.slots.get("announcement_id")
-        and state.slots.get("title")
-        and state.slots.get("body")
+        and not getattr(domain, "announcement_id", None)
+        and getattr(domain, "title", None)
+        and getattr(domain, "body", None)
     ):
         action = AnnouncementAgentAction.CREATE
         state.slots["action"] = "create"

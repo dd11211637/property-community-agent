@@ -15,6 +15,7 @@ from property_agent.agent.state import GraphState
 from property_agent.agent.tools.announcement import build_announcement_tools
 from property_agent.agent.tools.base import ToolPreconditionError
 from property_agent.agent.tools.billing import build_billing_tools
+from property_agent.agent.tools.capability_bridge import LegacyCapabilityError
 from property_agent.agent.tools.inspection import build_inspection_tools
 from property_agent.agent.tools.repair import build_repair_tools
 from property_agent.billing.errors import BillingError
@@ -27,6 +28,7 @@ from property_agent.inspection.application.service import (
 )
 from property_agent.inspection.domain.enums import Role as InspectionRole
 from property_agent.inspection.domain.enums import TaskStatus
+from property_agent.platform.context import ExecutionSource
 from tests.inspection_support import Harness as InspectionHarness
 
 
@@ -79,10 +81,19 @@ def test_repair_create_is_idempotent_within_conversation(service, harness, ids, 
     state.confirmation_token = "confirmed"
 
     first = tools["repair_create"](state)
-    second = tools["repair_create"](state)
-
-    assert first["data"]["work_order"]["id"] == second["data"]["work_order"]["id"]
+    assert first["ok"] is True
     assert len(harness.state.orders) == 1
+    assert state.capability_invocation.calls_made == 1
+
+    # A second identical invocation within the same turn hits the agent-layer
+    # duplicate-invocation guard: the adapter is not re-executed, so no second
+    # work order is created. Service-level idempotency (idempotency_key replay)
+    # remains a separate safety net validated at the service boundary.
+    with pytest.raises(LegacyCapabilityError) as exc:
+        tools["repair_create"](state)
+    assert exc.value.code == "DUPLICATE_INVOCATION"
+    assert len(harness.state.orders) == 1
+    assert state.capability_invocation.calls_made == 1
 
 
 def test_repair_get_accepts_business_number_and_returns_timeline(service, ids, resident_context):
@@ -436,13 +447,20 @@ def test_billing_consult_requires_confirmation_and_stable_key(ids):
     assert consultation.keys == []
 
     state.confirmation_token = "confirmed"
-    tools["billing_consult"](state)
-    tools["billing_consult"](state)
-
-    # 相同会话 + 相同参数 => 相同幂等键，业务侧据此重放
-    assert len(consultation.keys) == 2
-    assert consultation.keys[0] == consultation.keys[1]
+    first = tools["billing_consult"](state)
+    assert first["ok"] is True
+    assert len(consultation.keys) == 1
     assert len(consultation.keys[0]) <= 128
+
+    # A second identical invocation within the same turn hits the agent-layer
+    # duplicate-invocation guard. The billing wrapper returns a structured error
+    # dict (it does not raise) when a CapabilityPolicy denial occurs, so the
+    # consultation adapter is not re-executed.
+    second = tools["billing_consult"](state)
+    assert second["ok"] is False
+    assert second["error_code"] == "DUPLICATE_INVOCATION"
+    assert len(consultation.keys) == 1
+    assert state.capability_invocation.calls_made == 1
 
 
 # ============================== 巡检与安防工具 ==============================
@@ -461,6 +479,7 @@ def inspection_env():
         community_id=community,
         roles=frozenset({InspectionRole.MANAGER}),
         request_id="req_agent_tools",
+        execution_source=ExecutionSource.HUMAN,
     )
     tools = build_inspection_tools(task_service, event_service, lambda _s: context)
     return harness, tools, community, manager

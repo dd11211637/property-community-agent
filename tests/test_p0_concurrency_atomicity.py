@@ -47,6 +47,7 @@ from property_agent.agent.infrastructure.run_lease import (
     assert_run_fence,
 )
 from property_agent.agent.state import GraphState
+from property_agent.agent.working_state import RepairWorkingState
 from property_agent.platform.application.approval_service import (
     ApprovalError,
     ApprovalService,
@@ -102,6 +103,7 @@ def _make_state(conversation_id: str = "conv-1") -> GraphState:
         actor_id=uuid4(),
         community_id=uuid4(),
         intent="REPAIR",
+        domain=RepairWorkingState(description="x"),
         slots={"house_id": str(uuid4()), "description": "x"},
         messages=[],
     )
@@ -114,9 +116,9 @@ def test_checkpoint_cas_rejects_stale_expected_version(checkpointer, session_fac
     """Stale worker 拿到的 expected_version 已过期，CAS 应当冲突。"""
     state = _make_state()
     checkpointer.save("conv-1", state)
-    state.slots["description"] = "y"
+    state.domain.description = "y"
     checkpointer.save("conv-1", state)
-    state.slots["description"] = "z"
+    state.domain.description = "z"
     with pytest.raises(CheckpointVersionConflict) as exc:
         checkpointer.save("conv-1", state, expected_version=1)
     assert exc.value.thread_id == "conv-1"
@@ -126,9 +128,9 @@ def test_checkpoint_cas_rejects_stale_expected_version(checkpointer, session_fac
 def test_checkpoint_cas_accepts_correct_expected_version(checkpointer, session_factory):
     state = _make_state()
     checkpointer.save("conv-1", state)
-    state.slots["description"] = "y"
+    state.domain.description = "y"
     checkpointer.save("conv-1", state)  # version=2
-    state.slots["description"] = "z"
+    state.domain.description = "z"
     checkpointer.save("conv-1", state, expected_version=2)  # OK
     with session_factory() as session:
         record = session.execute(

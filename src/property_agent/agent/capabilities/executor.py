@@ -56,6 +56,7 @@ class CapabilityExecutor:
             spec = self._registry.get(name)
         except UnknownCapabilityError as exc:
             return self._failure(name, "UNKNOWN_CAPABILITY", str(exc), "registry")
+        name = spec.name
         try:
             request = spec.input_type.model_validate(payload)
         except ValidationError as exc:

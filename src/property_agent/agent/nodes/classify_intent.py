@@ -6,6 +6,7 @@
 
 from property_agent.agent.model_gateway import ModelGateway
 from property_agent.agent.policies import Intent
+from property_agent.agent.working_state import synchronize_typed_domain
 
 LOW_CONFIDENCE = 0.5
 
@@ -57,6 +58,7 @@ def classify_intent_node(gateway: ModelGateway):
     def node(state):
         previous_intent = state.intent if state._continuation else None
         if state.intent and state.intent != Intent.UNCERTAIN.value and not state._continuation:
+            synchronize_typed_domain(state)
             return state  # 已由结构化输入或上游设定
         if not gateway.ready():
             state.intent = Intent.UNCERTAIN.value
@@ -65,6 +67,7 @@ def classify_intent_node(gateway: ModelGateway):
                 "assistant",
                 "智能识别暂不可用，请说明要办理的业务：报修 / 公告 / 账单 / 巡检。",
             )
+            synchronize_typed_domain(state)
             return state
         analyze_with_context = getattr(gateway, "analyze_with_context", None)
         result = (
@@ -100,6 +103,7 @@ def classify_intent_node(gateway: ModelGateway):
                 "assistant",
                 "不太确定您的需求，请选择：报修 / 公告 / 账单 / 巡检 / 帮助。",
             )
+        synchronize_typed_domain(state)
         return state
 
     return node

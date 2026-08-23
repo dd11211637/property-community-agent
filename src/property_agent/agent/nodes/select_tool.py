@@ -8,6 +8,7 @@
 from collections.abc import Callable
 
 from property_agent.agent.state import GraphState
+from property_agent.agent.working_state import synchronize_typed_domain
 
 ToolSelector = Callable[[GraphState], str]
 
@@ -15,6 +16,7 @@ ToolSelector = Callable[[GraphState], str]
 def select_tool_node(selector: ToolSelector):
     def node(state: GraphState) -> GraphState:
         state.slots["tool"] = selector(state)
+        synchronize_typed_domain(state)
         return state
 
     return node
