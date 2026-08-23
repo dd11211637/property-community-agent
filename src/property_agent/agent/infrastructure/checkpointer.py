@@ -13,9 +13,11 @@
 """
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import insert, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from property_agent.agent.infrastructure.models import AgentCheckpointModel
@@ -38,6 +40,48 @@ class CheckpointVersionConflict(Exception):
         super().__init__(f"checkpoint version conflict for thread {thread_id}: expected {expected}")
 
 
+@dataclass(frozen=True)
+class LangGraphCheckpointCursor:
+    """v2 接受头指针：仅存 LangGraph 内部 checkpoint 的定位符，绝不作为业务/信任权威。
+
+    只保存精确支持的定位符（通常是 thread_id / checkpoint_ns / checkpoint_id）。
+    不持久化 actor / roles / community / house / lease / fence / approval /
+    confirmation token / runtime policy。
+    """
+
+    thread_id: str
+    checkpoint_ns: str | None = None
+    checkpoint_id: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "thread_id": self.thread_id,
+            "checkpoint_ns": self.checkpoint_ns,
+            "checkpoint_id": self.checkpoint_id,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "LangGraphCheckpointCursor | None":
+        if not data:
+            return None
+        return cls(
+            thread_id=str(data.get("thread_id", "")),
+            checkpoint_ns=data.get("checkpoint_ns"),
+            checkpoint_id=data.get("checkpoint_id"),
+        )
+
+
+@dataclass(frozen=True)
+class AcceptedCheckpoint:
+    """应用接受头记录：恢复时读取的权威连续性来源。"""
+
+    state: GraphState
+    version: int
+    runtime_cursor: LangGraphCheckpointCursor | None
+    interrupt_node: str | None
+    pending_confirm: bool
+
+
 def _snapshot(state: GraphState) -> dict[str, Any]:
     """把 GraphState 转成 JSON 安全的快照。"""
     return canonical_payload(state.to_dict())
@@ -57,16 +101,24 @@ class SqlAlchemyCheckpointer:
         state: GraphState,
         *,
         expected_version: int | None = None,
+        runtime_cursor: dict[str, Any] | None = None,
     ) -> None:
         """持久化快照。
 
-        ``expected_version`` 传入时走 CAS：``UPDATE … WHERE version=:expected
-        RETURNING version``，0 行则抛 ``CheckpointVersionConflict``。这个值必须由
-        调用方在 **turn 开始** 时读取并传入——绝不能在 save 内部现读，否则 stale
-        worker 会读到最新版本导致 CAS 失效。
+        ``expected_version`` 传入时走 CAS：
+        * ``expected_version == 0``（无 checkpoint 的首发）——原子 ``INSERT … ON CONFLICT
+          (thread_id) DO NOTHING RETURNING version``；两个竞争的首发者只有一方插入成功，
+          另一方返回 0 行 → ``CheckpointVersionConflict``（关闭 FIRST_CHECKPOINT_CAS_GAP）。
+        * ``expected_version > 0``——``UPDATE … WHERE version=:expected RETURNING version``，
+          0 行则抛 ``CheckpointVersionConflict``。该值必须由调用方在 **turn 开始** 时读取
+          并传入——绝不能在 save 内部现读，否则 stale worker 会读到最新版本导致 CAS 失效。
 
-        ``expected_version`` 为 ``None``（新线程 / 旧调用方 / 测试直接调用）时回退到
-        SELECT→+1→COMMIT；此时由 run lease 保证单写者，不会出现并发竞争。
+        ``runtime_cursor`` 仅在 v2 路径提供，是应用接受头指向 LangGraph 内部 checkpoint
+        的精确定位符；v1 路径为 ``None``。
+
+        ``expected_version`` 为 ``None``（旧调用方 / 测试直接调用）时回退到
+        SELECT→+1→COMMIT；此时由 run lease 保证单写者，不会出现并发竞争。生产共享
+        lifecycle 不得传 ``None``。
         """
         payload = _snapshot(state)
         pending = bool(state.pending_action) and state._interrupt_node is not None
@@ -74,10 +126,18 @@ class SqlAlchemyCheckpointer:
         try:
             if expected_version is not None:
                 self._save_cas(
-                    session, thread_id, payload, pending, state._interrupt_node, expected_version
+                    session,
+                    thread_id,
+                    payload,
+                    pending,
+                    state._interrupt_node,
+                    expected_version,
+                    runtime_cursor,
                 )
             else:
-                self._save_legacy(session, thread_id, payload, pending, state._interrupt_node)
+                self._save_legacy(
+                    session, thread_id, payload, pending, state._interrupt_node, runtime_cursor
+                )
             session.commit()
         finally:
             session.close()
@@ -90,7 +150,29 @@ class SqlAlchemyCheckpointer:
         pending: bool,
         interrupt_node: str | None,
         expected: int,
+        runtime_cursor: dict[str, Any] | None,
     ) -> None:
+        if expected == 0:
+            # 首发：原子 INSERT version=1。两个竞争的首发者只有一个能插入成功；
+            # 另一个触发 thread_id 唯一约束冲突 → IntegrityError → CheckpointVersionConflict
+            # （关闭 FIRST_CHECKPOINT_CAS_GAP）。该语义等价于
+            # ``INSERT … ON CONFLICT (thread_id) DO NOTHING RETURNING version`` 的跨方言写法。
+            try:
+                session.execute(
+                    insert(AgentCheckpointModel).values(
+                        thread_id=thread_id,
+                        version=1,
+                        state=payload,
+                        interrupt_node=interrupt_node,
+                        pending_confirm=pending,
+                        runtime_cursor=runtime_cursor,
+                    )
+                )
+                session.flush()
+            except IntegrityError:
+                session.rollback()
+                raise CheckpointVersionConflict(thread_id, expected) from None
+            return
         stmt = (
             update(AgentCheckpointModel)
             .where(
@@ -102,6 +184,7 @@ class SqlAlchemyCheckpointer:
                 state=payload,
                 interrupt_node=interrupt_node,
                 pending_confirm=pending,
+                runtime_cursor=runtime_cursor,
             )
             .returning(AgentCheckpointModel.version)
         )
@@ -116,6 +199,7 @@ class SqlAlchemyCheckpointer:
         payload: dict[str, Any],
         pending: bool,
         interrupt_node: str | None,
+        runtime_cursor: dict[str, Any] | None,
     ) -> None:
         record = session.execute(
             select(AgentCheckpointModel).where(AgentCheckpointModel.thread_id == thread_id)
@@ -128,6 +212,7 @@ class SqlAlchemyCheckpointer:
                     state=payload,
                     interrupt_node=interrupt_node,
                     pending_confirm=pending,
+                    runtime_cursor=runtime_cursor,
                 )
             )
         else:
@@ -135,6 +220,7 @@ class SqlAlchemyCheckpointer:
             record.state = payload
             record.interrupt_node = interrupt_node
             record.pending_confirm = pending
+            record.runtime_cursor = runtime_cursor
 
     def load(self, thread_id: str) -> GraphState | None:
         session = self._session_factory()
@@ -175,13 +261,61 @@ class SqlAlchemyCheckpointer:
         finally:
             session.close()
 
-    def version_of(self, thread_id: str) -> int | None:
+    def version_of(self, thread_id: str) -> int:
+        """返回当前接受头版本；无 checkpoint 时返回 0（accepted version 0）。
+
+        生产 lifecycle 始终读取 0 / 1 / 2 / …：无 checkpoint 即 accepted version 0，
+        首次发布以 ``expected_version=0`` 走原子 INSERT CAS（见 ``save``）。
+        """
         session = self._session_factory()
         try:
-            return session.execute(
+            version = session.execute(
                 select(AgentCheckpointModel.version).where(
                     AgentCheckpointModel.thread_id == thread_id
                 )
+            ).scalar()
+            return version if version is not None else 0
+        finally:
+            session.close()
+
+    def load_accepted(self, thread_id: str) -> AcceptedCheckpoint | None:
+        """读取应用接受头记录（权威连续性来源）。无记录返回 ``None``。"""
+        record = self._load_record(thread_id)
+        if record is None:
+            return None
+        return AcceptedCheckpoint(
+            state=GraphState.from_dict(dict(record.state)),
+            version=record.version,
+            runtime_cursor=LangGraphCheckpointCursor.from_dict(record.runtime_cursor),
+            interrupt_node=record.interrupt_node,
+            pending_confirm=bool(record.pending_confirm),
+        )
+
+    def publish_accepted(
+        self,
+        thread_id: str,
+        state: GraphState,
+        *,
+        expected_version: int,
+        runtime_cursor: dict[str, Any] | None = None,
+    ) -> None:
+        """原子发布应用接受头：state + runtime_cursor + pending_confirm + interrupt 元数据
+        + version 一起随 CAS 提交。``expected_version`` 必须来自 turn 开始时的读取，且
+        不得为 ``None``（生产共享 lifecycle 强制）。
+        """
+        if expected_version is None:
+            raise ValueError(
+                "publish_accepted requires a concrete expected_version (0 for first publish)"
+            )
+        self.save(
+            thread_id, state, expected_version=expected_version, runtime_cursor=runtime_cursor
+        )
+
+    def _load_record(self, thread_id: str) -> Any | None:
+        session = self._session_factory()
+        try:
+            return session.execute(
+                select(AgentCheckpointModel).where(AgentCheckpointModel.thread_id == thread_id)
             ).scalar_one_or_none()
         finally:
             session.close()

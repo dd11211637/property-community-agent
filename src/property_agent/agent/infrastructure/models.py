@@ -125,6 +125,15 @@ class AgentCheckpointModel(Base):
     pending_confirm: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, comment="是否存在待确认的写操作"
     )
+    runtime_cursor: Mapped[dict | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"),
+        nullable=True,
+        comment=(
+            "v2 接受头指针：仅存 LangGraph 内部 checkpoint 的定位符"
+            "（thread_id / checkpoint_ns / checkpoint_id）。v1 为 NULL。"
+            "这是编排相关性数据，绝不作为业务/信任权威。"
+        ),
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=func.now(), comment="创建时间"
     )
