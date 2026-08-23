@@ -505,11 +505,17 @@ Legal resolution order (all v2 executions):
 
 ```text
 Conversation / runtime pin
-  -> recovery gates (§20)
-  -> accepted app checkpoint            (authoritative source of continuity)
-  -> accepted LangGraph checkpoint pointer (exact cursor, not "latest")
+  -> common v2 continuity gates (§20A)        # next message, stream_start, resume, restart
+  -> accepted app checkpoint                  (authoritative source of continuity)
+  -> accepted LangGraph checkpoint pointer    (exact cursor, not "latest")
   -> exact LangGraph execution / resume
 ```
+
+A `Command(resume=…)` additionally applies the **confirmation-resume gates (§20B)** on top of
+the common gates (pending action exists, confirmation not expired, action/parameter hash
+matches, proposal binding, server confirmation preparation, trusted prepared-write material).
+A normal `ACTIVE` v2 conversation with **no pending action** MUST still pass the common gates
+and accept a next message / `stream_start`; it MUST NOT be required to own a pending action.
 
 Resume MUST NOT be `conversation_id → "find latest internal LangGraph checkpoint" → resume`,
 because orphan/stale checkpoints MUST NOT poison the canonical resume.
@@ -541,9 +547,14 @@ because orphan/stale checkpoints MUST NOT poison the canonical resume.
 
 ## 20. Recovery and resume ordering
 
-Current recovery safety MUST NOT be deleted.
+Current recovery safety MUST NOT be deleted. The re-validation gates are split into two
+tiers: **common v2 continuity gates** apply to every v2 execution, while **confirmation-resume
+gates** apply only to `Command(resume=…)`.
 
-Before v2 `Command(resume=…)`, implementation MUST re-validate at least:
+### 20A. Common v2 continuity gates
+
+These apply to **all** v2 executions — a next normal message, `stream_start`, a confirmation
+resume, and a restart recovery. Before any of these, implementation MUST re-validate at least:
 
 - conversation ownership;
 - conversation lifecycle;
@@ -551,15 +562,33 @@ Before v2 `Command(resume=…)`, implementation MUST re-validate at least:
 - actor;
 - community;
 - house binding;
-- pending action exists;
-- confirmation expiry;
-- action/parameter hash binding;
 - fresh `RuntimeContext`;
 - fresh AGENT execution_source;
-- lease/fence ownership.
+- fresh lease / fence ownership (new run, server-issued);
+- application accepted-head resolution (§18); and
+- exact accepted internal cursor **or** accepted-`AgentState`-seeded isolated execution.
+
+A normal `ACTIVE` v2 conversation with **no pending action** still satisfies the common gates
+and MUST be allowed to accept a next normal message and `stream_start`. The common gates do
+not require a pending action.
+
+### 20B. Confirmation-resume gates
+
+These apply **only** to `Command(resume=…)` (the `WAITING_CONFIRM` transition), in addition to
+the common gates (§20A). Before resuming, implementation MUST re-validate at least:
+
+- a pending action exists;
+- confirmation is not expired (the `issued_at` TTL check);
+- the action / parameter hash matches the accepted proposal;
+- the proposal binding is intact;
+- server confirmation preparation has produced trusted prepared-write material (§15); and
+- the trusted `PreparedWrite` (`confirmation_token` / `idempotency_key` / `approval_ref`) is
+  re-bound at resume runtime.
+
+A confirmation resume that reaches this stage **without** a pending action MUST fail closed.
 
 Authoritative approval is still validated/consumed by AppService/UoW inside the mutation
-transaction. **Resume is not authorization.**
+transaction for the confirm path. **Resume is not authorization.**
 
 ## 21. Repair pilot specialist and v2 cross-domain continuity
 
@@ -581,9 +610,22 @@ The PR4 pilot specialist MUST be:
 - invoking all business actions **only through the Capability Layer**
   (`CapabilityRegistry` → `CapabilityPolicy` → `CapabilityExecutor` → typed adapter →
   Application Service → UoW);
-- receiving a **minimum typed projection** of `AgentState` + `RuntimeContext` (read-only
-  inputs; it MUST NOT treat the projection as trusted authority); and
+- receiving a **minimum typed projection** of `AgentState` (mutable orchestration state) +
+  `RuntimeContext` (server-trusted execution facts) as read-only inputs; and
 - performing **no cross-domain planning / replanning**.
+
+Clarification on authority vs. trust — a specialist being **authority-free** is **not** the
+same as `RuntimeContext` being untrusted:
+
+- `AgentState` remains mutable orchestration state;
+- `RuntimeContext` remains server-trusted execution facts (rebound per turn/resume, §12/§13);
+- the specialist **MAY consume** the trusted `RuntimeContext` facts it is given;
+- the specialist **MUST NOT mutate** `RuntimeContext`;
+- the specialist **MUST NOT reconstruct** trusted facts (actor, roles, community, house scope,
+  lease/fence, run identity, approval authority) from `AgentState` or model input;
+- the specialist **MUST NOT persist** checkpoint data as a replacement authority;
+- the specialist **MUST NOT become** an RBAC / approval / business authority;
+- authoritative business decisions remain with the Application Service / UoW.
 
 It MUST NOT pre-build the full Supervisor / Repair / Billing / Announcement / Inspection
 specialists (those are PR5).
@@ -798,7 +840,20 @@ PR4 implementation MUST provide at least:
 - pilot specialist has no DB / session / repository ownership;
 - pilot specialist has no durable / RBAC / business / approval authority;
 - pilot specialist executes business actions only through the Capability Layer;
-- pilot specialist receives a minimum typed `AgentState` + `RuntimeContext` projection only.
+- pilot specialist receives a minimum typed `AgentState` + `RuntimeContext` projection only;
+- pilot specialist MAY consume trusted `RuntimeContext` facts but MUST NOT mutate it;
+- pilot specialist MUST NOT reconstruct trusted facts from `AgentState` / model input;
+- pilot specialist MUST NOT become an RBAC / approval / business authority.
+
+**COMMON CONTINUITY GATES (§20A)**
+
+- an `ACTIVE` v2 conversation with **no pending action** passes the common gates and accepts a
+  next normal message;
+- an `ACTIVE` v2 conversation with **no pending action** passes the common gates and a
+  `stream_start` works;
+- a confirmation resume (`Command(resume=…)`) that reaches §20B **without** a pending action
+  fails closed;
+- the common gates do **not** require a pending action for a normal message / `stream_start`.
 
 **V2 CROSS-DOMAIN CONTINUITY**
 
