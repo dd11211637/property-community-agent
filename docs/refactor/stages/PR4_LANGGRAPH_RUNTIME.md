@@ -109,8 +109,9 @@ All facts below were read from that tree, not inferred from the task narrative.
     is registered as historical debt (per ADR-0007 P1 note). PR4 MUST NOT expand it.
 15. **PR4 minimum modification surface** — add: `langgraph` +
     `langgraph-checkpoint-postgres` dependencies (implementation phase, not this doc),
-    a `GraphRuntime` protocol + runtime facade, a v2 graph engine module
-    (`agent/langgraph_runtime/` or `agent/runtime/`), a server-only `RuntimeSelectionPolicy`
+    an `AgentRuntimeFacade` / `AgentSessionFacade` + shared `TurnLifecycle` /
+    `LifecycleCoordinator` + a `GraphEngine` / `GraphRuntimeEngine` split (a v2
+    `LangGraphEngine`), a server-only `RuntimeSelectionPolicy`
     + rollout flag, an accepted-LangGraph-checkpoint pointer, and the Repair vertical slice.
     Everything else (business code, Application Service, Capability Layer, public API shape,
     P0 substrate) is out of scope for PR4 production change.
@@ -191,7 +192,7 @@ the Capability Layer, not Application Services, and not the public API contract.
 | `MemoryCheckpointer` | `agent/graph_core.py` | unit-test/demo only | unchanged |
 | `confirm_action_node` | `agent/nodes/confirm_action.py` | build pending + `interrupt` | v1 only; v2 needs replay-safe phases (§14) |
 | subgraph topology | `agent/subgraphs/base.py` | `select_tool → collect_slots → confirm → (execute\|handover\|finish) → explain` | v1 only; v2 uses a LangGraph graph with equivalent gating |
-| `AgentSessionRunner` | `agent/application/runner.py` | canonical turn lifecycle + P0 ownership | becomes the generic lifecycle coordinator behind `GraphRuntime` (§11) |
+| `AgentSessionRunner` | `agent/application/runner.py` | canonical turn lifecycle + P0 ownership | becomes the generic lifecycle coordinator (`TurnLifecycle` / `LifecycleCoordinator`) behind the `AgentRuntimeFacade` (§10 / §11) |
 | `AgentRecoveryService` | `agent/application/recovery.py` | 4-gate resume safety | reused by both runtimes (§20) |
 
 ## 6. Official LangGraph semantic differences
