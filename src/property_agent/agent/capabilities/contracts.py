@@ -97,6 +97,13 @@ class CapabilityRuntimeContext:
     trusted_runtime: Any = field(default=None, repr=False)
     inspection_context_projector: Any = field(default=None, repr=False)
 
+    def __post_init__(self) -> None:
+        if (
+            self.trusted_runtime is not None
+            and self.request_context is not self.trusted_runtime.request_context
+        ):
+            raise ValueError("capability runtime must retain the canonical request context")
+
     @property
     def actor_id(self) -> Any:
         return getattr(self.request_context, "actor_id", None)

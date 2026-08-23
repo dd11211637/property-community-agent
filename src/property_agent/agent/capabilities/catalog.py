@@ -205,14 +205,6 @@ def _inspection_write_specs() -> tuple[CapabilitySpec, ...]:
             "确认创建这项巡检任务吗？",
         ),
         _spec(
-            "inspection_create_task",
-            "inspection",
-            InspectionCreateInput,
-            InspectionDataOutput,
-            "创建巡检任务",
-            "确认创建这项巡检任务吗？",
-        ),
-        _spec(
             "inspection_start_task",
             "inspection",
             InspectionTaskActionInput,
@@ -222,14 +214,6 @@ def _inspection_write_specs() -> tuple[CapabilitySpec, ...]:
         ),
         _spec(
             "inspection_add_record",
-            "inspection",
-            InspectionRecordInput,
-            InspectionDataOutput,
-            "追加巡检记录",
-            "确认追加这条巡检记录吗？",
-        ),
-        _spec(
-            "inspection_submit_record",
             "inspection",
             InspectionRecordInput,
             InspectionDataOutput,
@@ -329,4 +313,10 @@ def _spec(
 
 
 def default_capability_registry() -> CapabilityRegistry:
-    return CapabilityRegistry(capability_specs())
+    return CapabilityRegistry(
+        capability_specs(),
+        aliases={
+            "inspection_create_task": "inspection_create",
+            "inspection_submit_record": "inspection_add_record",
+        },
+    )

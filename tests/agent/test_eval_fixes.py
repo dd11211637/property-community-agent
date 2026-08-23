@@ -10,6 +10,7 @@
 import pytest
 
 from property_agent.agent.application.runner import _first_turn_inspection_signal
+from property_agent.agent.selector_context import activate_selector_context
 from property_agent.agent.state import GraphState
 from property_agent.agent.subgraphs.announcement import select_announcement_tool
 from property_agent.agent.subgraphs.inspection import select_inspection_tool
@@ -49,6 +50,7 @@ class TestInspectionSelectorFallback:
 
 class TestAnnouncementRoleGuard:
     def test_resident_write_is_denied_before_tool_selection(self):
+        activate_selector_context(type("Trusted", (), {"roles": {"RESIDENT"}})())
         state = _state(action="publish", roles=["RESIDENT"], title="停水通知", body="明天停水")
         tool = select_announcement_tool(state)
         assert tool == "announcement_list"
@@ -56,18 +58,21 @@ class TestAnnouncementRoleGuard:
         assert state.slots["action"] == "list"
 
     def test_manager_create_still_routes_to_draft(self):
+        activate_selector_context(type("Trusted", (), {"roles": {"MANAGER"}})())
         state = _state(
             action="create", roles=["MANAGER"], title="停水通知", body="明天停水", audience="全社区"
         )
         assert select_announcement_tool(state) == "announcement_create_draft"
 
     def test_publish_with_fresh_content_degrades_to_create(self):
+        activate_selector_context(type("Trusted", (), {"roles": {"MANAGER"}})())
         state = _state(action="publish", roles=["MANAGER"], title="停水通知", body="明天停水")
         assert select_announcement_tool(state) == "announcement_create_draft"
 
-    def test_no_roles_preserves_legacy_behavior(self):
+    def test_missing_trusted_roles_fails_closed(self):
+        activate_selector_context(type("Trusted", (), {"roles": set()})())
         state = _state(action="publish")
-        assert select_announcement_tool(state) == "announcement_get"
+        assert select_announcement_tool(state) == "announcement_list"
 
 
 class TestBillingFeeTypeNormalization:

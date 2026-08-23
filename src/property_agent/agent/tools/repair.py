@@ -5,6 +5,7 @@
   转人工工单，工具把它翻译成接管指令而不是伪装成成功。
 """
 
+from dataclasses import replace
 from functools import partial
 from typing import Any
 
@@ -16,7 +17,6 @@ from property_agent.agent.capabilities.adapters.repair import (
 )
 from property_agent.agent.capabilities.catalog import default_capability_registry
 from property_agent.agent.capabilities.contracts import (
-    CapabilityInvocationState,
     CapabilityResult,
     CapabilityRuntimeContext,
     CapabilityWriteContext,
@@ -37,6 +37,7 @@ from property_agent.agent.tools.base import (
     require_confirmation,
     require_slot,
 )
+from property_agent.agent.tools.capability_bridge import LegacyCapabilityError
 from property_agent.repair.domain.classification import classify_repair_category
 from property_agent.repair.domain.enums import RepairCategory
 
@@ -69,7 +70,14 @@ def _invoke_capability(
         current_house_id=state.current_house_id,
         execution_policy=ExecutionPolicy(allowlist=frozenset({name})),
     )
-    return executor.execute(
+    invocation = replace(
+        state.capability_invocation,
+        prior_fingerprints=frozenset(),
+        fingerprint=None,
+        selected_capability=name,
+        human_confirmed=confirmed,
+    )
+    result = executor.execute(
         name,
         payload,
         CapabilityRuntimeContext(
@@ -79,8 +87,18 @@ def _invoke_capability(
             write=write,
             trusted_runtime=trusted_runtime,
         ),
-        CapabilityInvocationState(human_confirmed=confirmed),
+        invocation,
     )
+    if result.fingerprint is not None:
+        state.capability_invocation = replace(
+            invocation,
+            step=invocation.step + 1,
+            calls_made=invocation.calls_made + 1,
+            prior_fingerprints=state.capability_invocation.prior_fingerprints
+            | {result.fingerprint},
+            fingerprint=result.fingerprint,
+        )
+    return result
 
 
 def build_repair_tools(
@@ -177,9 +195,11 @@ def build_repair_tools(
 
 def _output_or_raise(result) -> dict[str, Any]:
     if result.error is not None:
-        if result.error.cause is not None:
-            raise result.error.cause
-        raise ToolPreconditionError(f"{result.error.code}: {result.error.message}")
+        raise LegacyCapabilityError(
+            result.error.code,
+            result.error.message,
+            dict(result.error.details),
+        )
     assert result.output is not None
     return result.output.model_dump(mode="json")
 

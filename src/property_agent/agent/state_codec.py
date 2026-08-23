@@ -18,6 +18,9 @@ from property_agent.agent.working_state import (
     domain_from_dict,
     domain_from_legacy,
     domain_to_dict,
+    intent_for_domain,
+    project_domain_to_legacy_slots,
+    validate_domain_intent,
 )
 
 
@@ -30,8 +33,9 @@ class CheckpointStateCodec:
 
     def encode(self, state: AgentState) -> dict[str, Any]:
         domain = state.domain
-        if state.intent is not None or state.slots:
-            domain = domain_from_legacy(state.intent, state.slots)
+        validate_domain_intent(state.intent, domain)
+        intent = intent_for_domain(domain) or state.intent
+        legacy_slots = project_domain_to_legacy_slots(domain, state.slots)
         clarification = ClarificationState(
             missing_inputs=list(state.missing_slots),
             requested_input=state.requested_slot,
@@ -49,8 +53,8 @@ class CheckpointStateCodec:
         )
         invocation = replace(
             state.capability_invocation,
-            selected_capability=str(state.slots.get("tool"))
-            if state.slots.get("tool")
+            selected_capability=str(legacy_slots.get("tool"))
+            if legacy_slots.get("tool")
             else state.capability_invocation.selected_capability,
             retry_count=state.retry_count,
         )
@@ -65,9 +69,9 @@ class CheckpointStateCodec:
             "actor_id": self._uuid(state.actor_id),
             "community_id": self._uuid(state.community_id),
             "current_house_id": self._uuid(state.current_house_id),
-            "intent": state.intent,
+            "intent": intent,
             "confidence": state.confidence,
-            "slots": deepcopy(state.slots),
+            "slots": deepcopy(legacy_slots),
             "missing_slots": list(state.missing_slots),
             "requested_slot": state.requested_slot,
             "operation_level": state.operation_level,
@@ -102,9 +106,11 @@ class CheckpointStateCodec:
         orchestration = OrchestrationState(**dict(payload.get("orchestration") or {}))
         proposed_raw = payload.get("proposed_action")
         proposed = ProposedAction(**proposed_raw) if proposed_raw else None
+        domain = domain_from_dict(dict(payload.get("domain") or {"kind": "empty"}))
+        validate_domain_intent(payload.get("intent"), domain)
         return self._base_state(
             payload,
-            domain=domain_from_dict(dict(payload.get("domain") or {"kind": "empty"})),
+            domain=domain,
             invocation=invocation,
             clarification=clarification,
             orchestration=orchestration,
@@ -163,7 +169,10 @@ class CheckpointStateCodec:
             current_house_id=self._decode_uuid(payload.get("current_house_id")),
             intent=payload.get("intent"),
             confidence=float(payload.get("confidence", 0.0)),
-            slots=dict(payload.get("slots") or {}),
+            slots=project_domain_to_legacy_slots(
+                domain,
+                dict(payload.get("slots") or {}),
+            ),
             missing_slots=list(payload.get("missing_slots") or []),
             requested_slot=payload.get("requested_slot"),
             operation_level=payload.get("operation_level"),

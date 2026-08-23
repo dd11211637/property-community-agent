@@ -60,3 +60,14 @@ class AuthError(PlatformError):
     """Authentication or authorization failure."""
 
     pass
+
+
+class TrustedExecutionOriginError(PlatformError):
+    """A business write arrived without an explicit trusted execution origin."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            code="TRUSTED_EXECUTION_SOURCE_REQUIRED",
+            message="A trusted execution source is required for this operation.",
+            status_code=403,
+        )

@@ -18,6 +18,11 @@ from property_agent.agent.capabilities.catalog import default_capability_registr
 from property_agent.agent.capabilities.contracts import CapabilityWriteContext
 from property_agent.agent.capabilities.executor import CapabilityExecutor
 from property_agent.agent.capabilities.policy import default_capability_policy
+from property_agent.agent.inspection_compatibility import (
+    apply_event_risk_floor,
+    inspection_action,
+    project_inspection_context,
+)
 from property_agent.agent.policies import OperationLevel
 from property_agent.agent.state import GraphState
 from property_agent.agent.tools.base import (
@@ -32,11 +37,11 @@ from property_agent.agent.tools.base import (
 )
 from property_agent.agent.tools.capability_bridge import invoke_capability
 from property_agent.agent.tools.inspection_presenters import _event_brief, _task_brief
+from property_agent.agent.working_state import synchronize_typed_domain
 from property_agent.inspection.application.commands import (
     InspectionTaskSearch,
     SecurityEventSearch,
 )
-from property_agent.inspection.domain.classification import classify_security_event
 from property_agent.inspection.domain.enums import (
     EventRiskLevel,
     EventType,
@@ -50,24 +55,6 @@ def _as_datetime(value: Any) -> datetime | None:
     return datetime.fromisoformat(str(value))
 
 
-def _apply_event_risk_floor(slots: dict[str, Any]) -> None:
-    """Apply a deterministic minimum risk level; model/user input may only raise it."""
-    description = str(slots.get("description") or "")
-    event_type, minimum_risk = classify_security_event(description)
-    slots["event_type"] = event_type.value
-    requested = str(slots.get("risk_level") or "").upper()
-    if minimum_risk == EventRiskLevel.HIGH_RISK:
-        slots["risk_level"] = "HIGH_RISK"
-        slots["safety_notice"] = (
-            "请优先远离危险区域，不要触碰可疑设备或明火；如存在即时人身危险，"
-            "请立即联系当地紧急救援。确认上报后系统会同步通知值班人员。"
-        )
-    elif requested == "HIGH_RISK":
-        slots["risk_level"] = "HIGH_RISK"
-    else:
-        slots["risk_level"] = minimum_risk.value
-
-
 class InspectionToolSet:
     """Bound inspection and security-event tools with stable public tool names."""
 
@@ -77,10 +64,12 @@ class InspectionToolSet:
         event_service: Any,
         context_provider: ContextProvider,
         capability_executor: CapabilityExecutor | None = None,
+        inspection_context_projector: Any = None,
     ) -> None:
         self._task_service = task_service
         self._event_service = event_service
         self._context_provider = context_provider
+        self._inspection_context_projector = inspection_context_projector
         adapters = {
             name: InspectionAdapter(task_service, event_service, name)
             for name in (
@@ -88,10 +77,8 @@ class InspectionToolSet:
                 "inspection_get_task",
                 "inspection_get_event",
                 "inspection_create",
-                "inspection_create_task",
                 "inspection_start_task",
                 "inspection_add_record",
-                "inspection_submit_record",
                 "inspection_submit_records",
                 "inspection_ai_suggest",
                 "security_event_create",
@@ -111,14 +98,16 @@ class InspectionToolSet:
             payload,
             confirmed=confirmed,
             write=write,
+            inspection_context_projector=self._inspection_context_projector,
         )
 
     def prepare_inspection(self, state: GraphState) -> GraphState:
-        """Resolve user-facing task/event references from authorized business data."""
-        action = str(state.slots.get("action") or "").lower()
-        context = self._context_provider(state)
+        action = inspection_action(state)
+        context = project_inspection_context(
+            self._context_provider, self._inspection_context_projector, state
+        )
         if action in {"report_event", "create_event", "event_create"}:
-            _apply_event_risk_floor(state.slots)
+            apply_event_risk_floor(state.slots)
         task_statuses = {
             "start": ("ASSIGNED",),
             "start_task": ("ASSIGNED",),
@@ -137,6 +126,7 @@ class InspectionToolSet:
                 state.slots["expected_version"] = task.version
                 state.slots["selected_task"] = _task_brief(task)
                 state.slots.pop("_selection_options", None)
+                synchronize_typed_domain(state)
                 return state
             tasks = self._task_service.search_tasks(
                 InspectionTaskSearch(statuses=task_statuses[action], assigned_to_me=True, limit=20),
@@ -165,6 +155,7 @@ class InspectionToolSet:
                 state.slots["expected_version"] = event.version
                 state.slots["selected_event"] = _event_brief(event)
                 state.slots.pop("_selection_options", None)
+                synchronize_typed_domain(state)
                 return state
             events = self._event_service.search_events(
                 SecurityEventSearch(statuses=("ASSIGNED",), assigned_to_me=True, limit=20),
@@ -188,6 +179,7 @@ class InspectionToolSet:
                         for event in events
                     ],
                 }
+        synchronize_typed_domain(state)
         return state
 
     def inspection_list(self, state: GraphState) -> dict[str, Any]:
@@ -318,7 +310,7 @@ class InspectionToolSet:
     def security_event_create(self, state: GraphState) -> dict[str, Any]:
         assert_level("security_event_create", OperationLevel.WRITE_LOW_RISK)
         token = require_confirmation(state, "security_event_create")
-        _apply_event_risk_floor(state.slots)
+        apply_event_risk_floor(state.slots)
         event_type = EventType(str(state.slots["event_type"]))
         risk_level = EventRiskLevel(str(state.slots["risk_level"]))
         payload = {
@@ -375,16 +367,17 @@ class InspectionToolSet:
         return ok("security_event_submit_disposal", **data)
 
     def inspection_submit_record(self, state: GraphState) -> dict[str, Any]:
-        assert_level("inspection_submit_record", OperationLevel.WRITE_LOW_RISK)
-        token = require_confirmation(state, "inspection_submit_record")
-        task_id = UUID(str(require_slot(state, "task_id", "inspection_submit_record")))
+        tool = "inspection_add_record"
+        assert_level(tool, OperationLevel.WRITE_LOW_RISK)
+        token = require_confirmation(state, tool)
+        task_id = UUID(str(require_slot(state, "task_id", tool)))
         is_supplement = bool(state.slots.get("is_supplement"))
-        expected_version = int(require_slot(state, "expected_version", "inspection_submit_record"))
-        point = str(require_slot(state, "point", "inspection_submit_record"))
+        expected_version = int(require_slot(state, "expected_version", tool))
+        point = str(require_slot(state, "point", tool))
         note = str(state.slots.get("note") or "")
         key = idempotency_key(
             state,
-            "inspection_submit_record",
+            tool,
             {
                 "task_id": task_id,
                 "point": point,
@@ -395,7 +388,7 @@ class InspectionToolSet:
         )
         data = self._invoke(
             state,
-            "inspection_submit_record",
+            tool,
             {
                 "task_id": task_id,
                 "expected_version": expected_version,
@@ -413,7 +406,7 @@ class InspectionToolSet:
             confirmed=True,
             write=CapabilityWriteContext(token, key, state.approval_ref),
         )
-        return ok("inspection_submit_record", **data)
+        return ok(tool, **data)
 
     def inspection_ai_suggest(self, state: GraphState) -> dict[str, Any]:
         assert_level("inspection_ai_suggest", OperationLevel.WRITE_LOW_RISK)
@@ -464,8 +457,15 @@ def build_inspection_tools(
     event_service: Any,
     context_provider: ContextProvider,
     capability_executor: CapabilityExecutor | None = None,
+    inspection_context_projector: Any = None,
 ) -> dict[str, Tool]:
-    toolset = InspectionToolSet(task_service, event_service, context_provider, capability_executor)
+    toolset = InspectionToolSet(
+        task_service,
+        event_service,
+        context_provider,
+        capability_executor,
+        inspection_context_projector,
+    )
     return {
         "__prepare_inspection__": toolset.prepare_inspection,
         "inspection_list": toolset.inspection_list,

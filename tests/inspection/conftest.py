@@ -16,6 +16,7 @@ from property_agent.inspection.application.service import (
     SecurityEventService,
 )
 from property_agent.inspection.domain.enums import Role
+from property_agent.platform.context import ExecutionSource
 from tests.inspection_support import Harness
 
 
@@ -63,6 +64,7 @@ def resident_context(ids: Ids) -> RequestContext:
         roles=frozenset({Role.RESIDENT}),
         house_ids=frozenset({ids.house}),
         request_id="req_resident",
+        execution_source=ExecutionSource.HUMAN,
     )
 
 
@@ -73,6 +75,7 @@ def cs_context(ids: Ids) -> RequestContext:
         community_id=ids.community,
         roles=frozenset({Role.CUSTOMER_SERVICE}),
         request_id="req_cs",
+        execution_source=ExecutionSource.HUMAN,
     )
 
 
@@ -83,6 +86,7 @@ def security_context(ids: Ids) -> RequestContext:
         community_id=ids.community,
         roles=frozenset({Role.SECURITY_STAFF}),
         request_id="req_security",
+        execution_source=ExecutionSource.HUMAN,
     )
 
 
@@ -93,6 +97,7 @@ def manager_context(ids: Ids) -> RequestContext:
         community_id=ids.community,
         roles=frozenset({Role.MANAGER}),
         request_id="req_manager",
+        execution_source=ExecutionSource.HUMAN,
     )
 
 

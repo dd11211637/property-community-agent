@@ -22,15 +22,17 @@ CONTROLLED_READ_GUARD_MAPPING = {
 
 
 def migrated_tool_levels() -> dict[str, str]:
-    return {
-        spec.name: spec.baseline_risk.value for spec in default_capability_registry().inventory()
-    }
+    registry = default_capability_registry()
+    result = {spec.name: spec.baseline_risk.value for spec in registry.inventory()}
+    result.update({alias: result[target] for alias, target in registry.aliases().items()})
+    return result
 
 
 def migrated_tool_slots() -> dict[str, list[str]]:
     result: dict[str, list[str]] = {}
+    registry = default_capability_registry()
     internal_fields = {"confirmation_token", "approval_ref", "idempotency_key"}
-    for spec in default_capability_registry().inventory():
+    for spec in registry.inventory():
         result[spec.name] = [
             name
             for name, field in spec.input_type.model_fields.items()
@@ -38,14 +40,18 @@ def migrated_tool_slots() -> dict[str, list[str]]:
             and field.default_factory is None
             and name not in internal_fields
         ]
+    result.update({alias: list(result[target]) for alias, target in registry.aliases().items()})
     return result
 
 
 def migrated_presentation() -> dict[str, dict[str, str | None]]:
-    return {
+    registry = default_capability_registry()
+    result = {
         spec.name: {
             "title": spec.presentation.title,
             "confirmation_title": spec.presentation.confirmation_title,
         }
-        for spec in default_capability_registry().inventory()
+        for spec in registry.inventory()
     }
+    result.update({alias: dict(result[target]) for alias, target in registry.aliases().items()})
+    return result

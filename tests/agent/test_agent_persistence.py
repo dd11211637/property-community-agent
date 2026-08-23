@@ -34,6 +34,7 @@ from property_agent.agent.infrastructure.models import (
 from property_agent.agent.model_gateway import DeterministicModelGateway, ModelAnalysis
 from property_agent.agent.state import GraphState
 from property_agent.agent.tools.base import idempotency_key
+from property_agent.agent.working_state import RepairWorkingState, synchronize_typed_domain
 from property_agent.platform.infrastructure.orm_models import Base
 
 AGENT_TABLES = [ConversationModel.__table__, AgentCheckpointModel.__table__]
@@ -49,6 +50,7 @@ class Ctx:
     actor_id: UUID
     community_id: UUID
     house_ids: frozenset[UUID]
+    roles: frozenset[str] = frozenset({"MANAGER"})
 
 
 class Recorder:
@@ -207,6 +209,7 @@ def test_checkpointer_roundtrip_uses_conversation_id_as_thread_id(session_factor
         community_id=ctx.community_id,
         current_house_id=next(iter(ctx.house_ids)),
         intent="REPAIR",
+        domain=RepairWorkingState(category="WATER_PLUMBING", work_order_id=str(uuid4())),
         slots={"category": "WATER_PLUMBING", "work_order_id": uuid4()},
     )
 
@@ -446,6 +449,7 @@ def test_adopt_announcement_keeps_generated_category_across_turns(session_factor
         audience={},
         action="create",
     )
+    synchronize_typed_domain(first.state)
     SqlAlchemyCheckpointer(session_factory).save("conv-announcement-adopt", first.state)
 
     adopted = runner.start(
@@ -479,6 +483,7 @@ def test_adopt_draft_derives_missing_internal_category(session_factory, ctx):
         action="create",
     )
     first.state.slots.pop("category", None)
+    synchronize_typed_domain(first.state)
     checkpointer.save("conv-announcement-derived-category", first.state)
 
     adopted = runner.start(
@@ -523,6 +528,7 @@ def test_model_semantic_adoption_reactivates_verified_draft(session_factory, ctx
         action="create",
     )
     first.state.slots.pop("category", None)
+    synchronize_typed_domain(first.state)
     checkpointer.save("conv-announcement-semantic-adoption", first.state)
 
     adopted = runner.start(
@@ -546,6 +552,7 @@ def test_retry_recovers_previous_failed_announcement_operation(session_factory, 
     )
     first.state.error = "公告受众格式无效"
     first.state.slots.update(action="draft", topic="停水通知", audience="{}")
+    synchronize_typed_domain(first.state)
     checkpointer.save("conv-announcement-retry", first.state)
     calls_before = len(rec.calls)
 
@@ -577,6 +584,7 @@ def test_adoption_normalizes_display_audience_before_confirmation(session_factor
         audience="1栋住户",
         action="create",
     )
+    synchronize_typed_domain(first.state)
     checkpointer.save("conv-announcement-display-audience", first.state)
 
     adopted = runner.start(
@@ -604,6 +612,7 @@ def test_implicit_announcement_revision_keeps_active_draft_context(session_facto
         audience={},
         action="create",
     )
+    synchronize_typed_domain(first.state)
     checkpointer.save("conv-announcement-revise", first.state)
 
     revised = runner.start(
@@ -636,6 +645,7 @@ def test_modify_announcement_reason_does_not_fall_into_read_query(session_factor
         action="create",
         target_date="2026-08-14",
     )
+    synchronize_typed_domain(first.state)
     checkpointer.save("conv-announcement-reason", first.state)
 
     revised = runner.start(
@@ -667,6 +677,7 @@ def test_one_revision_turn_merges_copy_audience_date_and_publish_time(session_fa
         target_date="2026-08-14",
         scheduled_at="2026-08-13T20:00:00+08:00",
     )
+    synchronize_typed_domain(first.state)
     checkpointer.save("conv-announcement-multi-edit", first.state)
 
     runner.start(
@@ -704,6 +715,7 @@ def test_revision_invalidates_previous_save_confirmation(session_factory, ctx):
     }
     first.state.confirmation_token = "old-token"
     first.state._interrupt_node = "announcement.confirm"
+    synchronize_typed_domain(first.state)
     checkpointer.save("conv-announcement-reconfirm", first.state)
 
     revised = runner.start(
@@ -733,6 +745,7 @@ def test_announcement_revision_missing_specific_time_asks_for_business_time(sess
         action="create",
         scheduled_at="2026-08-13T20:00:00+08:00",
     )
+    synchronize_typed_domain(first.state)
     checkpointer.save("conv-announcement-time", first.state)
     calls_before = len(rec.calls)
 
@@ -765,6 +778,7 @@ def test_use_this_draft_cannot_replace_category_with_instruction(session_factory
         audience={},
         action="create",
     )
+    synchronize_typed_domain(first.state)
     checkpointer.save("conv-announcement-use", first.state)
 
     adopted = runner.start(

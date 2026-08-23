@@ -8,6 +8,7 @@
 """
 
 from collections.abc import Callable
+from dataclasses import replace
 from functools import partial
 from typing import Any
 
@@ -20,7 +21,6 @@ from property_agent.agent.capabilities.adapters.billing import (
 )
 from property_agent.agent.capabilities.catalog import default_capability_registry
 from property_agent.agent.capabilities.contracts import (
-    CapabilityInvocationState,
     CapabilityResult,
     CapabilityRuntimeContext,
     CapabilityWriteContext,
@@ -63,7 +63,14 @@ def _invoke_capability(
         current_house_id=state.current_house_id,
         execution_policy=ExecutionPolicy(allowlist=frozenset({name})),
     )
-    return executor.execute(
+    invocation = replace(
+        state.capability_invocation,
+        prior_fingerprints=frozenset(),
+        fingerprint=None,
+        selected_capability=name,
+        human_confirmed=confirmed,
+    )
+    result = executor.execute(
         name,
         payload,
         CapabilityRuntimeContext(
@@ -73,8 +80,18 @@ def _invoke_capability(
             write=write,
             trusted_runtime=trusted_runtime,
         ),
-        CapabilityInvocationState(human_confirmed=confirmed),
+        invocation,
     )
+    if result.fingerprint is not None:
+        state.capability_invocation = replace(
+            invocation,
+            step=invocation.step + 1,
+            calls_made=invocation.calls_made + 1,
+            prior_fingerprints=state.capability_invocation.prior_fingerprints
+            | {result.fingerprint},
+            fingerprint=result.fingerprint,
+        )
+    return result
 
 
 def build_billing_tools(

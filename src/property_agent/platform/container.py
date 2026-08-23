@@ -499,10 +499,6 @@ def _build_agent_tooling(
     def context_provider(state: GraphState) -> RequestContext:
         return resolve_agent_request_context(state)
 
-    def inspection_context_provider(state: GraphState):
-        context = resolve_agent_request_context(state)
-        return to_inspection_context(context, context.request_id)
-
     def session_provider(state: GraphState) -> Any:
         return session_factory()
 
@@ -533,8 +529,11 @@ def _build_agent_tooling(
     inspection_tools = build_inspection_tools(
         app.state.task_service,
         app.state.event_service,
-        inspection_context_provider,
+        context_provider,
         capability_executor,
+        inspection_context_projector=lambda context: to_inspection_context(
+            context, context.request_id
+        ),
     )
     controlled_read_tools = build_read_tools(
         announcement_tools=announcement_tools,
@@ -590,20 +589,13 @@ def resolve_agent_request_context(state: GraphState) -> RequestContext:
     """
     current = RequestContext.current()
     house = state.current_house_id
-    if current is not None:
-        if house is not None and house not in current.bound_house_ids:
-            raise ValueError("Agent current house is not bound to the authenticated user")
-        if house is not None and current.current_house_id != house:
-            return replace(current, current_house_id=house)
-        return current
-    return RequestContext(
-        actor_id=state.actor_id,
-        community_id=state.community_id,
-        roles=frozenset({"RESIDENT"}),
-        request_id=f"agent-{state.conversation_id}"[:64],
-        current_house_id=house,
-        bound_house_ids=frozenset({house}) if house else frozenset(),
-    )
+    if current is None:
+        raise ValueError("Trusted platform request context is required for Agent execution")
+    if house is not None and house not in current.bound_house_ids:
+        raise ValueError("Agent current house is not bound to the authenticated user")
+    if house is not None and current.current_house_id != house:
+        return replace(current, current_house_id=house)
+    return current
 
 
 def _build_services(app: FastAPI) -> dict[str, Any]:

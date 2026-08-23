@@ -47,6 +47,7 @@ from property_agent.agent.infrastructure.run_lease import (
     assert_run_fence,
 )
 from property_agent.agent.state import GraphState
+from property_agent.agent.working_state import RepairWorkingState
 from property_agent.platform.application.approval_service import (
     ApprovalError,
     ApprovalService,
@@ -104,6 +105,7 @@ def _make_state(conversation_id: str = "pg-conv-1") -> GraphState:
         actor_id=uuid4(),
         community_id=uuid4(),
         intent="REPAIR",
+        domain=RepairWorkingState(description="pg test"),
         slots={"house_id": str(uuid4()), "description": "pg test"},
         messages=[],
     )
@@ -269,10 +271,10 @@ def test_stale_checkpoint_does_not_overwrite_new(checkpointer, session_factory):
     state = _make_state("pg-cas")
     checkpointer.save("pg-cas", state)  # v1
     # B 写 v2
-    state.slots["description"] = "B wrote this"
+    state.domain.description = "B wrote this"
     checkpointer.save("pg-cas", state)  # v2
     # A 用过期 expected=1
-    state.slots["description"] = "A stale write"
+    state.domain.description = "A stale write"
     with pytest.raises(CheckpointVersionConflict):
         checkpointer.save("pg-cas", state, expected_version=1)
 

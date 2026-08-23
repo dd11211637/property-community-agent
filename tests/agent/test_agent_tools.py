@@ -27,6 +27,7 @@ from property_agent.inspection.application.service import (
 )
 from property_agent.inspection.domain.enums import Role as InspectionRole
 from property_agent.inspection.domain.enums import TaskStatus
+from property_agent.platform.context import ExecutionSource
 from tests.inspection_support import Harness as InspectionHarness
 
 
@@ -83,6 +84,8 @@ def test_repair_create_is_idempotent_within_conversation(service, harness, ids, 
 
     assert first["data"]["work_order"]["id"] == second["data"]["work_order"]["id"]
     assert len(harness.state.orders) == 1
+    assert state.capability_invocation.selected_capability == "repair_create"
+    assert state.capability_invocation.calls_made == 2
 
 
 def test_repair_get_accepts_business_number_and_returns_timeline(service, ids, resident_context):
@@ -443,6 +446,8 @@ def test_billing_consult_requires_confirmation_and_stable_key(ids):
     assert len(consultation.keys) == 2
     assert consultation.keys[0] == consultation.keys[1]
     assert len(consultation.keys[0]) <= 128
+    assert state.capability_invocation.selected_capability == "billing_consult"
+    assert state.capability_invocation.calls_made == 2
 
 
 # ============================== 巡检与安防工具 ==============================
@@ -461,6 +466,7 @@ def inspection_env():
         community_id=community,
         roles=frozenset({InspectionRole.MANAGER}),
         request_id="req_agent_tools",
+        execution_source=ExecutionSource.HUMAN,
     )
     tools = build_inspection_tools(task_service, event_service, lambda _s: context)
     return harness, tools, community, manager

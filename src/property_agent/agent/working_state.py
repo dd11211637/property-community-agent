@@ -64,6 +64,8 @@ class AnnouncementDraftingState:
     requirements: str | None = None
     revision_instruction: str | None = None
     revision_detail_kind: str | None = None
+    target_date: str | None = None
+    scheduled_at: datetime | str | None = None
 
 
 @dataclass(slots=True)
@@ -127,6 +129,64 @@ _BY_KIND = {
     for variant in get_args(DomainWorkingState)
 }
 
+_INTENT_BY_KIND = {
+    "repair": "REPAIR",
+    "billing": "BILLING",
+    "announcement_query": "ANNOUNCEMENT",
+    "announcement_drafting": "ANNOUNCEMENT",
+    "announcement_publish": "ANNOUNCEMENT",
+    "inspection_task": "INSPECTION",
+    "inspection_event": "INSPECTION",
+}
+_DOMAIN_FIELDS = {
+    item.name
+    for variant in get_args(DomainWorkingState)
+    for item in fields(variant)
+    if item.name != "kind"
+}
+
+
+class DomainIntentMismatchError(ValueError):
+    """A v2 state carries two contradictory domain identities."""
+
+
+def intent_for_domain(domain: DomainWorkingState) -> str | None:
+    return _INTENT_BY_KIND.get(domain.kind)
+
+
+def validate_domain_intent(intent: str | None, domain: DomainWorkingState) -> None:
+    expected = intent_for_domain(domain)
+    if expected is None:
+        if intent not in {None, "UNCERTAIN", "GENERAL_HELP"}:
+            raise DomainIntentMismatchError(
+                f"intent {intent!r} requires a typed domain working state"
+            )
+        return
+    if intent not in {None, expected}:
+        raise DomainIntentMismatchError(
+            f"intent {intent!r} conflicts with domain kind {domain.kind!r}"
+        )
+
+
+def project_domain_to_legacy_slots(
+    domain: DomainWorkingState,
+    existing: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Project canonical typed state into the legacy graph compatibility shape."""
+    if isinstance(domain, EmptyWorkingState):
+        return {key: value for key, value in dict(existing or {}).items() if key != "roles"}
+    projected = {
+        key: value
+        for key, value in dict(existing or {}).items()
+        if key not in _DOMAIN_FIELDS and key != "roles"
+    }
+    values = domain_to_dict(domain)
+    values.pop("kind", None)
+    projected.update(
+        {key: value for key, value in values.items() if value is not None and value != ()}
+    )
+    return projected
+
 
 def domain_to_dict(domain: DomainWorkingState) -> dict[str, Any]:
     return asdict(domain)
@@ -155,7 +215,8 @@ def domain_from_legacy(intent: str | None, slots: dict[str, Any]) -> DomainWorki
         return _construct(RepairWorkingState, normalized)
     if intent == "ANNOUNCEMENT":
         action = normalized.get("action")
-        if action in {"publish", "schedule", "schedule_publish"}:
+        existing_publish = normalized.get("announcement_id") is not None
+        if action in {"publish", "schedule", "schedule_publish"} and existing_publish:
             return _construct(AnnouncementPublishState, normalized)
         if action in {"draft", "revise", "create"} or any(
             key in normalized for key in ("title", "body", "audience")
@@ -170,6 +231,14 @@ def domain_from_legacy(intent: str | None, slots: dict[str, Any]) -> DomainWorki
             InspectionEventWorkingState if event else InspectionTaskWorkingState, normalized
         )
     return EmptyWorkingState()
+
+
+def synchronize_typed_domain(state: Any) -> None:
+    """Normalize legacy graph output into typed state at an explicit boundary."""
+    domain = domain_from_legacy(state.intent, state.slots)
+    state.domain = domain
+    state.intent = intent_for_domain(domain) or state.intent
+    state.slots = project_domain_to_legacy_slots(domain, state.slots)
 
 
 def _construct(variant: type[DomainWorkingState], payload: dict[str, Any]) -> DomainWorkingState:

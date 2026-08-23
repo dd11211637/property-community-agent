@@ -16,6 +16,8 @@ from property_agent.agent.capabilities.contracts import (
     CapabilitySpec,
     PolicyDisposition,
 )
+from property_agent.inspection.domain.classification import normalize_security_event
+from property_agent.inspection.domain.enums import EventRiskLevel
 
 ClassificationRule = Callable[
     [CapabilitySpec, CapabilityInput, CapabilityRuntimeContext, CapabilityInvocationState],
@@ -101,7 +103,11 @@ def default_capability_policy() -> CapabilityPolicy:
     """Project policy rules layered over canonical static Registry metadata."""
 
     def security_event_risk(spec, request, runtime, invocation):
-        if str(getattr(request, "risk_level", "")).upper() != "HIGH_RISK":
+        normalized = normalize_security_event(
+            str(getattr(request, "description", "")),
+            getattr(request, "risk_level", None),
+        )
+        if normalized.risk_level != EventRiskLevel.HIGH_RISK:
             return None
         return CapabilityPolicyDecision(
             PolicyDisposition.ALLOW,

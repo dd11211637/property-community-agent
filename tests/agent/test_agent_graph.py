@@ -19,6 +19,7 @@ from property_agent.agent.model_gateway import (
 )
 from property_agent.agent.policies import Intent
 from property_agent.agent.routing import merge_registries, subgraph_entry
+from property_agent.agent.selector_context import activate_selector_context
 from property_agent.agent.state import GraphState
 
 
@@ -41,6 +42,7 @@ class _Recorder:
 
 
 def build_env(gateway=None, checkpointer=None):
+    activate_selector_context(type("TrustedSelector", (), {"roles": {"MANAGER"}})())
     rec = _Recorder()
     repair = {
         "repair_list": rec.tool("repair_list"),

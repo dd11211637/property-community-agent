@@ -23,6 +23,7 @@ from property_agent.inspection.application.commands import (
     ExecuteEventActionCommand,
     ExecuteTaskActionCommand,
 )
+from property_agent.inspection.domain.classification import normalize_security_event
 from property_agent.inspection.domain.enums import EventAction, TaskAction, TaskRecordType
 from property_agent.repair.domain.enums import Urgency
 
@@ -72,11 +73,15 @@ def _submit_records_params(state: GraphState) -> tuple[str, dict[str, Any]]:
 
 
 def _security_event_params(state: GraphState) -> tuple[str, dict[str, Any]]:
+    normalized = normalize_security_event(
+        str(state.slots.get("description") or ""),
+        state.slots.get("risk_level"),
+    )
     return (
         "SECURITY_EVENT_CREATE",
         {
-            "event_type": str(state.slots.get("event_type") or "OTHER"),
-            "risk_level": str(state.slots.get("risk_level") or "MEDIUM"),
+            "event_type": normalized.event_type.value,
+            "risk_level": normalized.risk_level.value,
             "location": str(state.slots.get("location") or ""),
         },
     )

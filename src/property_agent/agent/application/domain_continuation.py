@@ -25,6 +25,13 @@ from property_agent.agent.application.runner_signals import (
     resolve_repair_followup,
 )
 from property_agent.agent.state import GraphState
+from property_agent.agent.working_state import (
+    AnnouncementDraftingState,
+    EmptyWorkingState,
+    RepairWorkingState,
+    domain_from_legacy,
+    project_domain_to_legacy_slots,
+)
 
 _INSPECTION_SLOT_GROUPS = {
     "task_query": {"statuses", "assigned_to_me", "limit", "task_id"},
@@ -101,7 +108,6 @@ def prepare_start_state(
         inspection_override=inspection_override,
         explicit_corrections=corrections,
         continuation=continuation,
-        roles=roles,
         active_draft=active_draft,
         announcement_followup=announcement_followup,
         repair_followup=repair_followup,
@@ -115,7 +121,7 @@ def prepare_start_state(
 def _collect_explicit_corrections(user_text: str, previous: GraphState | None) -> dict[str, str]:
     corrections: dict[str, str] = (
         explicit_repair_corrections(user_text)
-        if previous is not None and previous.intent == "REPAIR"
+        if previous is not None and isinstance(previous.domain, RepairWorkingState)
         else {}
     )
     corrections.update(explicit_inspection_corrections(user_text, previous))
@@ -123,11 +129,12 @@ def _collect_explicit_corrections(user_text: str, previous: GraphState | None) -
 
 
 def _active_announcement_draft(previous: GraphState | None) -> dict[str, Any] | None:
-    if previous is None or previous.intent != "ANNOUNCEMENT":
+    if previous is None or not isinstance(previous.domain, AnnouncementDraftingState):
         return None
-    if not all(previous.slots.get(key) is not None for key in ("title", "body", "audience")):
+    draft = previous.domain
+    if not all(getattr(draft, key) is not None for key in ("title", "body", "audience")):
         return None
-    return {key: previous.slots[key] for key in ("title", "body", "audience")}
+    return {key: getattr(draft, key) for key in ("title", "body", "audience")}
 
 
 def _build_continuation(
@@ -152,13 +159,13 @@ def _build_continuation(
     )
     continuing = slot_continuation or contextual_followup or failed_turn_retry
     previous_messages = list(previous.messages[-12:]) if same_house else []
-    previous_slots: dict[str, Any] = {}
+    previous_domain = EmptyWorkingState()
+    legacy_projection: dict[str, Any] = {}
     previous_intent = None
     single_slot_reply: dict[str, Any] = {}
     if continuing and previous is not None:
-        previous_slots = {
-            key: value for key, value in previous.slots.items() if key not in {"user_text", "tool"}
-        }
+        previous_domain = previous.domain
+        legacy_projection = project_domain_to_legacy_slots(previous.domain)
         previous_intent = previous.intent
         requested_slot = previous.requested_slot or (
             previous.missing_slots[0] if len(previous.missing_slots) == 1 else None
@@ -166,7 +173,8 @@ def _build_continuation(
         if slot_continuation and requested_slot and user_text.strip():
             single_slot_reply[requested_slot] = _single_slot_value(requested_slot, user_text)
     return ContinuationState(
-        previous_slots=previous_slots,
+        previous_domain=previous_domain,
+        legacy_projection=legacy_projection,
         previous_messages=previous_messages,
         previous_intent=previous_intent,
         single_slot_reply=single_slot_reply,
@@ -196,11 +204,12 @@ def _apply_inspection_followup(
         return
     group = inspection_group(action, user_text)
     allowed = _INSPECTION_SLOT_GROUPS[group]
-    continuation.previous_slots = {
-        key: value for key, value in continuation.previous_slots.items() if key in allowed
+    continuation.legacy_projection = {
+        key: value for key, value in continuation.legacy_projection.items() if key in allowed
     }
-    continuation.previous_slots["action"] = action
-    continuation.previous_slots["target"] = "event" if group.startswith("event") else "task"
+    continuation.legacy_projection["action"] = action
+    continuation.legacy_projection["target"] = "event" if group.startswith("event") else "task"
+    continuation.previous_domain = domain_from_legacy("INSPECTION", continuation.legacy_projection)
     continuation.previous_intent = "INSPECTION"
     continuation.continuing = True
 
@@ -212,25 +221,26 @@ def _apply_announcement_followup(
     action: str | None,
     followup: Any,
 ) -> None:
-    if not action or previous is None or previous.intent != "ANNOUNCEMENT":
+    if not action or previous is None or not previous.domain.kind.startswith("announcement_"):
         return
     if action == "revise":
         previous.pending_action = None
         previous.confirmation_token = None
         previous._interrupt_node = None
-    continuation.previous_slots = {
-        key: value for key, value in previous.slots.items() if key not in {"user_text", "tool"}
-    }
+    continuation.legacy_projection = project_domain_to_legacy_slots(previous.domain)
     continuation.previous_intent = "ANNOUNCEMENT"
-    continuation.previous_slots["action"] = action
+    continuation.legacy_projection["action"] = action
     business_date = trusted_business_date(previous.trusted_context.get("business_date"))
-    continuation.previous_slots.update(resolve_announcement_time_slots(user_text, business_date))
-    continuation.previous_slots.update(followup.slot_updates or {})
+    continuation.legacy_projection.update(resolve_announcement_time_slots(user_text, business_date))
+    continuation.legacy_projection.update(followup.slot_updates or {})
     _replace_optional_slot(
-        continuation.previous_slots, "revision_instruction", followup.instruction
+        continuation.legacy_projection, "revision_instruction", followup.instruction
     )
     _replace_optional_slot(
-        continuation.previous_slots, "revision_detail_kind", followup.detail_kind
+        continuation.legacy_projection, "revision_detail_kind", followup.detail_kind
+    )
+    continuation.previous_domain = domain_from_legacy(
+        "ANNOUNCEMENT", continuation.legacy_projection
     )
     continuation.continuing = True
     continuation.contextual_followup = False

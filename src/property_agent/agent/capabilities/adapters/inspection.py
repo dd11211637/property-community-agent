@@ -14,6 +14,7 @@ from property_agent.agent.capabilities.contracts import (
     CapabilityOutput,
     CapabilityRuntimeContext,
 )
+from property_agent.inspection.adapters.api.dependencies import ROLE_MAP
 from property_agent.inspection.application.commands import (
     AddAiSuggestionCommand,
     CreateInspectionTaskCommand,
@@ -23,13 +24,14 @@ from property_agent.inspection.application.commands import (
     InspectionTaskSearch,
     SecurityEventSearch,
 )
+from property_agent.inspection.domain.classification import normalize_security_event
 from property_agent.inspection.domain.enums import (
     EventAction,
     EventRiskLevel,
-    EventType,
     TaskAction,
     TaskRecordType,
 )
+from property_agent.inspection.domain.errors import BusinessError as InspectionBusinessError
 
 
 class InspectionListInput(CapabilityInput):
@@ -104,7 +106,19 @@ class InspectionDataOutput(CapabilityOutput):
 def _context(runtime: CapabilityRuntimeContext) -> Any:
     projector = getattr(runtime, "inspection_context_projector", None)
     if callable(projector):
-        return projector(runtime.request_context)
+        canonical = runtime.request_context
+        projected = projector(canonical)
+        expected_roles = frozenset(ROLE_MAP[role] for role in canonical.roles if role in ROLE_MAP)
+        protected = (
+            projected.actor_id == canonical.actor_id,
+            projected.community_id == canonical.community_id,
+            projected.execution_source == canonical.execution_source,
+            projected.agent_lease == canonical.agent_lease,
+            projected.roles == expected_roles,
+        )
+        if not all(protected):
+            raise RuntimeError("inspection context projection changed trusted authority")
+        return projected
     return runtime.request_context
 
 
@@ -141,7 +155,16 @@ class InspectionAdapter:
     def __call__(self, request: CapabilityInput, runtime: CapabilityRuntimeContext):
         context = _context(runtime)
         handler = getattr(self, f"_{self._operation}")
-        return InspectionDataOutput(data=handler(request, runtime, context))
+        try:
+            return InspectionDataOutput(data=handler(request, runtime, context))
+        except InspectionBusinessError as exc:
+            from property_agent.agent.capabilities.contracts import CapabilityDomainError
+
+            raise CapabilityDomainError(
+                exc.code,
+                exc.message,
+                details=dict(exc.details or {}),
+            ) from exc
 
     def _inspection_list(self, request: InspectionListInput, runtime, context):
         if request.target == "event":
@@ -244,9 +267,6 @@ class InspectionAdapter:
     def _inspection_submit_records(self, request, runtime, context):
         return self._record(request, runtime, context, final=True)
 
-    def _inspection_submit_record(self, request, runtime, context):
-        return self._record(request, runtime, context, final=False)
-
     def _inspection_ai_suggest(self, request: InspectionAiSuggestInput, runtime, context):
         write = self._write(runtime)
         command = AddAiSuggestionCommand(
@@ -268,10 +288,11 @@ class InspectionAdapter:
 
     def _security_event_create(self, request: SecurityEventCreateInput, runtime, context):
         write = self._write(runtime)
+        normalized = normalize_security_event(request.description, request.risk_level)
         command = CreateSecurityEventCommand(
             request.source_task_id,
-            EventType(request.event_type),
-            EventRiskLevel(request.risk_level),
+            normalized.event_type,
+            normalized.risk_level,
             request.location,
             request.description,
             write.confirmation_token,

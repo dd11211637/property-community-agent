@@ -20,8 +20,8 @@ class RequestContext:
     community_id: UUID
     roles: frozenset[Role]
     request_id: str
+    execution_source: ExecutionSource
     house_ids: frozenset[UUID] = frozenset()
-    execution_source: ExecutionSource = ExecutionSource.HUMAN
     agent_lease: AgentLeaseContext | None = None
 
     def __post_init__(self) -> None:
