@@ -17,8 +17,8 @@ MUST NOT be pulled into an earlier stage merely because it is convenient.
 | --- | --- | --- |
 | PR1 | Correctness substrate | **DONE / MERGED / VERIFIED** |
 | PR2 | Capability Layer | **DONE / MERGED / VERIFIED** |
-| PR3 | Typed State and Runner de-domainization | Planned |
-| PR4 | LangGraph runtime foundation | Planned |
+| PR3 | Typed State and Runner de-domainization | **DONE / MERGED / VERIFIED** |
+| PR4 | LangGraph runtime foundation | Planned (Stage Contract established) |
 | PR5 | Supervisor and stateless specialists | Planned |
 | PR6 | Long-term memory | Planned |
 | PR7 | Productionization and runtime drain | Planned |
@@ -103,6 +103,14 @@ it?”
 - legacy runtime compatibility and all required quality gates remain green.
 
 ## 5. PR3 — Typed State and Runner de-domainization
+
+**Status:** **DONE / MERGED / VERIFIED**
+
+**Final PR head:** `f068cc7d3116df2b7cd1238d496d7399f3d18ff6`
+
+**Merged to `main`:** `70eca8523d2f2db4f153e731e89ebde08b4eff18`
+
+**Post-merge baseline for PR4:** `70eca8523d2f2db4f153e731e89ebde08b4eff18`
 
 ### Goal
 
