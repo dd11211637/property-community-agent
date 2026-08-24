@@ -13,6 +13,13 @@ from property_agent.agent.model_contracts import (
     ModelGatewayError,
     UnavailableModelGateway,
 )
+from property_agent.agent.planning_contracts import (
+    PlanningGateway,
+    PlanProposal,
+    PlanStepProposal,
+    RelevanceDecision,
+    RelevanceJudgment,
+)
 
 __all__ = [
     "DeepSeekModelGateway",
@@ -21,5 +28,10 @@ __all__ = [
     "ModelAnalysis",
     "ModelGateway",
     "ModelGatewayError",
+    "PlanProposal",
+    "PlanStepProposal",
+    "PlanningGateway",
+    "RelevanceDecision",
+    "RelevanceJudgment",
     "UnavailableModelGateway",
 ]

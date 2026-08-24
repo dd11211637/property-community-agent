@@ -59,6 +59,7 @@ class SpecialistOutcome(StrEnum):
 
 class GoalOutcome(StrEnum):
     COMPLETED = "completed"
+    CONDITION_NOT_MET = "condition-not-met"
     PENDING_CONFIRMATION = "pending-confirmation"
     NEEDS_CLARIFICATION = "needs-clarification"
     FAILED = "failed"
@@ -76,6 +77,7 @@ class PlanStep:
     capability: str | None = None
     parameters: dict[str, Any] = field(default_factory=dict)
     condition: str | None = None
+    condition_parameters: dict[str, Any] = field(default_factory=dict)
     result_reference: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -93,6 +95,7 @@ class PlanStep:
             capability=value.get("capability"),
             parameters=dict(value.get("parameters") or {}),
             condition=value.get("condition"),
+            condition_parameters=dict(value.get("condition_parameters") or {}),
             result_reference=value.get("result_reference"),
         )
 
@@ -224,6 +227,24 @@ class PlanValidator:
         "announcement": SpecialistName.ANNOUNCEMENT,
         "inspection": SpecialistName.INSPECTION,
     }
+    _CONDITIONS = {
+        "if_no_equivalent_active_repair": ("repair", "repair_create"),
+        "if_relevant_inspection_issue": ("announcement", "announcement_draft"),
+    }
+    _FORBIDDEN_PARAMETER_KEYS = frozenset(
+        {
+            "actor_id",
+            "community_id",
+            "house_id",
+            "roles",
+            "runtime_version",
+            "approval_ref",
+            "confirmation_token",
+            "idempotency_key",
+            "lease",
+            "fence",
+        }
+    )
 
     def __init__(self, *, max_steps: int = 8) -> None:
         self._max_steps = max_steps
@@ -261,6 +282,19 @@ class PlanValidator:
             capability_domain = self._capability_domains.get(step.capability)
             if capability_domain != step.domain:
                 raise ValueError("step capability does not match its domain")
+        if set(step.parameters) & self._FORBIDDEN_PARAMETER_KEYS:
+            raise ValueError("step parameters contain server-owned authority fields")
+        if step.condition is not None:
+            expected_condition_target = self._CONDITIONS.get(step.condition)
+            if expected_condition_target != (step.domain, step.capability):
+                raise ValueError("step condition is unsupported for its target")
+            if not step.dependencies:
+                raise ValueError("conditional step requires a dependency")
+            source_domain = (
+                "repair" if step.condition == "if_no_equivalent_active_repair" else "inspection"
+            )
+            if not any(by_id[item].domain == source_domain for item in step.dependencies):
+                raise ValueError("step condition dependency has the wrong domain")
         if any(dependency not in by_id for dependency in step.dependencies):
             raise ValueError("step dependency is unknown")
         if step.step_id in step.dependencies:

@@ -38,7 +38,6 @@ from property_agent.agent.application.graph_engine import (
 )
 from property_agent.agent.application.pending_confirmation import (
     confirmation_envelope,
-    is_supported_pending_revision,
 )
 from property_agent.agent.application.recovery import AgentRecoveryService
 from property_agent.agent.application.runner_signals import (
@@ -303,10 +302,7 @@ class AgentSessionRunner:
         current_house_id = house_id or conversation.current_house_id
         previous = self._recovery.peek(conversation_id)
         represent_pending = bool(
-            conversation.is_v2
-            and previous is not None
-            and previous.pending_action is not None
-            and not is_supported_pending_revision(user_text, previous)
+            conversation.is_v2 and previous is not None and previous.pending_action is not None
         )
         if represent_pending:
             return _TurnPlan(

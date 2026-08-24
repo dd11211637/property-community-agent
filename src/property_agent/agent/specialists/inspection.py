@@ -103,6 +103,13 @@ class InspectionSpecialist(StatelessSpecialist):
         if capability in {"inspection_get_task", "inspection_get_event"} and (
             error and error.code in not_found_codes
         ):
+            target = "event" if capability == "inspection_get_event" else "task"
+            retained = {
+                key: value
+                for key, value in step.parameters.items()
+                if key in {"statuses", "risk_levels", "assigned_to_me", "limit"}
+                and value is not None
+            }
             return SpecialistResult(
                 SpecialistOutcome.REPLAN,
                 step.step_id,
@@ -110,7 +117,7 @@ class InspectionSpecialist(StatelessSpecialist):
                 capability=capability,
                 data={
                     "replacement_capability": "inspection_list",
-                    "replacement_parameters": {"target": "task", "limit": 20},
+                    "replacement_parameters": {"target": target, "limit": 20, **retained},
                 },
                 public_message="未找到指定对象，将改用受限列表查询。",
                 reason_code=error.code,

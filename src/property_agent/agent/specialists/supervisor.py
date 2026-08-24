@@ -20,6 +20,7 @@ from property_agent.agent.orchestration import (
     SpecialistResult,
 )
 from property_agent.agent.planning import SupervisorPlanner
+from property_agent.agent.planning_contracts import RelevanceDecision
 from property_agent.agent.runtime import RuntimeContext
 from property_agent.agent.state import AgentState, ProposedAction
 from property_agent.agent.working_state import domain_from_legacy
@@ -200,6 +201,7 @@ class Supervisor:
             return "请说明您要查询或办理的是报修、账单、公告还是巡检安防事项。"
         labels = {
             GoalOutcome.COMPLETED: "已完成",
+            GoalOutcome.CONDITION_NOT_MET: "条件未满足，未执行",
             GoalOutcome.PENDING_CONFIRMATION: "待确认",
             GoalOutcome.NEEDS_CLARIFICATION: "需补充信息",
             GoalOutcome.FAILED: "失败",
@@ -230,7 +232,7 @@ class Supervisor:
                 state.plan = replace(state.plan, current_step_id=pending.step_id)
                 return
             self._mark_step(state, pending, PlanStepStatus.SKIPPED)
-            state.goal_outcomes[pending.step_id] = GoalOutcome.COMPLETED
+            state.goal_outcomes[pending.step_id] = GoalOutcome.CONDITION_NOT_MET
 
     @staticmethod
     def _dependencies_completed(state: AgentState, step: PlanStep) -> bool:
@@ -256,7 +258,9 @@ class Supervisor:
         if step.condition == "if_no_equivalent_active_repair":
             return not self._equivalent_active_repair(prior.data, step.parameters)
         if step.condition == "if_relevant_inspection_issue":
-            return self._has_relevant_issue(prior.data)
+            return (
+                self._planner.relevant_issue_decision(step, prior.data) is RelevanceDecision.MATCH
+            )
         return False
 
     @staticmethod
@@ -269,13 +273,6 @@ class Supervisor:
             if location and str(item.get("location") or "").strip() == location:
                 return True
         return False
-
-    @staticmethod
-    def _has_relevant_issue(data: dict[str, Any]) -> bool:
-        nested = data.get("data") if isinstance(data.get("data"), dict) else data
-        if any(nested.get(key) for key in ("items", "events", "tasks", "records", "findings")):
-            return True
-        return bool(isinstance(nested.get("count"), int) and nested["count"] > 0)
 
     def _complete_step(self, state, step, result) -> None:
         self._mark_step(state, step, PlanStepStatus.COMPLETED, result_reference=result.capability)
@@ -328,9 +325,10 @@ class Supervisor:
 
     def _finish_plan(self, state: AgentState) -> None:
         outcomes = set(state.goal_outcomes.values())
-        if GoalOutcome.FAILED in outcomes and GoalOutcome.COMPLETED in outcomes:
+        non_failures = {GoalOutcome.COMPLETED, GoalOutcome.CONDITION_NOT_MET}
+        if GoalOutcome.FAILED in outcomes and outcomes & non_failures:
             status = PlanStatus.PARTIAL
-        elif outcomes and outcomes <= {GoalOutcome.FAILED}:
+        elif GoalOutcome.FAILED in outcomes:
             status = PlanStatus.FAILED
         else:
             status = PlanStatus.COMPLETED

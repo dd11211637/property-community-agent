@@ -11,6 +11,7 @@ from property_agent.agent.deterministic_gateway import (
     _deterministic_repair_slots,
 )
 from property_agent.agent.model_contracts import ModelAnalysis, ModelGateway, ModelGatewayError
+from property_agent.agent.planning_contracts import PlanProposal, RelevanceJudgment
 from property_agent.agent.policies import Intent
 from property_agent.repair.domain.classification import classify_repair_category
 
@@ -201,6 +202,30 @@ class FallbackModelGateway:
                 degraded=primary.degraded,
             )
         return _apply_deterministic_slot_guards(text, primary, deterministic.slots)
+
+    def propose_plan(
+        self,
+        text: str,
+        *,
+        history: list[dict[str, Any]],
+        trusted_context: dict[str, Any],
+    ) -> PlanProposal:
+        """Use only the semantic provider; never emulate complex planning lexically."""
+        method = getattr(self._primary, "propose_plan", None)
+        if method is None:
+            raise ModelGatewayError("Primary model does not support semantic planning")
+        return method(text, history=history, trusted_context=trusted_context)
+
+    def judge_relevance(
+        self,
+        *,
+        semantic_goal: str,
+        evidence: dict[str, Any],
+    ) -> RelevanceJudgment:
+        method = getattr(self._primary, "judge_relevance", None)
+        if method is None:
+            raise ModelGatewayError("Primary model does not support relevance judgment")
+        return method(semantic_goal=semantic_goal, evidence=evidence)
 
     def classify_intent(self, text: str) -> tuple[str, float]:
         result = self.analyze(text)
