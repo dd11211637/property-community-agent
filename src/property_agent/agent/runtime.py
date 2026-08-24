@@ -20,6 +20,12 @@ class ExecutionPolicy:
 
     max_steps: int = 8
     max_calls: int = 8
+    max_supervisor_steps: int = 16
+    max_replans: int = 2
+    max_delegations: int = 8
+    max_clarification_loops: int = 2
+    max_cross_domain_steps: int = 4
+    plan_duration_seconds: int = 120
     deadline_monotonic: float | None = None
     allowlist: frozenset[str] | None = None
 
