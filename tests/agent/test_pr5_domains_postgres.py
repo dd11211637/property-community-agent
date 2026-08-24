@@ -62,6 +62,7 @@ def pr5_runtime() -> AcceptanceRuntime:
     context, house_id = _seed_identity(sessions)
     app = FastAPI()
     build_production_container(app)
+    app.state.langgraph_saver_resource.saver.setup()
     production = app.state.agent_runner
     facade = AgentRuntimeFacadeImpl(
         lifecycle=app.state.agent_lifecycle,

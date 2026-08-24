@@ -185,6 +185,7 @@ def test_postgres_saver_sync_cursor_is_exactly_resolvable():
         pytest.skip("TEST_POSTGRES_URL is required")
     resource = build_saver_resource(dsn=url.replace("postgresql+psycopg", "postgresql"))
     try:
+        resource.saver.setup()
         runtime = runtime_fixture()
         engine = LangGraphEngine(
             resource.saver,
