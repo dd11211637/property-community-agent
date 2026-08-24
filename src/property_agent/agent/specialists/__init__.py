@@ -1,4 +1,4 @@
-"""Stateless pilot specialists."""
+"""Canonical stateless domain specialists."""
 
 from property_agent.agent.specialists.announcement import AnnouncementSpecialist
 from property_agent.agent.specialists.billing import BillingSpecialist
