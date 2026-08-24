@@ -12,10 +12,12 @@ from fastapi import FastAPI
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
-from property_agent.agent.application.composition import close_runtime_resources
+from property_agent.agent.application.composition import build_supervisor, close_runtime_resources
 from property_agent.agent.application.conversation_service import ConversationService
 from property_agent.agent.application.facade import AgentRuntimeFacadeImpl
+from property_agent.agent.application.langgraph_runtime import LangGraphEngine
 from property_agent.agent.orchestration import PlanStatus, SpecialistName
+from property_agent.agent.planning_contracts import RelevanceDecision, RelevanceJudgment
 from property_agent.agent.runtime_version import RuntimeSelectionPolicy
 from property_agent.announcement.application.commands import ReviewActionCommand
 from property_agent.announcement.domain.enums import AnnouncementAction
@@ -37,6 +39,7 @@ from property_agent.platform.infrastructure.orm_models import (
     UserRoleModel,
 )
 from property_agent.repair.infrastructure.models import WorkOrderModel
+from tests.agent.pr5_semantic_fakes import proposal, step
 
 POSTGRES_URL = os.getenv("TEST_POSTGRES_URL")
 
@@ -48,6 +51,7 @@ class AcceptanceRuntime:
     facade: AgentRuntimeFacadeImpl
     context: RequestContext
     house_id: Any
+    planning_gateway: Any
 
 
 @pytest.fixture
@@ -63,18 +67,91 @@ def pr5_runtime() -> AcceptanceRuntime:
     app = FastAPI()
     build_production_container(app)
     app.state.langgraph_saver_resource.saver.setup()
+    semantic_gateway = PostgresSemanticPlanningGateway()
+    app.state.agent_model_gateway = semantic_gateway
     production = app.state.agent_runner
+    production._v2_engine = LangGraphEngine(
+        app.state.langgraph_saver_resource.saver,
+        build_supervisor(app),
+    )
     facade = AgentRuntimeFacadeImpl(
         lifecycle=app.state.agent_lifecycle,
         conversations=ConversationService(sessions),
         policy=RuntimeSelectionPolicy(enabled=True),
         v2_engine=production._v2_engine,
     )
-    yield AcceptanceRuntime(app, sessions, facade, context, house_id)
+    yield AcceptanceRuntime(app, sessions, facade, context, house_id, semantic_gateway)
     close_runtime_resources(app)
     dispose_engine()
     Base.metadata.drop_all(engine)
     engine.dispose()
+
+
+class PostgresSemanticPlanningGateway:
+    """Reproducible provider-contract fake; it does not claim model generalization."""
+
+    def __init__(self):
+        self.objectives = []
+
+    def propose_plan(self, text, *, history, trusted_context):
+        del history, trusted_context
+        self.objectives.append(text)
+        return _postgres_proposal(text)
+
+    def judge_relevance(self, *, semantic_goal, evidence):
+        del semantic_goal
+        refs = tuple(evidence)
+        return RelevanceJudgment(
+            RelevanceDecision.MATCH if refs else RelevanceDecision.NO_MATCH,
+            refs[:1],
+        )
+
+
+def _postgres_proposal(text):
+    if text == "查一下报修进度，顺便看看物业费。":
+        return proposal(
+            step("repair-read", "repair", "repair_list", "查询报修进度"),
+            step("billing-read", "billing", "billing_query", "查询物业费"),
+        )
+    if "巡检发现" in text and "公告" in text:
+        return proposal(
+            step(
+                "inspection-read",
+                "inspection",
+                "inspection_list",
+                "核验相关巡检发现",
+                parameters={"target": "event" if "安防" in text else "task"},
+            ),
+            step(
+                "announcement-draft",
+                "announcement",
+                "announcement_draft",
+                "相关问题成立时准备公告",
+                parameters={"topic": "安全提示", "audience": {}, "requirements": "说明核验事实"},
+                dependencies=("inspection-read",),
+                condition={
+                    "kind": "relevant-inspection-issue",
+                    "semantic_goal": "巡检证据确认用户所指问题",
+                },
+            ),
+        )
+    mappings = {
+        "我要报修厨房漏水": ("repair", "repair_create"),
+        "提交物业费账单咨询": ("billing", "billing_consult"),
+        "准备一份停水公告": ("announcement", "announcement_draft"),
+        "保存公告草稿": ("announcement", "announcement_create_draft"),
+        "立即发布公告": ("announcement", "announce_publish"),
+        "创建消防通道巡检任务": ("inspection", "inspection_create"),
+        "上报安防事件": ("inspection", "security_event_create"),
+        "关闭高风险安防事件": ("inspection", "close_high_risk_event"),
+    }
+    domain, capability = mappings[text]
+    parameters = (
+        {"topic": "停水通知", "audience": {}, "requirements": "准备停水公告"}
+        if capability == "announcement_draft"
+        else {}
+    )
+    return proposal(step("domain-action", domain, capability, text, parameters=parameters))
 
 
 def _seed_identity(sessions):
@@ -119,6 +196,7 @@ def test_real_four_domains_cross_domain_hitl_and_human_only(pr5_runtime):
     runtime = pr5_runtime
 
     cross = _start(runtime, "查一下报修进度，顺便看看物业费。")
+    assert runtime.planning_gateway.objectives[0] == "查一下报修进度，顺便看看物业费。"
     assert cross.done is True
     assert cross.state.plan.status is PlanStatus.COMPLETED
     assert [result.specialist for result in cross.state.specialist_results] == [

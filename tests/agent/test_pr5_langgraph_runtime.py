@@ -9,9 +9,9 @@ from property_agent.agent.application.langgraph_runtime import (
 from property_agent.agent.capabilities.catalog import default_capability_registry
 from property_agent.agent.capabilities.executor import CapabilityExecutor
 from property_agent.agent.capabilities.policy import default_capability_policy
-from property_agent.agent.model_gateway import DeterministicModelGateway
 from property_agent.agent.orchestration import PlanStatus, SpecialistName
 from property_agent.agent.planning import SupervisorPlanner
+from property_agent.agent.planning_contracts import RelevanceDecision, RelevanceJudgment
 from property_agent.agent.runtime import PreparedWrite, RuntimeContext
 from property_agent.agent.specialists import (
     AnnouncementSpecialist,
@@ -21,10 +21,11 @@ from property_agent.agent.specialists import (
 )
 from property_agent.agent.specialists.supervisor import Supervisor
 from property_agent.agent.state import AgentState
+from tests.agent.pr5_semantic_fakes import StaticPlanningGateway, proposal, step
 from tests.agent.test_pr5_planning_and_specialists import _runtime
 
 
-def _engine(adapters):
+def _engine(adapters, semantic, *, relevance=None):
     executor = CapabilityExecutor(
         default_capability_registry(), default_capability_policy(), adapters
     )
@@ -35,7 +36,12 @@ def _engine(adapters):
         InspectionSpecialist(executor),
     )
     supervisor = Supervisor(
-        SupervisorPlanner(DeterministicModelGateway()),
+        SupervisorPlanner(
+            StaticPlanningGateway(
+                semantic,
+                relevance or RelevanceJudgment(RelevanceDecision.NO_MATCH),
+            )
+        ),
         {specialist.name: specialist for specialist in specialists},
     )
     return LangGraphEngine(build_saver_resource(in_memory=True).saver, supervisor)
@@ -59,7 +65,11 @@ def test_official_supervisor_graph_executes_minimal_multi_domain_plan():
             "billing_query": lambda _request, _runtime: (
                 calls.append("billing_query") or {"query_type": "list", "count": 0, "items": ()}
             ),
-        }
+        },
+        proposal(
+            step("repair-read", "repair", "repair_list", "查询报修进度"),
+            step("billing-read", "billing", "billing_query", "查询物业费"),
+        ),
     )
 
     result = engine.invoke(
@@ -89,7 +99,8 @@ def test_live_inspection_result_controls_announcement_execution():
             "announcement_draft": lambda _request, _runtime: (
                 calls.append("announcement_draft") or {"data": {"title": "test", "body": "test"}}
             ),
-        }
+        },
+        _inspection_announcement_proposal(),
     )
 
     result = engine.invoke(
@@ -130,7 +141,27 @@ def test_two_writes_receive_two_exact_interrupts_and_a_cannot_authorize_b():
                     "idempotency_key": "billing-key",
                 }
             ),
-        }
+        },
+        proposal(
+            step(
+                "repair-create",
+                "repair",
+                "repair_create",
+                "提交厨房漏水报修",
+                parameters={
+                    "description": "厨房漏水",
+                    "location": "厨房",
+                    "urgency": "NORMAL",
+                },
+            ),
+            step(
+                "billing-consult",
+                "billing",
+                "billing_consult",
+                "提交账单咨询",
+                parameters={"subject": "账单咨询", "description": "咨询账单"},
+            ),
+        ),
     )
     runtime = _runtime()
     first = engine.invoke(
@@ -182,5 +213,23 @@ def _bound_runtime(runtime: RuntimeContext, pending):
             params_hash=pending["params_hash"],
             plan_id=pending["plan_id"],
             plan_step_id=pending["plan_step_id"],
+        ),
+    )
+
+
+def _inspection_announcement_proposal():
+    return proposal(
+        step("inspection-read", "inspection", "inspection_list", "核验电梯巡检发现"),
+        step(
+            "announcement-draft",
+            "announcement",
+            "announcement_draft",
+            "相关问题成立时准备公告",
+            parameters={"topic": "电梯检修提示", "audience": {}, "requirements": "提示安全"},
+            dependencies=("inspection-read",),
+            condition={
+                "kind": "relevant-inspection-issue",
+                "semantic_goal": "巡检结果确认存在相关电梯问题",
+            },
         ),
     )

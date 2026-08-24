@@ -12,7 +12,6 @@ from property_agent.agent.application.langgraph_runtime import (
 from property_agent.agent.capabilities.catalog import default_capability_registry
 from property_agent.agent.capabilities.executor import CapabilityExecutor
 from property_agent.agent.capabilities.policy import default_capability_policy
-from property_agent.agent.model_gateway import DeterministicModelGateway
 from property_agent.agent.planning import SupervisorPlanner
 from property_agent.agent.runtime import PreparedWrite, RuntimeContext
 from property_agent.agent.specialists import (
@@ -25,6 +24,23 @@ from property_agent.agent.specialists.supervisor import Supervisor
 from property_agent.agent.state import GraphState
 from property_agent.agent.working_state import synchronize_typed_domain
 from property_agent.platform.context import RequestContext
+from tests.agent.pr5_semantic_fakes import proposal, step
+
+
+class RepairProviderContractGateway:
+    def propose_plan(self, text, *, history, trusted_context):
+        del history, trusted_context
+        if text == "查询报修记录":
+            return proposal(step("repair-read", "repair", "repair_list", "查询报修记录"))
+        return proposal(
+            step(
+                "repair-create",
+                "repair",
+                "repair_create",
+                "提交水管漏水报修",
+                parameters={"description": "水管漏水", "location": "厨房"},
+            )
+        )
 
 
 def _supervisor(adapters):
@@ -38,7 +54,7 @@ def _supervisor(adapters):
         InspectionSpecialist(executor),
     )
     return Supervisor(
-        SupervisorPlanner(DeterministicModelGateway()),
+        SupervisorPlanner(RepairProviderContractGateway()),
         {specialist.name: specialist for specialist in specialists},
     )
 

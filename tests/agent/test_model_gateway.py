@@ -18,6 +18,7 @@ from property_agent.agent.model_gateway import (
     ModelGatewayError,
 )
 from property_agent.agent.nodes import classify_intent_node
+from property_agent.agent.planning_contracts import RelevanceDecision
 from property_agent.agent.read_contracts import PlannerAction
 from property_agent.agent.state import GraphState
 from property_agent.inspection.domain.enums import Role
@@ -69,6 +70,71 @@ def test_deepseek_uses_chat_completions_bearer_and_json_output():
     assert result.slots["location"] == "厨房"
     assert result.provider == "deepseek"
     assert result.degraded is False
+
+
+def test_deepseek_semantic_planning_contract_preserves_dependencies_and_conditions():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return _response(
+            json.dumps(
+                {
+                    "objective_classification": "multi-domain",
+                    "steps": [
+                        {
+                            "step_id": "inspection-read",
+                            "goal": "核验电梯巡检发现",
+                            "domain": "inspection",
+                            "specialist": "InspectionSpecialist",
+                            "capability": "inspection_list",
+                            "parameters": {"target": "task"},
+                            "dependencies": [],
+                            "condition": None,
+                        },
+                        {
+                            "step_id": "announcement-draft",
+                            "goal": "相关异常成立后准备公告",
+                            "domain": "announcement",
+                            "specialist": "AnnouncementSpecialist",
+                            "capability": "announcement_draft",
+                            "parameters": {"topic": "电梯检修", "audience": {}},
+                            "dependencies": ["inspection-read"],
+                            "condition": {
+                                "kind": "relevant-inspection-issue",
+                                "semantic_goal": "巡检证据确认电梯异常",
+                            },
+                        },
+                    ],
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    result = _gateway(handler).propose_plan(
+        "先核验记录，坐实异常后再准备说明",
+        history=[{"role": "assistant", "content": "此前讨论的是电梯"}],
+        trusted_context={"business_date": "2026-08-24"},
+    )
+
+    assert result.steps[1].dependencies == ("inspection-read",)
+    assert result.steps[1].condition["kind"] == "relevant-inspection-issue"
+    assert "at most 8 steps" in captured["body"]["messages"][0]["content"]
+    provider_input = json.loads(captured["body"]["messages"][1]["content"])
+    assert provider_input["history"][0]["content"] == "此前讨论的是电梯"
+
+
+def test_deepseek_relevance_judgment_returns_only_structured_evidence_refs():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _response('{"decision":"match","evidence_refs":["items[0]"]}')
+
+    result = _gateway(handler).judge_relevance(
+        semantic_goal="巡检证据确认电梯异常",
+        evidence={"items[0]": {"finding": "电梯异响"}},
+    )
+
+    assert result.decision is RelevanceDecision.MATCH
+    assert result.evidence_refs == ("items[0]",)
 
 
 def test_deepseek_revises_announcement_from_original_draft_and_instruction():

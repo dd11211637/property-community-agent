@@ -7,7 +7,6 @@ from property_agent.agent.capabilities.contracts import (
 )
 from property_agent.agent.capabilities.executor import CapabilityExecutor
 from property_agent.agent.capabilities.policy import default_capability_policy
-from property_agent.agent.model_gateway import DeterministicModelGateway
 from property_agent.agent.orchestration import (
     ObjectiveClassification,
     PlanStep,
@@ -24,6 +23,7 @@ from property_agent.agent.state import AgentState
 from property_agent.platform.adapters.api.dependencies import RequestContext
 from property_agent.platform.application.hashing import canonical_hash
 from property_agent.platform.context import ExecutionSource
+from tests.agent.pr5_semantic_fakes import StaticPlanningGateway, proposal, step
 
 
 def _runtime(*, prepared_write=None):
@@ -48,7 +48,25 @@ def _state(text):
 
 
 def test_planner_builds_conditional_repair_plan_instead_of_blind_create():
-    planner = SupervisorPlanner(DeterministicModelGateway())
+    planner = SupervisorPlanner(
+        StaticPlanningGateway(
+            proposal(
+                step("repair-read", "repair", "repair_list", "查找等价活跃报修"),
+                step(
+                    "repair-create",
+                    "repair",
+                    "repair_create",
+                    "不存在等价工单时提交报修",
+                    parameters={"description": "厨房漏水", "location": "厨房"},
+                    dependencies=("repair-read",),
+                    condition={
+                        "kind": "no-equivalent-active-repair",
+                        "semantic_goal": "没有等价的活跃厨房漏水报修",
+                    },
+                ),
+            )
+        )
+    )
 
     plan = planner.create_plan(
         _state("厨房一直漏水，看看之前有没有报修，如果没有帮我报一个。"), _runtime()
@@ -61,7 +79,14 @@ def test_planner_builds_conditional_repair_plan_instead_of_blind_create():
 
 
 def test_planner_builds_minimal_repair_billing_multi_domain_plan():
-    planner = SupervisorPlanner(DeterministicModelGateway())
+    planner = SupervisorPlanner(
+        StaticPlanningGateway(
+            proposal(
+                step("repair-read", "repair", "repair_list", "查询报修进度"),
+                step("billing-read", "billing", "billing_query", "查询本期费用"),
+            )
+        )
+    )
 
     plan = planner.create_plan(
         _state("查一下我的报修进度，顺便看看这个月物业费有没有欠。"), _runtime()
@@ -76,7 +101,21 @@ def test_planner_builds_minimal_repair_billing_multi_domain_plan():
 
 
 def test_planner_builds_conditional_inspection_to_announcement_plan():
-    plan = SupervisorPlanner(DeterministicModelGateway()).create_plan(
+    semantic = proposal(
+        step("inspection-read", "inspection", "inspection_list", "核验电梯巡检发现"),
+        step(
+            "announcement-draft",
+            "announcement",
+            "announcement_draft",
+            "在发现相关电梯问题时准备公告",
+            dependencies=("inspection-read",),
+            condition={
+                "kind": "relevant-inspection-issue",
+                "semantic_goal": "巡检发现与电梯故障相关的问题",
+            },
+        ),
+    )
+    plan = SupervisorPlanner(StaticPlanningGateway(semantic)).create_plan(
         _state("看看电梯故障有没有巡检发现，如果真的有问题，准备一份业主公告。"),
         _runtime(),
     )
@@ -89,22 +128,22 @@ def test_planner_builds_conditional_inspection_to_announcement_plan():
 
 
 def test_general_help_has_no_unnecessary_capability_step():
-    plan = SupervisorPlanner(DeterministicModelGateway()).create_plan(
-        _state("你好，你能做什么？"), _runtime()
-    )
+    plan = SupervisorPlanner(
+        StaticPlanningGateway(proposal(classification="general-help"))
+    ).create_plan(_state("你好，你能做什么？"), _runtime())
     assert plan.objective_classification is ObjectiveClassification.GENERAL_HELP
     assert plan.steps == ()
 
 
-def test_malformed_gateway_analysis_uses_safe_deterministic_fallback():
+def test_malformed_gateway_proposal_fails_closed_without_lexical_reconstruction():
     class MalformedGateway:
-        def analyze_with_context(self, *_args, **_kwargs):
+        def propose_plan(self, *_args, **_kwargs):
             return {"intent": "REPAIR", "steps": "not-a-schema"}
 
     plan = SupervisorPlanner(MalformedGateway()).create_plan(_state("我要报修"), _runtime())
 
-    assert plan.objective_classification is ObjectiveClassification.SINGLE_DOMAIN
-    assert [step.capability for step in plan.steps] == ["repair_create"]
+    assert plan.objective_classification is ObjectiveClassification.UNCERTAIN
+    assert plan.steps == ()
 
 
 def test_contextual_repair_followup_uses_history_and_prior_semantic_slots():
@@ -116,14 +155,22 @@ def test_contextual_repair_followup_uses_history_and_prior_semantic_slots():
     ]
     state.slots.update(description="厨房漏水", location="厨房")
 
-    plan = SupervisorPlanner(DeterministicModelGateway()).create_plan(state, _runtime())
+    semantic = proposal(
+        step(
+            "repair-create",
+            "repair",
+            "repair_create",
+            "提交上下文所指的厨房漏水报修",
+            parameters={"description": "厨房漏水", "location": "厨房"},
+        )
+    )
+    plan = SupervisorPlanner(StaticPlanningGateway(semantic)).create_plan(state, _runtime())
 
     assert [step.capability for step in plan.steps] == ["repair_create"]
     assert plan.steps[0].parameters["location"] == "厨房"
 
 
 def test_explicit_inspection_and_announcement_actions_map_to_canonical_capabilities():
-    planner = SupervisorPlanner(DeterministicModelGateway())
     inspection = _state("上报安防事件")
     inspection.slots.update(
         action="report_event",
@@ -135,8 +182,32 @@ def test_explicit_inspection_and_announcement_actions_map_to_canonical_capabilit
     announcement = _state("立即发布公告")
     announcement.slots.update(action="publish", announcement_id=str(uuid4()), expected_version=1)
 
-    inspection_plan = planner.create_plan(inspection, _runtime())
-    announcement_plan = planner.create_plan(announcement, _runtime())
+    inspection_plan = SupervisorPlanner(
+        StaticPlanningGateway(
+            proposal(
+                step(
+                    "security-write",
+                    "inspection",
+                    "security_event_create",
+                    "上报安防事件",
+                    parameters=dict(inspection.slots),
+                )
+            )
+        )
+    ).create_plan(inspection, _runtime())
+    announcement_plan = SupervisorPlanner(
+        StaticPlanningGateway(
+            proposal(
+                step(
+                    "announcement-publish",
+                    "announcement",
+                    "announce_publish",
+                    "发布现有公告",
+                    parameters=dict(announcement.slots),
+                )
+            )
+        )
+    ).create_plan(announcement, _runtime())
 
     assert inspection_plan.steps[0].capability == "security_event_create"
     assert announcement_plan.steps[0].capability == "announce_publish"
@@ -204,6 +275,33 @@ def test_inspection_not_found_requests_materially_different_replan():
     assert result.outcome is SpecialistOutcome.REPLAN
     assert result.reason_code == "TASK_NOT_FOUND"
     assert result.data["replacement_capability"] == "inspection_list"
+    assert result.data["replacement_parameters"]["target"] == "task"
+
+
+def test_inspection_event_not_found_replans_to_event_discovery_with_filters():
+    def missing(_request, _runtime):
+        raise CapabilityDomainError("EVENT_NOT_FOUND", "未找到安防事件")
+
+    step_value = PlanStep(
+        "inspection-event",
+        "inspection",
+        SpecialistName.INSPECTION,
+        "get described event",
+        capability="inspection_get_event",
+        parameters={"event_id": str(uuid4()), "risk_levels": ("HIGH_RISK",), "limit": 5},
+    )
+    result = InspectionSpecialist(_executor({"inspection_get_event": missing})).invoke(
+        step_value, _state("查询所指事件"), _runtime(), ()
+    )
+
+    assert result.outcome is SpecialistOutcome.REPLAN
+    assert result.reason_code == "EVENT_NOT_FOUND"
+    assert result.data["replacement_capability"] == "inspection_list"
+    assert result.data["replacement_parameters"] == {
+        "target": "event",
+        "limit": 5,
+        "risk_levels": ("HIGH_RISK",),
+    }
 
 
 def test_non_null_prepared_write_does_not_confirm_a_different_exact_action():

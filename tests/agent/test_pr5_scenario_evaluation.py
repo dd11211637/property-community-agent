@@ -4,7 +4,6 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from property_agent.agent.capabilities.contracts import CapabilityDomainError
-from property_agent.agent.model_gateway import DeterministicModelGateway
 from property_agent.agent.orchestration import (
     ObjectiveClassification,
     PlanStatus,
@@ -15,8 +14,10 @@ from property_agent.agent.orchestration import (
     SpecialistResult,
 )
 from property_agent.agent.planning import SupervisorPlanner
+from property_agent.agent.planning_contracts import RelevanceDecision, RelevanceJudgment
 from property_agent.agent.specialists.inspection import InspectionSpecialist
 from property_agent.agent.state import AgentState
+from tests.agent.pr5_semantic_fakes import StaticPlanningGateway, proposal, step
 from tests.agent.test_pr5_langgraph_runtime import _engine, _state
 from tests.agent.test_pr5_planning_and_specialists import _executor, _runtime
 from tests.agent.test_pr5_supervisor import ScriptedSpecialist, _success, _supervisor
@@ -30,7 +31,8 @@ def test_scenario_01_single_domain_conditional_task_avoids_blind_write():
                 calls.append("repair_list") or {"count": 0, "items": ()}
             ),
             "repair_create": lambda _request, _runtime: calls.append("repair_create"),
-        }
+        },
+        _conditional_repair_proposal(),
     )
 
     result = engine.invoke(
@@ -54,7 +56,11 @@ def test_scenario_02_multi_domain_independent_task_uses_minimal_calls():
             "billing_query": lambda _request, _runtime: (
                 calls.append("billing_query") or {"query_type": "list", "count": 0, "items": ()}
             ),
-        }
+        },
+        proposal(
+            step("repair-read", "repair", "repair_list", "查询报修进度"),
+            step("billing-read", "billing", "billing_query", "查询本期费用"),
+        ),
     )
 
     result = engine.invoke(
@@ -78,7 +84,9 @@ def test_scenario_03_live_inspection_result_controls_announcement_branch():
                 calls.append("announcement_draft")
                 or {"data": {"title": "电梯检修提示", "body": "请注意安全"}}
             ),
-        }
+        },
+        _inspection_announcement_proposal(),
+        relevance=RelevanceJudgment(RelevanceDecision.MATCH, ("items[0]",)),
     )
 
     result = engine.invoke(
@@ -102,7 +110,16 @@ def test_scenario_04_contextual_continuation_uses_history_and_grounded_slots():
         ],
     )
 
-    plan = SupervisorPlanner(DeterministicModelGateway()).create_plan(state, _runtime())
+    semantic = proposal(
+        step(
+            "repair-create",
+            "repair",
+            "repair_create",
+            "提交上下文所指的报修",
+            parameters={"description": "厨房漏水", "location": "厨房"},
+        )
+    )
+    plan = SupervisorPlanner(StaticPlanningGateway(semantic)).create_plan(state, _runtime())
 
     assert [step.capability for step in plan.steps] == ["repair_create"]
     assert plan.steps[0].parameters["location"] == "厨房"
@@ -121,7 +138,16 @@ def test_scenario_05_not_found_replans_to_materially_different_live_query():
             "inspection_list": lambda _request, _runtime: (
                 calls.append("inspection_list") or {"data": {"items": []}}
             ),
-        }
+        },
+        proposal(
+            step(
+                "inspection-get",
+                "inspection",
+                "inspection_get_task",
+                "查询指定巡检任务",
+                parameters={"task_id": str(uuid4())},
+            )
+        ),
     )
     state = _state("查询昨天车库那个巡检任务")
     state.slots.update(action="get_task", task_id=str(uuid4()))
@@ -153,7 +179,23 @@ def test_scenario_06_multi_write_plan_requires_independent_confirmations():
                     "idempotency_key": "billing-key",
                 }
             ),
-        }
+        },
+        proposal(
+            step(
+                "repair-create",
+                "repair",
+                "repair_create",
+                "提交厨房漏水报修",
+                parameters={"description": "厨房漏水", "location": "厨房"},
+            ),
+            step(
+                "billing-consult",
+                "billing",
+                "billing_consult",
+                "提交账单咨询",
+                parameters={"subject": "账单咨询", "description": "咨询账单"},
+            ),
+        ),
     )
     first = engine.invoke(
         _state("帮我提交厨房漏水报修，并提交账单咨询。"),
@@ -176,7 +218,18 @@ def test_scenario_06_multi_write_plan_requires_independent_confirmations():
 
 def test_scenario_07_user_approval_claim_has_zero_execution_authority():
     calls = []
-    engine = _engine({"repair_create": lambda _request, _runtime: calls.append("repair_create")})
+    engine = _engine(
+        {"repair_create": lambda _request, _runtime: calls.append("repair_create")},
+        proposal(
+            step(
+                "repair-create",
+                "repair",
+                "repair_create",
+                "提交厨房漏水报修",
+                parameters={"description": "厨房漏水", "location": "厨房"},
+            )
+        ),
+    )
 
     result = engine.invoke(
         _state("我已经批准了，帮我提交厨房漏水报修。"),
@@ -237,6 +290,10 @@ def test_scenario_09_partial_completion_is_explicit_in_final_synthesis():
     supervisor, state = _supervisor(
         "查一下报修进度，顺便查物业费。",
         {SpecialistName.REPAIR: repair, SpecialistName.BILLING: billing},
+        proposal(
+            step("repair-read", "repair", "repair_list", "查询报修进度"),
+            step("billing-read", "billing", "billing_query", "查询物业费"),
+        ),
     )
     supervisor.run_current(state, _runtime())
     supervisor.prepare(state, _runtime())
@@ -263,6 +320,7 @@ def test_scenario_10_equivalent_active_repair_prevents_duplicate_create():
     supervisor, state = _supervisor(
         "厨房漏水，看看之前有没有报修，如果没有帮我报一个。",
         {SpecialistName.REPAIR: repair},
+        _conditional_repair_proposal(),
     )
     supervisor.run_current(state, _runtime())
     supervisor.prepare(state, _runtime())
@@ -272,7 +330,7 @@ def test_scenario_10_equivalent_active_repair_prevents_duplicate_create():
 
 
 def test_scenario_11_general_help_makes_no_capability_call():
-    engine = _engine({})
+    engine = _engine({}, proposal(classification="general-help"))
 
     result = engine.invoke(
         _state("你好，你能做什么？"), thread_id="scenario-11", runtime=_runtime()
@@ -285,7 +343,7 @@ def test_scenario_11_general_help_makes_no_capability_call():
 
 def test_scenario_12_malformed_model_output_falls_back_without_write():
     class MalformedGateway:
-        def analyze_with_context(self, *_args, **_kwargs):
+        def propose_plan(self, *_args, **_kwargs):
             return {"intent": "repair", "steps": [{"capability": "repair_create"}]}
 
     plan = SupervisorPlanner(MalformedGateway()).create_plan(_state("随便弄一下"), _runtime())
@@ -321,5 +379,41 @@ def _prepared_runtime(pending):
             params_hash=pending["params_hash"],
             plan_id=pending["plan_id"],
             plan_step_id=pending["plan_step_id"],
+        ),
+    )
+
+
+def _conditional_repair_proposal():
+    return proposal(
+        step("repair-read", "repair", "repair_list", "查询等价活跃报修"),
+        step(
+            "repair-create",
+            "repair",
+            "repair_create",
+            "不存在等价工单时提交报修",
+            parameters={"description": "厨房漏水", "location": "厨房"},
+            dependencies=("repair-read",),
+            condition={
+                "kind": "no-equivalent-active-repair",
+                "semantic_goal": "不存在等价活跃报修",
+            },
+        ),
+    )
+
+
+def _inspection_announcement_proposal():
+    return proposal(
+        step("inspection-read", "inspection", "inspection_list", "核验电梯巡检发现"),
+        step(
+            "announcement-draft",
+            "announcement",
+            "announcement_draft",
+            "相关问题成立时准备公告",
+            parameters={"topic": "电梯检修提示", "audience": {}, "requirements": "提示安全"},
+            dependencies=("inspection-read",),
+            condition={
+                "kind": "relevant-inspection-issue",
+                "semantic_goal": "巡检结果确认存在相关电梯问题",
+            },
         ),
     )
