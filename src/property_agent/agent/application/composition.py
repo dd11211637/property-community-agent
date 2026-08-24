@@ -45,6 +45,7 @@ def _build_v2_engine(app: FastAPI) -> Any | None:
             LangGraphEngine,
             build_saver_resource,
         )
+
         is_sqlite = settings.database_url.strip().lower().startswith("sqlite")
         dsn = None
         if not is_sqlite:

@@ -84,8 +84,9 @@ def test_official_state_graph_captures_exact_current_execution_cursor():
     calls = []
     supervisor = _supervisor(
         {
-            "repair_list": lambda _request, _runtime: calls.append("repair_list")
-            or {"count": 0, "items": ()}
+            "repair_list": lambda _request, _runtime: (
+                calls.append("repair_list") or {"count": 0, "items": ()}
+            )
         }
     )
     engine = LangGraphEngine(build_saver_resource(in_memory=True).saver, supervisor)
