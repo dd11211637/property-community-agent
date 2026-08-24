@@ -96,6 +96,52 @@ def test_general_help_has_no_unnecessary_capability_step():
     assert plan.steps == ()
 
 
+def test_malformed_gateway_analysis_uses_safe_deterministic_fallback():
+    class MalformedGateway:
+        def analyze_with_context(self, *_args, **_kwargs):
+            return {"intent": "REPAIR", "steps": "not-a-schema"}
+
+    plan = SupervisorPlanner(MalformedGateway()).create_plan(_state("我要报修"), _runtime())
+
+    assert plan.objective_classification is ObjectiveClassification.SINGLE_DOMAIN
+    assert [step.capability for step in plan.steps] == ["repair_create"]
+
+
+def test_contextual_repair_followup_uses_history_and_prior_semantic_slots():
+    state = _state("那就帮我处理。")
+    state.messages = [
+        {"role": "user", "content": "那个报修怎么样了？"},
+        {"role": "assistant", "content": "没有找到活跃报修。"},
+        {"role": "user", "content": "那就帮我处理。"},
+    ]
+    state.slots.update(description="厨房漏水", location="厨房")
+
+    plan = SupervisorPlanner(DeterministicModelGateway()).create_plan(state, _runtime())
+
+    assert [step.capability for step in plan.steps] == ["repair_create"]
+    assert plan.steps[0].parameters["location"] == "厨房"
+
+
+def test_explicit_inspection_and_announcement_actions_map_to_canonical_capabilities():
+    planner = SupervisorPlanner(DeterministicModelGateway())
+    inspection = _state("上报安防事件")
+    inspection.slots.update(
+        action="report_event",
+        event_type="FIRE_HAZARD",
+        risk_level="LOW_RISK",
+        location="车库",
+        description="发现烟雾和明火",
+    )
+    announcement = _state("立即发布公告")
+    announcement.slots.update(action="publish", announcement_id=str(uuid4()), expected_version=1)
+
+    inspection_plan = planner.create_plan(inspection, _runtime())
+    announcement_plan = planner.create_plan(announcement, _runtime())
+
+    assert inspection_plan.steps[0].capability == "security_event_create"
+    assert announcement_plan.steps[0].capability == "announce_publish"
+
+
 def test_specialist_allowlists_are_exact_registry_domain_views():
     executor = _executor({})
     specialists = (

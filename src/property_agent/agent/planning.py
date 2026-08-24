@@ -65,12 +65,16 @@ class SupervisorPlanner:
         try:
             method = getattr(self._gateway, "analyze_with_context", None)
             if method is not None:
-                return method(text, history=list(state.messages[-12:]), trusted_context=trusted)
-            return self._gateway.analyze(text)
+                analysis = method(text, history=list(state.messages[-12:]), trusted_context=trusted)
+            else:
+                analysis = self._gateway.analyze(text)
         except (AttributeError, ModelGatewayError):
-            return self._fallback.analyze_with_context(
+            analysis = None
+        if not isinstance(getattr(analysis, "intent", None), str):
+            analysis = self._fallback.analyze_with_context(
                 text, history=list(state.messages[-12:]), trusted_context=trusted
             )
+        return analysis
 
     @staticmethod
     def _ordered_domains(text: str) -> list[str]:
@@ -123,8 +127,8 @@ class SupervisorPlanner:
         if domain == "billing":
             return [self._billing_step(text, dependency)]
         if domain == "inspection":
-            return [self._inspection_step(text, dependency)]
-        return [self._announcement_step(text, dependency)]
+            return [self._inspection_step(text, dependency, semantic_slots)]
+        return [self._announcement_step(text, dependency, semantic_slots)]
 
     def _repair_steps(
         self,
@@ -148,7 +152,9 @@ class SupervisorPlanner:
                 "if_no_equivalent_active_repair",
             )
             return [read, create]
-        if self._is_write(text, ("提交", "创建", "新建", "帮我报", "报一个", "我要报修")):
+        if self._is_write(
+            text, ("提交", "创建", "新建", "帮我报", "报一个", "我要报修", "帮我处理")
+        ):
             return [
                 self._step(
                     "repair-create",
@@ -195,8 +201,32 @@ class SupervisorPlanner:
             "billing-read", "billing", "billing_query", "查询账单事实", dependency, parameters
         )
 
-    def _inspection_step(self, text: str, dependency: tuple[str, ...]) -> PlanStep:
-        slots = self._fallback.extract_slots(text, "INSPECTION")
+    def _inspection_step(
+        self, text: str, dependency: tuple[str, ...], semantic_slots: dict[str, Any]
+    ) -> PlanStep:
+        slots = {**self._fallback.extract_slots(text, "INSPECTION"), **semantic_slots}
+        action = str(slots.get("action") or "")
+        capabilities = {
+            "get_task": "inspection_get_task",
+            "get_event": "inspection_get_event",
+            "create": "inspection_create",
+            "start_task": "inspection_start_task",
+            "add_record": "inspection_add_record",
+            "submit_records": "inspection_submit_records",
+            "ai_suggest": "inspection_ai_suggest",
+            "report_event": "security_event_create",
+            "submit_disposal": "security_event_submit_disposal",
+            "close_high_risk": "close_high_risk_event",
+        }
+        if action in capabilities:
+            return self._step(
+                "inspection-action",
+                "inspection",
+                capabilities[action],
+                "执行巡检或安防目标",
+                dependency,
+                dict(slots),
+            )
         parameters = {
             "target": "event" if any(cue in text for cue in ("事件", "安防")) else "task",
             "statuses": tuple(slots.get("statuses") or ()),
@@ -213,7 +243,27 @@ class SupervisorPlanner:
             parameters,
         )
 
-    def _announcement_step(self, text: str, dependency: tuple[str, ...]) -> PlanStep:
+    def _announcement_step(
+        self, text: str, dependency: tuple[str, ...], semantic_slots: dict[str, Any]
+    ) -> PlanStep:
+        action = str(semantic_slots.get("action") or "")
+        actions = {
+            "get": "announcement_get",
+            "draft": "announcement_draft",
+            "revise": "announcement_revise",
+            "create": "announcement_create_draft",
+            "publish": "announce_publish",
+            "schedule": "announcement_schedule_publish",
+        }
+        if action in actions:
+            return self._step(
+                "announcement-action",
+                "announcement",
+                actions[action],
+                "执行公告目标",
+                dependency,
+                dict(semantic_slots),
+            )
         conditional = bool(dependency) and any(cue in text for cue in ("如果", "确实", "真的"))
         if any(cue in text for cue in ("准备", "起草", "写一份", "公告")):
             parameters = {"topic": text[:200], "audience": {}, "requirements": text[:4000]}
