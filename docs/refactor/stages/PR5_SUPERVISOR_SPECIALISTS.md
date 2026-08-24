@@ -194,12 +194,14 @@ PR5 MUST define a typed schema validated before execution. A suitable conceptual
 Plan
   plan_id
   objective
+  objective_classification  # single-domain | multi-domain | general-help | uncertain
   steps: tuple[PlanStep, ...]
   status
   current_step_id
 
 PlanStep
   step_id
+  domain
   specialist
   goal
   dependencies
@@ -216,6 +218,16 @@ approval truth, confirmation token, or transaction authority.
 The plan is mutable orchestration state, not business truth. It MAY refer to bounded prior
 results, but any live business fact needed for a later action MUST be re-read through a
 capability/Application Service. Live authoritative state wins over prior narrative.
+
+Top-level objective classification and step-local execution routing are distinct. The
+top-level objective MAY be single-domain, multi-domain, general help, or uncertain. PR5 does
+not require changing the existing `Intent` enum to represent that classification. Global
+intent/objective is orchestration context only; it is not per-step execution authority.
+
+Each executable `PlanStep` MUST carry, or allow deterministic derivation of, its `domain`,
+`specialist`, and optional capability hint/proposal. The step-local tuple is validated before
+delegation as described in section 11. A multi-domain plan therefore does not require every
+step to agree with one global `AgentState.intent`.
 
 Malformed, oversized, cyclic, dependency-invalid, unknown-specialist, or policy-invalid
 plans MUST fail closed to clarification, a safe public error, or handover. They MUST NOT be
@@ -344,15 +356,22 @@ lease/fence.
 
 ## 11. Routing contract
 
-The model MAY suggest a domain or specialist. Deterministic routing MUST verify:
+The model MAY suggest a top-level objective classification, step domain, or specialist.
+Deterministic routing operates on the **current PlanStep**, not one global intent. It MUST
+verify:
 
 - the specialist exists and is enabled for this v2 runtime;
-- the current intent/domain maps to that specialist;
-- any proposed capability exists and belongs to its allowlist;
+- `PlanStep.domain` maps to that specialist's server-owned domain;
+- any proposed capability exists, its `CapabilitySpec.domain` equals `PlanStep.domain`, and
+  it belongs to that specialist's canonical allowlist;
 - trusted scope is valid at the protected boundary;
 - required dependencies are completed;
 - execution budget remains; and
 - the transition is permitted by the graph and current orchestration outcome.
+
+The initial/global intent MUST NOT suppress a valid later cross-domain step. For example, a
+Repair + Billing objective may legally execute a Repair step followed by a Billing step when
+each step independently passes the domain/specialist/capability validation above.
 
 Unknown or ambiguous requests MUST lead to clarification or safe general help. Uncertainty
 MUST NOT default to a write specialist. Authorization MUST never be guessed.
@@ -371,9 +390,28 @@ PR5 MUST add explicit server-created ceilings for at least:
 - duplicate capability fingerprints.
 
 Exact defaults are an implementation decision backed by tests and operational evidence.
-The ceilings and deadline belong to immutable `RuntimeContext`/execution policy. Mutable
+The ceilings and deadline belong to immutable, server-controlled execution policy. Mutable
 counters and fingerprints MAY be checkpointed in `AgentState`. The model, plan, specialist,
 checkpoint, request body, or resume value MUST NOT raise a ceiling or reset a deadline.
+
+The plan/execution deadline MUST use a restart-safe server-created budget epoch, such as
+`started_at_utc` plus `deadline_at_utc`, or a verified equivalent durable representation.
+The exact storage/schema is an implementation decision for the production PR, but the
+original accepted epoch MUST be reconstructable by the shared lifecycle from trusted,
+server-controlled semantics. A raw `time.monotonic()` timestamp is process-local: it MUST
+NOT be persisted and interpreted as an absolute deadline after process restart.
+
+Within one process, execution MAY derive a local monotonic deadline from the remaining
+wall-clock duration. On resume, the effective deadline MUST be no later than:
+
+```text
+min(original accepted plan deadline, current stricter server-policy deadline)
+```
+
+Clarification, interrupt, process restart, and resume of the same active plan preserve its
+budget epoch, counters, and completed dependencies; none resets or extends the deadline.
+Current server policy MAY narrow the remaining duration. Only a new independent plan created
+after terminal completion may receive a fresh server-created budget epoch.
 
 All counters need one canonical owner. Existing capability `max_steps`, `max_calls`,
 deadline, allowlist, and duplicate protection MUST be composed with Supervisor limits, not
@@ -454,6 +492,20 @@ NOT authorize unrelated future writes. Every later write requires its own indepe
 bound confirmation unless an existing Application Service exposes an explicit reviewed bulk
 operation contract.
 
+`PreparedWrite` is trusted material for **one exact confirmed business action**. Before it
+can make an invocation human-confirmed, the shared lifecycle/execution boundary MUST verify
+that its server-owned binding matches the current capability/action and `params_hash`. It
+SHOULD also bind the current `plan_id` and `plan_step_id`, or an equivalent server-owned
+execution identity. PR5 does not mandate exact field names, but non-null
+`RuntimeContext.prepared_write` alone is never sufficient.
+
+After successful execution or cancellation, that material is consumed or invalidated for
+orchestration use. If write A is followed by write B, material for A MUST fail closed for B.
+The Supervisor must create `ProposedAction` B, interrupt again, receive a new exact
+confirmation, and reconstruct a new `PreparedWrite` binding before B can execute. Safe
+read-only steps MAY continue after A without another confirmation; every later write passes
+its own HITL gate.
+
 Cancel produces zero mutation and invalidates the pending orchestration action.
 
 ## 17. Interrupt and plan state boundary
@@ -476,6 +528,30 @@ It MUST NOT persist as authority:
 
 Resume reconstructs fresh trusted context, resolves the exact accepted cursor, runs shared
 recovery, and revalidates every protected boundary before graph resume.
+
+### 17.1 Plan lifecycle
+
+One conversation has at most one active plan and at most one active pending confirmation
+action. Clarification, interrupt, restart, and resume of the same active plan preserve its
+plan identity, budget epoch, mutable counters, and completed dependencies. After a plan is
+terminal, a later independent user goal MAY create a new plan, new counters, and a fresh
+server-created budget epoch.
+
+### 17.2 Normal messages while `WAITING_CONFIRM`
+
+The current baseline permits `ConversationService.start` to encounter an existing
+`WAITING_CONFIRM` conversation, so PR5 MUST add deterministic lifecycle semantics above that
+fact. A normal `POST /messages` while an exact pending action exists MUST NOT start or replace
+another plan. The default behavior is to return/re-present the current pending confirmation
+and require its resolution, without changing the accepted pending action.
+
+Only an explicit, supported cancel or modify command MAY change that state. Under the
+conversation lease, the shared lifecycle MUST first invalidate the exact old pending action
+and publish that invalidation through accepted-head CAS. Only after CAS succeeds may it
+replan or create a replacement proposal. Modification creates a new `params_hash`, a new
+interrupt, and a new confirmation; the old `action_hash` and old prepared-write material
+MUST fail closed. No implicit replacement, second active write plan, binding reuse, or
+conversion of the old confirmation into a new action is permitted.
 
 ## 18. Accepted-head ownership
 
@@ -605,7 +681,12 @@ business mutation path.
 - valid typed plans execute; malformed/cyclic/oversized plans fail closed;
 - unknown specialists and wrong-domain capabilities are rejected;
 - model suggestions cannot override deterministic routing or plan validation;
-- Supervisor step and replan counts are bounded.
+- Supervisor step and replan counts are bounded;
+- a Repair + Billing two-step plan is valid even when the initial/global intent names only
+  the first domain;
+- the wrong specialist for `PlanStep.domain` is rejected;
+- a `CapabilitySpec.domain` / specialist / PlanStep mismatch is rejected; and
+- global initial intent cannot suppress a valid later cross-domain step.
 
 ### 25.2 Specialist statelessness
 
@@ -654,7 +735,11 @@ For each of the four specialists, structural and behavioral tests prove:
 - maximum delegations/calls/cross-domain/clarification loops are enforced;
 - duplicate capability fingerprint is blocked;
 - model/checkpoint/request cannot raise a budget;
-- deadline remains the original server ceiling across interrupt/restart/resume; and
+- process restart with a different monotonic origin reconstructs remaining time from the
+  restart-safe server budget epoch;
+- deadline is not reset or extended on clarification, interrupt, restart, or resume;
+- the current stricter server-policy deadline wins on resume;
+- checkpoint/model/request cannot extend the original accepted deadline; and
 - a policy denial cannot be converted into a retry plan.
 
 ### 25.7 HITL
@@ -665,7 +750,11 @@ For each of the four specialists, structural and behavioral tests prove:
 - confirmed action executes once;
 - cancel executes zero mutations;
 - replay cannot execute twice; and
-- every later write receives its own exact binding/confirmation.
+- every later write receives its own exact binding/confirmation;
+- in a two-write plan, confirming A executes A exactly once while B remains zero-mutation
+  and interrupts separately; and
+- attempting to use A's `PreparedWrite` for B fails closed on capability/action,
+  `params_hash`, or step binding.
 
 ### 25.8 Recovery and concurrency
 
@@ -674,6 +763,15 @@ Wrong actor, wrong community, revoked house, expired confirmation, wrong action 
 lease, stale fence, stale accepted CAS, runtime mismatch, and orphan/latest internal cursor
 all fail closed. First checkpoint CAS, heartbeat, accepted publication ordering, close race,
 and next-normal-turn stale-checkpoint isolation remain covered.
+
+Additionally:
+
+- an ordinary message during `WAITING_CONFIRM` cannot overwrite the pending action or start
+  a second plan;
+- explicit cancel invalidates exactly that action through accepted-head CAS before replanning;
+- explicit modification creates a new `params_hash` and requires a new confirmation;
+- the old `action_hash` cannot confirm the modified action; and
+- budget epoch/counters do not reset through clarification, interrupt, or resume.
 
 ### 25.9 Trust boundary
 
@@ -785,9 +883,13 @@ evidence, or a clean static scan.
 - [ ] Exact canonical capability allowlists are domain-scoped.
 - [ ] No Supervisor/specialist direct DB, repository, UoW, or business AppService path.
 - [ ] Model plans are typed proposals and deterministically validated.
+- [ ] Cross-domain routing is step-local, not constrained by one global intent.
 - [ ] Budget ceilings/deadline are immutable server facts; counters have one owner.
+- [ ] Restart-safe budget epoch survives resume; raw monotonic timestamps do not.
 - [ ] Replanning cannot bypass `DENY`, `HUMAN_ONLY`, HITL, scope, or duplicate guards.
 - [ ] One confirmation binds one exact current pending action.
+- [ ] `PreparedWrite` is exact capability/params/step material and cannot authorize a later write.
+- [ ] `WAITING_CONFIRM` admits no implicit pending-action or active-plan replacement.
 - [ ] Accepted-head publication and exact-cursor ownership remain in shared lifecycle.
 - [ ] Runtime pin remains `Conversation.runtime_version` only.
 - [ ] v2 never hides a v1 graph fallback.
