@@ -88,7 +88,11 @@ class StatelessSpecialist:
                 step.step_id,
                 self.name,
                 capability=capability,
-                data={"parameters": parameters, "params_hash": params_hash},
+                data={
+                    "parameters": parameters,
+                    "params_hash": params_hash,
+                    "operation_level": result.decision.effective_risk.value,
+                },
                 public_message="该操作需要您确认后才能执行。",
                 reason_code=code,
                 fingerprint=result.fingerprint,

@@ -396,6 +396,33 @@ def test_inspection_location_correction_overwrites_previous_value(session_factor
     )
 
 
+def test_v2_ordinary_message_re_presents_exact_pending_without_checkpoint_write(
+    session_factory, ctx
+):
+    runner, _, checkpoint, _, _ = boot(session_factory)
+    first = runner.start(
+        conversation_id="conv-v2-pending",
+        context=ctx,
+        user_text="我要报修",
+        house_id=next(iter(ctx.house_ids)),
+        slots=dict(REPAIR_SLOTS),
+        runtime_version="v2",
+    )
+    version = checkpoint.version_of("conv-v2-pending")
+
+    repeated = runner.start(
+        conversation_id="conv-v2-pending",
+        context=ctx,
+        user_text="请继续处理",
+    )
+
+    assert repeated.awaiting_confirmation
+    assert repeated.interrupt["action"] == first.interrupt["action"]
+    assert repeated.interrupt["action_hash"] == first.interrupt["action_hash"]
+    assert repeated.state.pending_action == first.state.pending_action
+    assert checkpoint.version_of("conv-v2-pending") == version
+
+
 # ------------------------------ Conversation 业务表 ------------------------------
 
 

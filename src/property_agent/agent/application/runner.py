@@ -36,6 +36,10 @@ from property_agent.agent.application.graph_engine import (
     GraphExecutionResult,
     LegacyGraphEngine,
 )
+from property_agent.agent.application.pending_confirmation import (
+    confirmation_envelope,
+    is_supported_pending_revision,
+)
 from property_agent.agent.application.recovery import AgentRecoveryService
 from property_agent.agent.application.runner_signals import (
     first_turn_inspection_signal as _first_turn_inspection_signal,  # noqa: F401
@@ -87,6 +91,7 @@ class _TurnPlan:
     conversation: Any
     expected_version: int | None
     repair_followup_message: str | None
+    represent_pending: bool = False
     engine: "GraphEngine | None" = None
     heartbeat: "LeaseHeartbeat | None" = None
 
@@ -151,6 +156,8 @@ class AgentSessionRunner:
                 runtime_version=runtime_version,
                 runtime_route=runtime_route,
             )
+            if plan.represent_pending:
+                return self._pending_turn(plan)
             if plan.repair_followup_message:
                 return self._return_done(plan.ctx, plan.state, conversation_id, user_text)
             with self._observability.observe_turn(
@@ -217,6 +224,10 @@ class AgentSessionRunner:
                 runtime_version=runtime_version,
                 runtime_route=runtime_route,
             )
+            if plan.represent_pending:
+                yield ("run_started", {"conversation_id": conversation_id})
+                yield ("__turn__", self._pending_turn(plan))
+                return
             if plan.repair_followup_message:
                 turn = self._return_done(plan.ctx, plan.state, conversation_id, user_text)
                 yield ("run_started", {"conversation_id": conversation_id})
@@ -291,6 +302,23 @@ class AgentSessionRunner:
         )
         current_house_id = house_id or conversation.current_house_id
         previous = self._recovery.peek(conversation_id)
+        represent_pending = bool(
+            conversation.is_v2
+            and previous is not None
+            and previous.pending_action is not None
+            and not is_supported_pending_revision(user_text, previous)
+        )
+        if represent_pending:
+            return _TurnPlan(
+                lease=lease,
+                ctx=ctx,
+                state=previous,
+                conversation=conversation,
+                expected_version=self._turn_guard.version(conversation_id),
+                repair_followup_message=None,
+                represent_pending=True,
+                engine=engine or LegacyGraphEngine(self._graph),
+            )
         prepared = prepare_start_state(
             conversation_id=conversation_id,
             context=ctx,
@@ -315,6 +343,15 @@ class AgentSessionRunner:
             repair_followup_message=prepared.repair_followup_message,
             engine=engine or LegacyGraphEngine(self._graph),
             heartbeat=heartbeat,
+        )
+
+    @staticmethod
+    def _pending_turn(plan: "_TurnPlan") -> AgentTurn:
+        return AgentTurn(
+            state=plan.state,
+            conversation=plan.conversation,
+            interrupt=confirmation_envelope(plan.state),
+            done=False,
         )
 
     def _return_done(

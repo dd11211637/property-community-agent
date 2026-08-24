@@ -41,6 +41,10 @@ def runtime_for(plan: Any, *, token: str | None = None) -> RuntimeContext:
                 {"conversation_id": plan.state.conversation_id, "action": params}
             ),
             approval_ref=plan.state.approval_ref,
+            capability=params.get("tool"),
+            params_hash=params.get("params_hash"),
+            plan_id=params.get("plan_id"),
+            plan_step_id=params.get("plan_step_id"),
         )
     return RuntimeContext.from_request_context(
         plan.ctx,

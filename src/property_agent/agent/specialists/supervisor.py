@@ -22,6 +22,7 @@ from property_agent.agent.orchestration import (
 from property_agent.agent.planning import SupervisorPlanner
 from property_agent.agent.runtime import RuntimeContext
 from property_agent.agent.state import AgentState, ProposedAction
+from property_agent.agent.working_state import domain_from_legacy
 
 
 class Supervisor:
@@ -47,6 +48,7 @@ class Supervisor:
         duration = timedelta(seconds=runtime.execution_policy.plan_duration_seconds)
         if state.plan is None:
             state.plan = self._planner.create_plan(state, runtime)
+            self._set_objective_context(state)
             state.orchestration_budget = OrchestrationBudget.start(now=now, duration=duration)
             self._emit(
                 "supervisor_plan_created",
@@ -62,6 +64,9 @@ class Supervisor:
             )
         if self._budget_expired(state, now):
             return self._fail_plan(state, "EXECUTION_DEADLINE_EXCEEDED")
+        if self._limit_reached(state, runtime, "supervisor_steps", "max_supervisor_steps"):
+            return self._fail_plan(state, "MAX_SUPERVISOR_STEPS_EXCEEDED")
+        self._increment_budget(state, supervisor_steps=1)
         if state.plan.status == PlanStatus.WAITING_CONFIRMATION:
             return state
         if state.plan.status != PlanStatus.ACTIVE:
@@ -90,6 +95,12 @@ class Supervisor:
         if self._limit_reached(state, runtime, "delegations", "max_delegations"):
             self._fail_plan(state, "MAX_DELEGATIONS_EXCEEDED")
             return self._budget_result(step, "MAX_DELEGATIONS_EXCEEDED")
+        cross_domain = self._is_cross_domain_step(state, step)
+        if cross_domain and self._limit_reached(
+            state, runtime, "cross_domain_steps", "max_cross_domain_steps"
+        ):
+            self._fail_plan(state, "MAX_CROSS_DOMAIN_STEPS_EXCEEDED")
+            return self._budget_result(step, "MAX_CROSS_DOMAIN_STEPS_EXCEEDED")
         specialist = self._specialists.get(step.specialist)
         if specialist is None:
             result = SpecialistResult(
@@ -101,7 +112,10 @@ class Supervisor:
                 public_message="该领域能力暂不可用。",
             )
         else:
-            self._increment_budget(state, delegations=1, supervisor_steps=1)
+            changes = {"delegations": 1}
+            if cross_domain:
+                changes["cross_domain_steps"] = 1
+            self._increment_budget(state, **changes)
             self._emit(
                 "specialist_delegated",
                 {"specialist": step.specialist.value, "capability": step.capability},
@@ -128,6 +142,12 @@ class Supervisor:
         elif result.outcome == SpecialistOutcome.REPLAN:
             self._replan(state, step, result, runtime)
         elif result.outcome == SpecialistOutcome.NEEDS_CLARIFICATION:
+            if self._limit_reached(
+                state, runtime, "clarification_loops", "max_clarification_loops"
+            ):
+                self._fail_plan(state, "MAX_CLARIFICATION_LOOPS_EXCEEDED")
+                return
+            self._increment_budget(state, clarification_loops=1)
             self._mark_step(state, step, PlanStepStatus.NEEDS_CLARIFICATION)
             state.goal_outcomes[step.step_id] = GoalOutcome.NEEDS_CLARIFICATION
             state.plan = replace(state.plan, status=PlanStatus.NEEDS_CLARIFICATION)
@@ -141,6 +161,11 @@ class Supervisor:
         else:
             self._mark_step(state, step, PlanStepStatus.FAILED)
             state.goal_outcomes[step.step_id] = GoalOutcome.FAILED
+            state.tool_result = {
+                "ok": False,
+                "tool": result.capability,
+                "error": {"code": result.reason_code, "message": result.public_message},
+            }
         if result.public_message:
             state.add_message("assistant", result.public_message)
         self._emit(
@@ -257,6 +282,7 @@ class Supervisor:
         state.goal_outcomes[step.step_id] = GoalOutcome.COMPLETED
         state.pending_action = None
         state.proposed_action = None
+        state.tool_result = {"ok": True, "tool": result.capability, "data": result.data}
         if state.plan.status == PlanStatus.WAITING_CONFIRMATION:
             state.plan = replace(state.plan, status=PlanStatus.ACTIVE)
 
@@ -275,6 +301,7 @@ class Supervisor:
             "plan_id": state.plan.plan_id,
             "plan_step_id": step.step_id,
         }
+        state.operation_level = result.data.get("operation_level")
         self._mark_step(state, step, PlanStepStatus.PENDING_CONFIRMATION)
         state.goal_outcomes[step.step_id] = GoalOutcome.PENDING_CONFIRMATION
         state.plan = replace(state.plan, status=PlanStatus.WAITING_CONFIRMATION)
@@ -355,6 +382,14 @@ class Supervisor:
         )
 
     @staticmethod
+    def _is_cross_domain_step(state: AgentState, step: PlanStep) -> bool:
+        prior = next(
+            (item for item in reversed(state.specialist_results) if item.step_id != step.step_id),
+            None,
+        )
+        return bool(prior and prior.specialist != step.specialist)
+
+    @staticmethod
     def _budget_result(step, reason):
         return SpecialistResult(
             SpecialistOutcome.BUDGET_EXHAUSTED,
@@ -370,3 +405,15 @@ class Supervisor:
             self._observe(event, fields)
         except Exception:
             return
+
+    @staticmethod
+    def _set_objective_context(state: AgentState) -> None:
+        plan = state.plan
+        if plan.steps:
+            intent = plan.steps[0].domain.upper()
+        elif plan.objective_classification == ObjectiveClassification.GENERAL_HELP:
+            intent = "GENERAL_HELP"
+        else:
+            intent = "UNCERTAIN"
+        state.intent = intent
+        state.domain = domain_from_legacy(intent, state.slots)

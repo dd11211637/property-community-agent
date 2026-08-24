@@ -1,21 +1,19 @@
-"""Official LangGraph v2 runtime foundation for the Repair pilot."""
+"""Official LangGraph v2 Supervisor runtime with exact accepted cursor output."""
 
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, replace
 from typing import Any, TypedDict
 from uuid import uuid4
 
 from property_agent.agent.application.graph_engine import GraphExecutionResult
-from property_agent.agent.policies import OperationLevel
+from property_agent.agent.application.pending_confirmation import confirmation_envelope
+from property_agent.agent.orchestration import PlanStatus, PlanStepStatus, SpecialistName
 from property_agent.agent.runtime import RuntimeContext
-from property_agent.agent.specialists.repair import RepairPilotSpecialist
-from property_agent.agent.state import GraphState, ProposedAction
-from property_agent.agent.subgraphs.repair import select_repair_tool
-from property_agent.agent.working_state import synchronize_typed_domain
-from property_agent.platform.application.hashing import canonical_hash, canonical_payload
+from property_agent.agent.specialists.supervisor import Supervisor
+from property_agent.agent.state import GraphState
+from property_agent.platform.application.hashing import canonical_payload
 
 
 class LangGraphState(TypedDict):
@@ -97,148 +95,105 @@ def _update(state: GraphState) -> LangGraphState:
     return LangGraphStateCodec.encode(state)
 
 
-def _classify(envelope: LangGraphState) -> LangGraphState:
-    state = _state(envelope)
-    text = str(state.slots.get("user_text") or "")
-    if state.intent not in {None, "REPAIR"}:
-        state.error = "UNSUPPORTED_PILOT_DOMAIN"
-        state.add_message("assistant", "当前试点运行时仅支持报修业务。")
-        return _update(state)
-    if not state.intent and not any(cue in text for cue in ("报修", "故障", "工单", "WX-")):
-        state.error = "UNSUPPORTED_PILOT_DOMAIN"
-        state.add_message("assistant", "当前试点运行时仅支持报修业务。")
-        return _update(state)
-    state.intent = "REPAIR"
-    synchronize_typed_domain(state)
-    return _update(state)
-
-
-def _repair_select(envelope: LangGraphState) -> LangGraphState:
-    state = _state(envelope)
-    state.slots["tool"] = select_repair_tool(state)
-    return _update(state)
-
-
-def _repair_collect(envelope: LangGraphState) -> LangGraphState:
-    from property_agent.agent.policies import missing_slots_for_tool
-
-    state = _state(envelope)
-    state.missing_slots = missing_slots_for_tool(str(state.slots["tool"]), state.slots)
-    state.requested_slot = state.missing_slots[0] if state.missing_slots else None
-    if state.missing_slots:
-        state.add_message("assistant", "请补充报修的位置和问题描述。")
-    return _update(state)
-
-
-def _prepare_action(envelope: LangGraphState) -> LangGraphState:
-    state = _state(envelope)
-    params = {
-        "description": str(state.slots.get("description") or ""),
-        "location": str(state.slots.get("location") or ""),
-        "urgency": str(state.slots.get("urgency") or "NORMAL"),
-    }
-    params_hash = canonical_hash(params)
-    proposed = ProposedAction(
-        capability="repair_create",
-        params=params,
-        params_hash=params_hash,
-        issued_at=datetime.now(timezone.utc).isoformat(),
-    )
-    state.proposed_action = proposed
-    state.pending_action = {
-        "tool": proposed.capability,
-        "params": proposed.params,
-        "params_hash": proposed.params_hash,
-        "issued_at": proposed.issued_at,
-    }
-    state.operation_level = OperationLevel.WRITE_LOW_RISK.value
-    return _update(state)
-
-
-def _confirmation_envelope(state: GraphState) -> dict[str, Any]:
-    pending = dict(state.pending_action or {})
-    return {
-        "type": "confirmation",
-        "summary": f"确认执行 REPAIR 操作：{pending.get('tool')}",
-        "action": pending,
-        "action_hash": pending.get("params_hash"),
-    }
-
-
-def _await_confirmation(envelope: LangGraphState) -> LangGraphState:
-    from langgraph.types import interrupt
-
-    state = _state(envelope)
-    decision = interrupt(_confirmation_envelope(state))
-    state._resume = {"confirmed": bool(decision.get("confirmed"))}
-    return _update(state)
-
-
-def _cancel(envelope: LangGraphState) -> LangGraphState:
-    state = _state(envelope)
-    state.pending_action = None
-    state.proposed_action = None
-    state.add_message("assistant", "已取消本次报修。")
-    return _update(state)
-
-
-def _explain(envelope: LangGraphState) -> LangGraphState:
-    return envelope
-
-
-def _unsupported_route(envelope: LangGraphState) -> str:
-    return "unsupported" if _state(envelope).error else "repair_select"
-
-
-def _repair_route(envelope: LangGraphState) -> str:
-    state = _state(envelope)
-    if state.missing_slots:
-        return "explain"
-    return "prepare_action" if state.slots.get("tool") == "repair_create" else "repair_execute"
-
-
-def _confirm_route(envelope: LangGraphState) -> str:
-    decision = _state(envelope)._resume or {}
-    return "repair_execute" if bool(decision.get("confirmed")) else "cancel"
-
-
-def build_repair_pilot_graph(specialist: RepairPilotSpecialist):
+def build_supervisor_graph(supervisor: Supervisor):
+    """Build one sequential Supervisor graph with four explicit specialist nodes."""
     from langgraph.graph import END, START, StateGraph
     from langgraph.runtime import Runtime
+    from langgraph.types import interrupt
 
-    def execute(envelope: LangGraphState, runtime: Runtime[RuntimeContext]) -> LangGraphState:
+    def supervise(envelope: LangGraphState, runtime: Runtime[RuntimeContext]) -> LangGraphState:
         state = _state(envelope)
-        specialist.invoke(state, runtime.context)
-        state.pending_action = None
-        state.proposed_action = None
+        supervisor.prepare(state, runtime.context)
+        return _update(state)
+
+    def specialist(envelope: LangGraphState, runtime: Runtime[RuntimeContext]) -> LangGraphState:
+        state = _state(envelope)
+        supervisor.run_current(state, runtime.context)
+        return _update(state)
+
+    def await_confirmation(envelope: LangGraphState) -> LangGraphState:
+        state = _state(envelope)
+        decision = interrupt(confirmation_envelope(state))
+        state._resume = {"confirmed": bool(decision.get("confirmed"))}
+        return _update(state)
+
+    def accept_confirmation(envelope: LangGraphState) -> LangGraphState:
+        state = _state(envelope)
+        step = supervisor.current_step(state)
+        if step is None or step.status != PlanStepStatus.PENDING_CONFIRMATION:
+            raise RuntimeError("confirmed action has no matching pending plan step")
+        state.plan = state.plan.replace_step(replace(step, status=PlanStepStatus.PENDING))
+        state.plan = replace(state.plan, status=PlanStatus.ACTIVE)
+        return _update(state)
+
+    def cancel(envelope: LangGraphState) -> LangGraphState:
+        state = _state(envelope)
+        supervisor.cancel_current(state)
+        return _update(state)
+
+    def synthesize(envelope: LangGraphState) -> LangGraphState:
+        state = _state(envelope)
+        message = supervisor.synthesize(state)
+        if not state.messages or state.messages[-1].get("content") != message:
+            state.add_message("assistant", message)
         return _update(state)
 
     graph = StateGraph(state_schema=LangGraphState, context_schema=RuntimeContext)
-    graph.add_node("classify_intent", _classify)
-    graph.add_node("repair_select", _repair_select)
-    graph.add_node("repair_collect", _repair_collect)
-    graph.add_node("prepare_action", _prepare_action)
-    graph.add_node("await_confirmation", _await_confirmation)
-    graph.add_node("repair_execute", execute)
-    graph.add_node("cancel", _cancel)
-    graph.add_node("explain", _explain)
-    graph.add_node("unsupported", _explain)
-    graph.add_edge(START, "classify_intent")
-    graph.add_conditional_edges("classify_intent", _unsupported_route)
-    graph.add_edge("repair_select", "repair_collect")
-    graph.add_conditional_edges("repair_collect", _repair_route)
-    graph.add_edge("prepare_action", "await_confirmation")
-    graph.add_conditional_edges("await_confirmation", _confirm_route)
-    for node in ("repair_execute", "cancel", "explain", "unsupported"):
-        graph.add_edge(node, END)
+    graph.add_node("supervisor", supervise)
+    for name in ("repair", "billing", "announcement", "inspection"):
+        graph.add_node(f"{name}_specialist", specialist)
+    graph.add_node("await_confirmation", await_confirmation)
+    graph.add_node("accept_confirmation", accept_confirmation)
+    graph.add_node("cancel", cancel)
+    graph.add_node("synthesize", synthesize)
+    graph.add_edge(START, "supervisor")
+    graph.add_conditional_edges("supervisor", _supervisor_route)
+    for name in ("repair", "billing", "announcement", "inspection"):
+        graph.add_edge(f"{name}_specialist", "supervisor")
+    graph.add_conditional_edges("await_confirmation", _confirmation_route)
+    graph.add_edge("accept_confirmation", "supervisor")
+    graph.add_edge("cancel", "supervisor")
+    graph.add_edge("synthesize", END)
     return graph
+
+
+def _supervisor_route(envelope: LangGraphState) -> str:
+    state = _state(envelope)
+    if state.plan is None:
+        return "synthesize"
+    if state.plan.status == PlanStatus.WAITING_CONFIRMATION:
+        return "await_confirmation"
+    terminal = {
+        PlanStatus.COMPLETED,
+        PlanStatus.PARTIAL,
+        PlanStatus.FAILED,
+        PlanStatus.NEEDS_CLARIFICATION,
+        PlanStatus.HANDOVER,
+    }
+    if state.plan.status in terminal:
+        return "synthesize"
+    step = next(
+        (item for item in state.plan.steps if item.step_id == state.plan.current_step_id), None
+    )
+    routes = {
+        SpecialistName.REPAIR: "repair_specialist",
+        SpecialistName.BILLING: "billing_specialist",
+        SpecialistName.ANNOUNCEMENT: "announcement_specialist",
+        SpecialistName.INSPECTION: "inspection_specialist",
+    }
+    return routes.get(step.specialist, "synthesize") if step else "synthesize"
+
+
+def _confirmation_route(envelope: LangGraphState) -> str:
+    decision = _state(envelope)._resume or {}
+    return "accept_confirmation" if bool(decision.get("confirmed")) else "cancel"
 
 
 class LangGraphEngine:
     """Official StateGraph engine using exact current-execution checkpoint events."""
 
-    def __init__(self, saver: Any, specialist: RepairPilotSpecialist) -> None:
-        self._graph = build_repair_pilot_graph(specialist).compile(checkpointer=saver)
+    def __init__(self, saver: Any, supervisor: Supervisor) -> None:
+        self._graph = build_supervisor_graph(supervisor).compile(checkpointer=saver)
 
     def invoke(self, state, *, thread_id, runtime):
         return self._consume(self.invoke_stream(state, thread_id=thread_id, runtime=runtime))
@@ -312,7 +267,7 @@ class LangGraphEngine:
             "__final__",
             GraphExecutionResult(
                 state=state,
-                interrupt=_confirmation_envelope(state) if interrupted else None,
+                interrupt=confirmation_envelope(state) if interrupted else None,
                 done=not interrupted,
                 runtime_cursor={
                     "thread_id": str(last_cursor["thread_id"]),

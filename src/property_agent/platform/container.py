@@ -451,6 +451,7 @@ def build_agent_runner(
     session_factory = get_session_factory()
     checkpointer = SqlAlchemyCheckpointer(session_factory)
     gateway = build_model_gateway()
+    app.state.agent_model_gateway = gateway
 
     context_loader = build_agent_context_loader(session_factory)
     graph, *_ = _build_agent_tooling(

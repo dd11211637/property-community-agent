@@ -47,7 +47,7 @@ class SupervisorPlanner:
         if not domains and analysis.intent in {"REPAIR", "BILLING", "ANNOUNCEMENT", "INSPECTION"}:
             domains = [analysis.intent.lower()]
         classification = self._classification(domains, analysis.intent)
-        steps = self._steps(text, domains)
+        steps = self._steps(text, domains, state.slots)
         plan = Plan(
             plan_id=f"plan-{uuid4()}",
             objective=text or "需要澄清的用户目标",
@@ -96,25 +96,43 @@ class SupervisorPlanner:
             return ObjectiveClassification.GENERAL_HELP
         return ObjectiveClassification.UNCERTAIN
 
-    def _steps(self, text: str, domains: list[str]) -> list[PlanStep]:
+    def _steps(
+        self, text: str, domains: list[str], semantic_slots: dict[str, Any]
+    ) -> list[PlanStep]:
         steps: list[PlanStep] = []
         for domain in domains:
-            additions = self._domain_steps(domain, text, steps[-1].step_id if steps else None)
+            additions = self._domain_steps(
+                domain,
+                text,
+                steps[-1].step_id if steps else None,
+                semantic_slots,
+            )
             steps.extend(additions)
         return self._renumber_duplicates(steps)
 
-    def _domain_steps(self, domain: str, text: str, prior_step: str | None) -> list[PlanStep]:
+    def _domain_steps(
+        self,
+        domain: str,
+        text: str,
+        prior_step: str | None,
+        semantic_slots: dict[str, Any],
+    ) -> list[PlanStep]:
         dependency = (prior_step,) if prior_step else ()
         if domain == "repair":
-            return self._repair_steps(text, dependency)
+            return self._repair_steps(text, dependency, semantic_slots)
         if domain == "billing":
             return [self._billing_step(text, dependency)]
         if domain == "inspection":
             return [self._inspection_step(text, dependency)]
         return [self._announcement_step(text, dependency)]
 
-    def _repair_steps(self, text: str, dependency: tuple[str, ...]) -> list[PlanStep]:
-        slots = self._fallback.extract_slots(text, "REPAIR")
+    def _repair_steps(
+        self,
+        text: str,
+        dependency: tuple[str, ...],
+        semantic_slots: dict[str, Any],
+    ) -> list[PlanStep]:
+        slots = {**self._fallback.extract_slots(text, "REPAIR"), **semantic_slots}
         conditional_create = any(cue in text for cue in ("如果没有", "没有的话", "没有就"))
         if conditional_create:
             read = self._step(
@@ -130,7 +148,7 @@ class SupervisorPlanner:
                 "if_no_equivalent_active_repair",
             )
             return [read, create]
-        if self._is_write(text, ("提交", "创建", "新建", "帮我报", "报一个")):
+        if self._is_write(text, ("提交", "创建", "新建", "帮我报", "报一个", "我要报修")):
             return [
                 self._step(
                     "repair-create",

@@ -176,10 +176,8 @@ class OrchestrationBudget:
     supervisor_steps: int = 0
     replans: int = 0
     delegations: int = 0
-    capability_calls: int = 0
     clarification_loops: int = 0
     cross_domain_steps: int = 0
-    fingerprints: frozenset[str] = field(default_factory=frozenset)
 
     @classmethod
     def start(cls, *, now: datetime, duration: timedelta) -> OrchestrationBudget:
@@ -202,7 +200,6 @@ class OrchestrationBudget:
         value = asdict(self)
         value["started_at_utc"] = self.started_at_utc.isoformat()
         value["deadline_at_utc"] = self.deadline_at_utc.isoformat()
-        value["fingerprints"] = sorted(self.fingerprints)
         return value
 
     @classmethod
@@ -213,10 +210,8 @@ class OrchestrationBudget:
             supervisor_steps=int(value.get("supervisor_steps", 0)),
             replans=int(value.get("replans", 0)),
             delegations=int(value.get("delegations", 0)),
-            capability_calls=int(value.get("capability_calls", 0)),
             clarification_loops=int(value.get("clarification_loops", 0)),
             cross_domain_steps=int(value.get("cross_domain_steps", 0)),
-            fingerprints=frozenset(value.get("fingerprints") or ()),
         )
 
 
