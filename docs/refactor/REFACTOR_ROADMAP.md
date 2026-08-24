@@ -18,8 +18,8 @@ MUST NOT be pulled into an earlier stage merely because it is convenient.
 | PR1 | Correctness substrate | **DONE / MERGED / VERIFIED** |
 | PR2 | Capability Layer | **DONE / MERGED / VERIFIED** |
 | PR3 | Typed State and Runner de-domainization | **DONE / MERGED / VERIFIED** |
-| PR4 | LangGraph runtime foundation | Planned (Stage Contract established) |
-| PR5 | Supervisor and stateless specialists | Planned |
+| PR4 | LangGraph runtime foundation | **DONE / MERGED / VERIFIED** |
+| PR5 | Supervisor and stateless specialists | Planned (Stage Contract established) |
 | PR6 | Long-term memory | Planned |
 | PR7 | Productionization and runtime drain | Planned |
 
@@ -142,6 +142,15 @@ mutable orchestration/domain working state belong?”
 
 ## 6. PR4 — LangGraph runtime foundation
 
+**Status:** **DONE / MERGED / VERIFIED**
+
+**Final PR head:** `d289b13f5bfb34dc95341342203f596ae5e48449`
+
+**Merged to `main`:** `4e169e10475a84c451f8c7a78560628cfe8210a7`
+
+**Post-merge verification:** backend, PostgreSQL, frontend, and browser E2E Quality Gates
+passed on the merge commit.
+
 ### Goal
 
 Prove that a real conversation can execute, interrupt, persist, resume, and recover
@@ -175,6 +184,11 @@ through LangGraph without changing business authority.
 - all required quality gates pass.
 
 ## 7. PR5 — Supervisor and stateless specialists
+
+**Status:** Planned (Stage Contract established)
+
+**Stage Contract:**
+[`stages/PR5_SUPERVISOR_SPECIALISTS.md`](stages/PR5_SUPERVISOR_SPECIALISTS.md)
 
 ### Goal
 
