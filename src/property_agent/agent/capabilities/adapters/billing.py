@@ -129,6 +129,12 @@ class BillingQueryAdapter:
         self, request: BillingQueryInput, runtime: CapabilityRuntimeContext
     ) -> BillingQueryOutput:
         db = self._session_provider(runtime)
+        try:
+            return self._query(request, runtime, db)
+        finally:
+            _close_session(db)
+
+    def _query(self, request, runtime, db) -> BillingQueryOutput:
         if request.query_type == "detail":
             bill_id = cast(str, request.bill_id)
             bill, rule = self._service.get_bill(runtime.request_context, db, bill_id)
@@ -165,22 +171,32 @@ class BillingConsultAdapter:
     ) -> BillingConsultOutput:
         if runtime.write is None:
             raise RuntimeError("billing_consult requires server write context")
-        ticket = self._service.create_draft(
-            runtime.request_context,
-            self._session_provider(runtime),
-            subject=request.subject,
-            description=request.description,
-            bill_id=request.bill_id,
-            idempotency_key=runtime.write.idempotency_key,
-            confirmation_token=runtime.write.confirmation_token,
-            approval_ref=runtime.write.approval_ref,
-        )
-        return BillingConsultOutput(
-            consultation=ConsultationBrief(
-                id=str(ticket.id),
-                subject=ticket.subject,
-                status=str(getattr(ticket, "status", "")),
-                bill_id=str(ticket.bill_id) if getattr(ticket, "bill_id", None) else None,
-            ),
-            idempotency_key=runtime.write.idempotency_key,
-        )
+        db = self._session_provider(runtime)
+        try:
+            ticket = self._service.create_draft(
+                runtime.request_context,
+                db,
+                subject=request.subject,
+                description=request.description,
+                bill_id=request.bill_id,
+                idempotency_key=runtime.write.idempotency_key,
+                confirmation_token=runtime.write.confirmation_token,
+                approval_ref=runtime.write.approval_ref,
+            )
+            return BillingConsultOutput(
+                consultation=ConsultationBrief(
+                    id=str(ticket.id),
+                    subject=ticket.subject,
+                    status=str(getattr(ticket, "status", "")),
+                    bill_id=str(ticket.bill_id) if getattr(ticket, "bill_id", None) else None,
+                ),
+                idempotency_key=runtime.write.idempotency_key,
+            )
+        finally:
+            _close_session(db)
+
+
+def _close_session(session: Any) -> None:
+    close = getattr(session, "close", None)
+    if callable(close):
+        close()

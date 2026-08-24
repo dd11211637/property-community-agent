@@ -125,7 +125,7 @@ class SupervisorPlanner:
         if domain == "repair":
             return self._repair_steps(text, dependency, semantic_slots)
         if domain == "billing":
-            return [self._billing_step(text, dependency)]
+            return [self._billing_step(text, dependency, semantic_slots)]
         if domain == "inspection":
             return [self._inspection_step(text, dependency, semantic_slots)]
         return [self._announcement_step(text, dependency, semantic_slots)]
@@ -175,8 +175,10 @@ class SupervisorPlanner:
             self._step("repair-read", "repair", capability, "查询报修进度", dependency, parameters)
         ]
 
-    def _billing_step(self, text: str, dependency: tuple[str, ...]) -> PlanStep:
-        slots = self._fallback.extract_slots(text, "BILLING")
+    def _billing_step(
+        self, text: str, dependency: tuple[str, ...], semantic_slots: dict[str, Any]
+    ) -> PlanStep:
+        slots = {**self._fallback.extract_slots(text, "BILLING"), **semantic_slots}
         if self._is_write(text, ("咨询", "投诉", "反馈", "提交")):
             parameters = {
                 "subject": str(slots.get("subject") or "账单咨询"),
