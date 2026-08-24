@@ -25,6 +25,7 @@ from property_agent.agent.application.errors import (
     AgentSessionErrorCode,
 )
 from property_agent.agent.infrastructure.models import ConversationModel
+from property_agent.agent.runtime_version import AgentRuntimeVersion
 from property_agent.agent.state import GraphState
 
 SessionFactory = Callable[[], Session]
@@ -60,10 +61,15 @@ class ConversationSnapshot:
     handover_required: bool
     last_intent: str | None
     handover_ticket_id: UUID | None = None
+    runtime_version: str = AgentRuntimeVersion.V1.value
 
     @property
     def is_closed(self) -> bool:
         return self.status == ConversationStatus.CLOSED.value
+
+    @property
+    def is_v2(self) -> bool:
+        return self.runtime_version == AgentRuntimeVersion.V2.value
 
 
 def _to_snapshot(row: ConversationModel) -> ConversationSnapshot:
@@ -76,6 +82,7 @@ def _to_snapshot(row: ConversationModel) -> ConversationSnapshot:
         handover_required=row.handover_required,
         last_intent=row.last_intent,
         handover_ticket_id=row.handover_ticket_id,
+        runtime_version=row.runtime_version or AgentRuntimeVersion.V1.value,
     )
 
 
@@ -112,8 +119,14 @@ class ConversationService:
         conversation_id: str,
         context: AgentContext,
         current_house_id: UUID | None = None,
+        runtime_version: str = AgentRuntimeVersion.V1.value,
     ) -> ConversationSnapshot:
-        """开启或复用会话（幂等）。归属他人的 conversation_id 一律拒绝。"""
+        """开启或复用会话（幂等）。归属他人的 conversation_id 一律拒绝。
+
+        ``runtime_version`` 在**创建**时由服务端 ``RuntimeSelectionPolicy`` 钉死，
+        之后整个生命周期不再切换；已存在会话忽略此参数（沿用持久化值）。
+        """
+        pinned = AgentRuntimeVersion.from_str(runtime_version).value
         session = self._session_factory()
         try:
             row = self._find(session, conversation_id)
@@ -125,6 +138,7 @@ class ConversationService:
                     current_house_id=current_house_id,
                     status=ConversationStatus.ACTIVE.value,
                     handover_required=False,
+                    runtime_version=pinned,
                 )
                 session.add(row)
             else:
@@ -134,6 +148,7 @@ class ConversationService:
                     raise AgentSessionError(AgentSessionErrorCode.CONVERSATION_CLOSED)
                 if current_house_id is not None:
                     row.current_house_id = current_house_id
+                # 已存在会话：绝不切换 runtime 版本，沿用持久化值。
             session.commit()
             session.refresh(row)
             return _to_snapshot(row)

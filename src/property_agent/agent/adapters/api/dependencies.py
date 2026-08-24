@@ -12,8 +12,8 @@ from uuid import UUID
 
 from fastapi import Depends, Request
 
-from property_agent.agent.application.runner import AgentSessionRunner
-from property_agent.platform.context import RequestContext
+from property_agent.agent.application.facade import AgentRuntimeFacade
+from property_agent.platform.context import ExecutionSource, RequestContext
 from property_agent.platform.dependencies import get_request_context as get_request_context
 from property_agent.platform.errors import BusinessError
 
@@ -28,6 +28,12 @@ class AgentRequestContext:
     roles: frozenset[str]
     request_id: str
     current_house_id: UUID | None = None
+    agent_lease: object | None = None
+    execution_source: ExecutionSource = ExecutionSource.AGENT
+
+    @property
+    def bound_house_ids(self) -> frozenset[UUID]:
+        return self.house_ids
 
     @classmethod
     def from_platform(cls, context: RequestContext) -> "AgentRequestContext":
@@ -47,9 +53,9 @@ def get_agent_context(
     return AgentRequestContext.from_platform(context)
 
 
-def get_agent_runner(request: Request) -> AgentSessionRunner:
+def get_agent_runner(request: Request) -> AgentRuntimeFacade:
     runner = getattr(request.app.state, "agent_runner", None)
-    if not isinstance(runner, AgentSessionRunner):
+    if not isinstance(runner, AgentRuntimeFacade):
         raise BusinessError(
             "ADAPTER_NOT_CONFIGURED", "The agent runtime has not been configured.", 503
         )

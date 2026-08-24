@@ -19,6 +19,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from property_agent.agent.adapters.api.router import router as agent_router
+from property_agent.agent.application.facade import AgentRuntimeFacade
 from property_agent.agent.application.runner import AgentSessionRunner
 from property_agent.platform.container import build_production_container
 from property_agent.platform.context import RequestContext
@@ -61,10 +62,14 @@ def _trusted_context() -> RequestContext:
 
 
 def test_production_container_assembles_agent_runner(sqlite_platform):
-    """装配后 app.state.agent_runner 是 AgentSessionRunner 实例。"""
+    """装配后 app.state.agent_runner 是 API 门面（含单一生命周期）。
+
+    PR4 §10/§11：门面是唯一对外依赖；底层仍是单一 AgentSessionRunner 生命周期。
+    """
     app = FastAPI()
     build_production_container(app)
-    assert isinstance(app.state.agent_runner, AgentSessionRunner)
+    assert isinstance(app.state.agent_runner, AgentRuntimeFacade)
+    assert isinstance(app.state.agent_lifecycle, AgentSessionRunner)
 
 
 def test_agent_endpoint_no_longer_returns_503(sqlite_platform):

@@ -15,6 +15,7 @@ FROM dependencies AS base
 COPY src ./src
 COPY alembic ./alembic
 COPY alembic.ini ./alembic.ini
+COPY scripts/setup_langgraph_checkpointer.py ./scripts/setup_langgraph_checkpointer.py
 
 EXPOSE 8000
 
@@ -32,6 +33,7 @@ RUN python -m pip install --no-cache-dir ".[dev]"
 COPY src ./src
 COPY alembic ./alembic
 COPY alembic.ini ./alembic.ini
+COPY scripts/setup_langgraph_checkpointer.py ./scripts/setup_langgraph_checkpointer.py
 COPY testing ./testing
 COPY tests ./tests
 COPY frontend/e2e ./frontend/e2e

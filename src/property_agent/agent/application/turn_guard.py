@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from logging import getLogger
 from typing import TYPE_CHECKING, Any
 
@@ -26,7 +27,12 @@ from property_agent.agent.application.errors import (
     AgentSessionErrorCode,
 )
 from property_agent.agent.infrastructure.checkpointer import SqlAlchemyCheckpointer
-from property_agent.agent.infrastructure.run_lease import Lease, RunLeaseService
+from property_agent.agent.infrastructure.run_lease import (
+    Lease,
+    LeaseHeartbeat,
+    RunLeaseService,
+    StaleAgentRunError,
+)
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -119,8 +125,6 @@ def activate_lease_context(context: Any, lease: Lease | None) -> Any:
 
     activate_selector_context(context)
 
-    if not isinstance(context, RequestContext):
-        return context
     agent_lease = None
     if lease is not None:
         agent_lease = AgentLeaseContext(
@@ -129,13 +133,83 @@ def activate_lease_context(context: Any, lease: Lease | None) -> Any:
             fence=lease.fence,
             lease_until=lease.lease_until,
         )
-    new_context = replace(
-        context,
-        agent_lease=agent_lease,
-        execution_source=ExecutionSource.AGENT,
-    )
-    new_context.activate()
+    try:
+        new_context = replace(
+            context,
+            agent_lease=agent_lease,
+            execution_source=ExecutionSource.AGENT,
+        )
+    except TypeError:
+        return context
+    if isinstance(new_context, RequestContext):
+        new_context.activate()
     return new_context
+
+
+class TurnLeaseController:
+    """Mechanical lease/heartbeat facade used by the lifecycle coordinator."""
+
+    def __init__(
+        self,
+        run_lease: Callable[[], RunLeaseService | None],
+        checkpointer: SqlAlchemyCheckpointer | None,
+        *,
+        enforce: Callable[[], bool],
+        heartbeat_interval_seconds: int,
+    ) -> None:
+        self._run_lease = run_lease
+        self._checkpointer = checkpointer
+        self._enforce = enforce
+        self._heartbeat_interval = heartbeat_interval_seconds
+
+    def _service(self) -> RunLeaseService | None:
+        return self._run_lease()
+
+    def acquire(self, thread_id: str, run_id: UUID) -> Lease | None:
+        return acquire_turn_lease(
+            self._service(),
+            enforce_concurrency=self._enforce(),
+            thread_id=thread_id,
+            run_id=run_id,
+        )
+
+    def renew(self, lease: Lease | None) -> Lease | None:
+        return heartbeat_turn_lease(self._service(), lease=lease)
+
+    def release(self, thread_id: str, lease: Lease | None) -> None:
+        if lease is not None:
+            release_turn_lease(self._service(), thread_id=thread_id, run_id=lease.run_id)
+
+    def activate(self, context: Any, lease: Lease | None) -> Any:
+        return activate_lease_context(context, lease)
+
+    def version(self, thread_id: str) -> int | None:
+        return read_turn_start_version(
+            self._checkpointer,
+            enforce_concurrency=self._enforce(),
+            thread_id=thread_id,
+        )
+
+    def start_heartbeat(self, lease: Lease | None) -> LeaseHeartbeat | None:
+        service = self._service()
+        if lease is None or service is None:
+            return None
+        heartbeat = LeaseHeartbeat(service, lease, interval_seconds=self._heartbeat_interval)
+        heartbeat.start()
+        return heartbeat
+
+    @staticmethod
+    def stop_heartbeat(heartbeat: LeaseHeartbeat | None) -> None:
+        if heartbeat is not None:
+            heartbeat.stop()
+
+    @staticmethod
+    def assert_alive(lease: Lease | None, heartbeat: LeaseHeartbeat | None) -> None:
+        if heartbeat is not None and heartbeat.stale:
+            thread_id = lease.thread_id if lease is not None else "<unknown>"
+            raise StaleAgentRunError(
+                thread_id, reason="lease heartbeat detected stale run; aborting turn"
+            )
 
 
 __all__ = [
@@ -146,4 +220,5 @@ __all__ = [
     "heartbeat_turn_lease",
     "read_turn_start_version",
     "release_turn_lease",
+    "TurnLeaseController",
 ]
