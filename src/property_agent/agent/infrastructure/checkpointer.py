@@ -64,11 +64,16 @@ class LangGraphCheckpointCursor:
     def from_dict(cls, data: dict[str, Any] | None) -> "LangGraphCheckpointCursor | None":
         if not data:
             return None
-        return cls(
+        if set(data) - {"thread_id", "checkpoint_ns", "checkpoint_id"}:
+            raise ValueError("runtime cursor contains unsupported fields")
+        cursor = cls(
             thread_id=str(data.get("thread_id", "")),
             checkpoint_ns=data.get("checkpoint_ns"),
             checkpoint_id=data.get("checkpoint_id"),
         )
+        if not cursor.thread_id or not cursor.checkpoint_id:
+            raise ValueError("runtime cursor requires thread_id and checkpoint_id")
+        return cursor
 
 
 @dataclass(frozen=True)
@@ -153,21 +158,33 @@ class SqlAlchemyCheckpointer:
         runtime_cursor: dict[str, Any] | None,
     ) -> None:
         if expected == 0:
-            # 首发：原子 INSERT version=1。两个竞争的首发者只有一个能插入成功；
-            # 另一个触发 thread_id 唯一约束冲突 → IntegrityError → CheckpointVersionConflict
-            # （关闭 FIRST_CHECKPOINT_CAS_GAP）。该语义等价于
-            # ``INSERT … ON CONFLICT (thread_id) DO NOTHING RETURNING version`` 的跨方言写法。
+            values = {
+                "thread_id": thread_id,
+                "version": 1,
+                "state": payload,
+                "interrupt_node": interrupt_node,
+                "pending_confirm": pending,
+                "runtime_cursor": runtime_cursor,
+            }
+            dialect = session.get_bind().dialect.name
+            if dialect == "postgresql":
+                from sqlalchemy.dialects.postgresql import insert as dialect_insert
+            elif dialect == "sqlite":
+                from sqlalchemy.dialects.sqlite import insert as dialect_insert
+            else:
+                dialect_insert = None
+            if dialect_insert is not None:
+                row = session.execute(
+                    dialect_insert(AgentCheckpointModel)
+                    .values(**values)
+                    .on_conflict_do_nothing(index_elements=["thread_id"])
+                    .returning(AgentCheckpointModel.version)
+                ).scalar_one_or_none()
+                if row is None:
+                    raise CheckpointVersionConflict(thread_id, expected)
+                return
             try:
-                session.execute(
-                    insert(AgentCheckpointModel).values(
-                        thread_id=thread_id,
-                        version=1,
-                        state=payload,
-                        interrupt_node=interrupt_node,
-                        pending_confirm=pending,
-                        runtime_cursor=runtime_cursor,
-                    )
-                )
+                session.execute(insert(AgentCheckpointModel).values(**values))
                 session.flush()
             except IntegrityError:
                 session.rollback()
@@ -307,8 +324,12 @@ class SqlAlchemyCheckpointer:
             raise ValueError(
                 "publish_accepted requires a concrete expected_version (0 for first publish)"
             )
+        cursor = LangGraphCheckpointCursor.from_dict(runtime_cursor)
         self.save(
-            thread_id, state, expected_version=expected_version, runtime_cursor=runtime_cursor
+            thread_id,
+            state,
+            expected_version=expected_version,
+            runtime_cursor=cursor.to_dict() if cursor else None,
         )
 
     def _load_record(self, thread_id: str) -> Any | None:

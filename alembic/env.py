@@ -36,6 +36,14 @@ AUTOGENERATE_PLUGINS = [
     "alembic.autogenerate.*",
     "~alembic.autogenerate.comments",
 ]
+LANGGRAPH_OWNED_TABLES = frozenset(
+    {"checkpoints", "checkpoint_blobs", "checkpoint_writes", "checkpoint_migrations"}
+)
+
+
+def include_name(name: str | None, type_: str, _parent_names: dict[str, str]) -> bool:
+    """Keep official LangGraph saver tables outside Application ORM ownership."""
+    return not (type_ == "table" and name in LANGGRAPH_OWNED_TABLES)
 
 
 def run_migrations_offline() -> None:
@@ -45,6 +53,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        include_name=include_name,
         autogenerate_plugins=AUTOGENERATE_PLUGINS,
     )
     with context.begin_transaction():
@@ -62,6 +71,7 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
             compare_type=True,
+            include_name=include_name,
             autogenerate_plugins=AUTOGENERATE_PLUGINS,
         )
         with context.begin_transaction():

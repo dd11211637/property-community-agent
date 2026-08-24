@@ -48,6 +48,17 @@ services:
         condition: service_healthy
     restart: "no"
 
+  langgraph-setup:
+    build:
+      context: .
+      dockerfile: infra/backend.Dockerfile
+    environment: *backend-environment
+    command: ["python", "scripts/setup_langgraph_checkpointer.py"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
   seed:
     build:
       context: .
@@ -56,7 +67,7 @@ services:
     environment: *backend-environment
     command: ["python", "-m", "testing.seeds.seed_demo"]
     depends_on:
-      migrate:
+      langgraph-setup:
         condition: service_completed_successfully
     restart: "no"
 

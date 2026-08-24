@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from property_agent.agent.application.composition import bind_runtime, close_runtime_resources
 from property_agent.agent.application.confirmation_provider import prepare_confirmation
 from property_agent.agent.application.conversation_service import ConversationService
 from property_agent.agent.application.memory_runtime import (
@@ -235,6 +236,7 @@ async def lifespan(app: FastAPI):
         await announcement_scheduler_task
         await dispatcher.stop()
         await dispatcher_task
+        close_runtime_resources(app)
 
     # ── Shutdown ─────────────────────────────────────────────────
     logger.info("Container shutting down...")
@@ -423,9 +425,7 @@ def build_agent_runner(
 ) -> AgentSessionRunner:
     """Assemble the production agent session runner (PRD §6.5).
 
-    P1 观测与流式：注入 ``AgentObservability``（4 关键指标 + ``agent.turn`` root
-    span）。未安装 opentelemetry 时自动降级为进程内计数器 + NullTracer，不影响
-    正确性底座。
+    注入 ``AgentObservability``；SDK 缺失时降级且不影响正确性底座。
 
     Wires the compiled agent graph with the real business services already on
     ``app.state`` (repair / announcement / billing / inspection), a persistent
@@ -458,7 +458,7 @@ def build_agent_runner(
         session_factory=session_factory,
         gateway=gateway,
         context_loader=context_loader,
-        checkpointer=checkpointer,
+        checkpointer=None,
     )
     conversations = ConversationService(session_factory)
     recovery = AgentRecoveryService(conversations=conversations, checkpointer=checkpointer)
@@ -492,7 +492,7 @@ def _build_agent_tooling(
     session_factory: Any,
     gateway: ModelGateway,
     context_loader: Any,
-    checkpointer: SqlAlchemyCheckpointer,
+    checkpointer: SqlAlchemyCheckpointer | None,
 ) -> tuple:
     """拼装 agent graph 与四个业务工具集，返回 ``(graph, repair, ... )``。"""
 
@@ -515,6 +515,7 @@ def _build_agent_tooling(
         inspection_task_service=app.state.task_service,
         inspection_event_service=app.state.event_service,
     )
+    app.state.agent_capability_executor = capability_executor
     repair_tools = build_repair_tools(agent_work_orders, context_provider, capability_executor)
     announcement_tools = build_announcement_tools(
         app.state.announcement_service, context_provider, gateway, capability_executor
@@ -664,7 +665,6 @@ def _build_services(app: FastAPI) -> dict[str, Any]:
         approval_service=approval_service,
         run_lease_service=run_lease_service,
     )
-    app.state.agent_runner = agent_runner
-    services["agent_runner"] = agent_runner
+    bind_runtime(app, agent_runner, ConversationService(session_factory), services)
 
     return services

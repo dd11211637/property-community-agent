@@ -19,34 +19,41 @@ from logging import getLogger
 from typing import Any
 from uuid import UUID, uuid4
 
+from property_agent.agent.application.accepted_head import (
+    cursor_for,
+    publish_accepted,
+    result_from_payload,
+    runtime_for,
+)
 from property_agent.agent.application.conversation_service import (
     AgentContext,
     ConversationService,
     ConversationSnapshot,
 )
 from property_agent.agent.application.errors import AgentSessionError, AgentSessionErrorCode
+from property_agent.agent.application.graph_engine import (
+    GraphEngine,
+    GraphExecutionResult,
+    LegacyGraphEngine,
+)
 from property_agent.agent.application.recovery import AgentRecoveryService
 from property_agent.agent.application.runner_signals import (
     first_turn_inspection_signal as _first_turn_inspection_signal,  # noqa: F401
 )
 from property_agent.agent.application.start_state import prepare_start_state
-from property_agent.agent.application.turn_guard import (
-    acquire_turn_lease,
-    activate_lease_context,
-    heartbeat_turn_lease,
-    read_turn_start_version,
-    release_turn_lease,
-)
+from property_agent.agent.application.turn_guard import TurnLeaseController
 from property_agent.agent.graph_core import CompiledGraph
 from property_agent.agent.infrastructure.checkpointer import CheckpointVersionConflict
 from property_agent.agent.infrastructure.run_lease import Lease, LeaseHeartbeat, StaleAgentRunError
 from property_agent.agent.observability import AgentObservability
+from property_agent.agent.runtime_version import AgentRuntimeVersion
 from property_agent.agent.state import GraphState
 
 logger = getLogger(__name__)
 
 ConfirmationTokenProvider = Callable[[GraphState], str]
 TurnRecorder = Callable[[AgentContext, GraphState, str, str], None]
+RuntimeRoute = Callable[[ConversationSnapshot | None], tuple[GraphEngine | None, str]]
 
 
 @dataclass(frozen=True)
@@ -80,6 +87,7 @@ class _TurnPlan:
     conversation: Any
     expected_version: int | None
     repair_followup_message: str | None
+    engine: "GraphEngine | None" = None
     heartbeat: "LeaseHeartbeat | None" = None
 
 
@@ -110,7 +118,12 @@ class AgentSessionRunner:
         # P0 并发护栏总开关：关闭时不做 lease/CAS（兼容未升级库或回滚场景）。
         self._enforce = enforce_concurrency
         # P0-5 heartbeat：后台续期间隔（默认 10s，覆盖 30s lease TTL）。
-        self._heartbeat_interval = heartbeat_interval_seconds
+        self._turn_guard = TurnLeaseController(
+            lambda: self._run_lease,
+            checkpointer,
+            enforce=lambda: self._enforce,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+        )
         # P1 观测与流式：4 关键指标 + agent.turn root span（缺省进程内实现）。
         self._observability = observability or AgentObservability.in_memory()
 
@@ -122,6 +135,9 @@ class AgentSessionRunner:
         user_text: str,
         house_id: UUID | None = None,
         slots: dict[str, Any] | None = None,
+        engine: GraphEngine | None = None,
+        runtime_version: str = AgentRuntimeVersion.V1.value,
+        runtime_route: RuntimeRoute | None = None,
     ) -> AgentTurn:
         plan = None
         try:
@@ -131,6 +147,9 @@ class AgentSessionRunner:
                 user_text=user_text,
                 house_id=house_id,
                 slots=slots,
+                engine=engine,
+                runtime_version=runtime_version,
+                runtime_route=runtime_route,
             )
             if plan.repair_followup_message:
                 return self._return_done(plan.ctx, plan.state, conversation_id, user_text)
@@ -140,12 +159,11 @@ class AgentSessionRunner:
                 fence=self._lease_fence(plan),
                 expected_version=plan.expected_version,
             ) as span:
-                result = self._graph.invoke(
-                    plan.state,
-                    thread_id=conversation_id,
-                    expected_version=plan.expected_version,
+                result = plan.engine.invoke(
+                    plan.state, thread_id=conversation_id, runtime=runtime_for(plan)
                 )
-                self._assert_heartbeat_alive(plan)
+                self._turn_guard.assert_alive(plan.lease, plan.heartbeat)
+                publish_accepted(self._checkpointer, conversation_id, plan, result)
                 turn = self._finalize(result)
                 self._persist_turn(plan.ctx, turn, user_text)
                 span.set_attribute("agent.intent", turn.state.intent)
@@ -166,8 +184,8 @@ class AgentSessionRunner:
             raise
         finally:
             if plan is not None:
-                self._stop_heartbeat(plan)
-                self._release_lease(conversation_id, plan.lease)
+                self._turn_guard.stop_heartbeat(plan.heartbeat)
+                self._turn_guard.release(conversation_id, plan.lease)
 
     def stream_start(
         self,
@@ -177,6 +195,9 @@ class AgentSessionRunner:
         user_text: str,
         house_id: UUID | None = None,
         slots: dict[str, Any] | None = None,
+        engine: GraphEngine | None = None,
+        runtime_version: str = AgentRuntimeVersion.V1.value,
+        runtime_route: RuntimeRoute | None = None,
     ):
         """真流式发起一轮（P1 观测与流式）。
 
@@ -192,6 +213,9 @@ class AgentSessionRunner:
                 user_text=user_text,
                 house_id=house_id,
                 slots=slots,
+                engine=engine,
+                runtime_version=runtime_version,
+                runtime_route=runtime_route,
             )
             if plan.repair_followup_message:
                 turn = self._return_done(plan.ctx, plan.state, conversation_id, user_text)
@@ -205,18 +229,20 @@ class AgentSessionRunner:
                 fence=self._lease_fence(plan),
                 expected_version=plan.expected_version,
             ) as span:
-                for kind, payload in self._graph.invoke_stream(
+                for kind, payload in plan.engine.invoke_stream(
                     plan.state,
                     thread_id=conversation_id,
-                    expected_version=plan.expected_version,
+                    runtime=runtime_for(plan),
                 ):
                     if kind == "node_enter":
                         yield ("tool_started", {"node": payload["node"]})
                     elif kind == "node_exit":
                         yield ("tool_finished", {"node": payload["node"]})
                     elif kind == "__final__":
-                        turn = self._finalize(payload)
-                        self._assert_heartbeat_alive(plan)
+                        result = result_from_payload(payload)
+                        self._turn_guard.assert_alive(plan.lease, plan.heartbeat)
+                        publish_accepted(self._checkpointer, conversation_id, plan, result)
+                        turn = self._finalize(result)
                         self._persist_turn(plan.ctx, turn, user_text)
                         span.set_attribute("agent.intent", turn.state.intent)
                         span.set_attribute("agent.degraded", self._observability.degraded)
@@ -234,8 +260,8 @@ class AgentSessionRunner:
             raise
         finally:
             if plan is not None:
-                self._stop_heartbeat(plan)
-                self._release_lease(conversation_id, plan.lease)
+                self._turn_guard.stop_heartbeat(plan.heartbeat)
+                self._turn_guard.release(conversation_id, plan.lease)
 
     def _plan_start(
         self,
@@ -245,16 +271,23 @@ class AgentSessionRunner:
         user_text: str,
         house_id: UUID | None,
         slots: dict[str, Any] | None,
+        engine: GraphEngine | None = None,
+        runtime_version: str = AgentRuntimeVersion.V1.value,
+        runtime_route: RuntimeRoute | None = None,
     ) -> "_TurnPlan":
         # P0-2: lease 必须在 turn 最外层获取——任何会修改 conversation 状态的
         # 操作（ConversationService.start、recovery.peek、confirmation_token_provider、
         # graph.invoke、sync_from_state）都必须处于 lease ownership 下。
-        lease = self._acquire_lease(conversation_id, uuid4())
-        ctx = self._activate_lease_context(context, lease)
+        lease = self._turn_guard.acquire(conversation_id, uuid4())
+        ctx = self._turn_guard.activate(context, lease)
+        if runtime_route is not None:
+            engine, runtime_version = runtime_route(self._conversations.get(conversation_id))
+        # PR4 §8：runtime 版本在创建时钉死；已存在会话沿用持久化值，绝不切换。
         conversation = self._conversations.start(
             conversation_id=conversation_id,
             context=ctx,
             current_house_id=house_id,
+            runtime_version=runtime_version,
         )
         current_house_id = house_id or conversation.current_house_id
         previous = self._recovery.peek(conversation_id)
@@ -268,11 +301,11 @@ class AgentSessionRunner:
         )
         # P0-3: expected_version 必须在成功 acquire lease 后读取，避免读到
         # 被并发新 run 覆盖的版本导致不必要 stale CAS。
-        expected_version = self._turn_start_version(conversation_id)
+        expected_version = self._turn_guard.version(conversation_id)
         # P0-5: heartbeat——graph.invoke 前先单次续期确认 lease 仍有效，
         # 成功后再启动后台周期续租（失败则不会启动后台线程，避免泄漏）。
-        self._heartbeat(lease)
-        heartbeat = self._start_heartbeat(lease)
+        self._turn_guard.renew(lease)
+        heartbeat = self._turn_guard.start_heartbeat(lease)
         return _TurnPlan(
             lease=lease,
             ctx=ctx,
@@ -280,75 +313,17 @@ class AgentSessionRunner:
             conversation=conversation,
             expected_version=expected_version,
             repair_followup_message=prepared.repair_followup_message,
+            engine=engine or LegacyGraphEngine(self._graph),
             heartbeat=heartbeat,
         )
 
     def _return_done(
         self, context: AgentContext, state: GraphState, conversation_id: str, user_text: str
     ) -> AgentTurn:
-        result = {
-            "state": state,
-            "interrupt": None,
-            "thread_id": conversation_id,
-            "done": True,
-        }
+        result = GraphExecutionResult(state=state, interrupt=None, done=True)
         turn = self._finalize(result)
         self._persist_turn(context, turn, user_text)
         return turn
-
-    # ── P0 并发护栏（具体逻辑见 turn_guard.py） ────────────────────────
-
-    def _acquire_lease(self, thread_id: str, run_id: UUID) -> Lease | None:
-        return acquire_turn_lease(
-            self._run_lease,
-            enforce_concurrency=self._enforce,
-            thread_id=thread_id,
-            run_id=run_id,
-        )
-
-    def _heartbeat(self, lease: Lease | None) -> Lease | None:
-        """续期 lease（P0-5）。失败抛 ``StaleAgentRunError``，由调用方终止 run。"""
-        return heartbeat_turn_lease(self._run_lease, lease=lease)
-
-    def _release_lease(self, thread_id: str, lease: Lease | None) -> None:
-        if lease is None:
-            return
-        release_turn_lease(self._run_lease, thread_id=thread_id, run_id=lease.run_id)
-
-    def _start_heartbeat(self, lease: Lease | None) -> "LeaseHeartbeat | None":
-        """在后台线程启动 lease 周期续租（P0-5 heartbeat）。
-
-        仅当 lease 与 run_lease 服务均存在时启动；否则（_enforce=False 的测试/
-        退化路径）返回 None，调用方跳过。
-        """
-        if lease is None or self._run_lease is None:
-            return None
-        heartbeat = LeaseHeartbeat(
-            self._run_lease, lease, interval_seconds=self._heartbeat_interval
-        )
-        heartbeat.start()
-        return heartbeat
-
-    def _stop_heartbeat(self, plan: "_TurnPlan") -> None:
-        """停止后台续租循环（必须在 release 之前调用，避免续租复活已释放的 lease）。"""
-        if plan.heartbeat is not None:
-            plan.heartbeat.stop()
-
-    def _assert_heartbeat_alive(self, plan: "_TurnPlan") -> None:
-        """若后台续租检测到失租（lease 过期/被抢占），立即中止当前 turn。
-
-        与 ``assert_run_fence`` 形成双保险：业务写路径在 mutation 前校验 fence，
-        此处则在 turn 结束后、持久化前再次确认 lease 仍有效。
-        """
-        if plan.heartbeat is not None and plan.heartbeat.stale:
-            thread_id = plan.lease.thread_id if plan.lease is not None else "<unknown>"
-            raise StaleAgentRunError(
-                thread_id, reason="lease heartbeat detected stale run; aborting turn"
-            )
-
-    def _activate_lease_context(self, context: AgentContext, lease: Lease | None) -> AgentContext:
-        """委托 turn_guard.activate_lease_context（P0-4 fencing 注入）。"""
-        return activate_lease_context(context, lease)
 
     @staticmethod
     def _lease_run_id(plan: "_TurnPlan") -> Any | None:
@@ -360,11 +335,6 @@ class AgentSessionRunner:
         """lease 可能为 None（_enforce=False 的测试/退化路径），安全取 fence。"""
         return plan.lease.fence if plan.lease is not None else None
 
-    def _turn_start_version(self, thread_id: str) -> int | None:
-        return read_turn_start_version(
-            self._checkpointer, enforce_concurrency=self._enforce, thread_id=thread_id
-        )
-
     def resume(
         self,
         *,
@@ -373,6 +343,7 @@ class AgentSessionRunner:
         confirmed: bool,
         confirmation_token: str | None = None,
         action_hash: str | None = None,
+        engine: GraphEngine | None = None,
     ) -> AgentTurn:
         plan = None
         token = confirmation_token
@@ -383,6 +354,7 @@ class AgentSessionRunner:
                 confirmed=confirmed,
                 confirmation_token=confirmation_token,
                 action_hash=action_hash,
+                engine=engine,
             )
             with self._observability.observe_turn(
                 conversation_id=conversation_id,
@@ -391,13 +363,15 @@ class AgentSessionRunner:
                 expected_version=plan.expected_version,
                 confirmed=confirmed,
             ) as span:
-                result = self._graph.resume(
+                result = plan.engine.resume(
                     conversation_id,
                     {"confirmed": confirmed, "confirmation_token": token},
                     state=plan.state,
-                    expected_version=plan.expected_version,
+                    runtime=runtime_for(plan, token=token if confirmed else None),
+                    runtime_cursor=cursor_for(self._checkpointer, conversation_id),
                 )
-                self._assert_heartbeat_alive(plan)
+                self._turn_guard.assert_alive(plan.lease, plan.heartbeat)
+                publish_accepted(self._checkpointer, conversation_id, plan, result)
                 turn = self._finalize(result)
                 action_text = "确认执行操作" if confirmed else "取消待确认操作"
                 self._persist_turn(plan.ctx, turn, action_text)
@@ -421,8 +395,8 @@ class AgentSessionRunner:
             raise
         finally:
             if plan is not None:
-                self._stop_heartbeat(plan)
-                self._release_lease(conversation_id, plan.lease)
+                self._turn_guard.stop_heartbeat(plan.heartbeat)
+                self._turn_guard.release(conversation_id, plan.lease)
 
     def stream_resume(
         self,
@@ -432,6 +406,7 @@ class AgentSessionRunner:
         confirmed: bool,
         confirmation_token: str | None = None,
         action_hash: str | None = None,
+        engine: GraphEngine | None = None,
     ):
         """真流式恢复一轮（P1 观测与流式）。语义同 ``stream_start``。"""
         plan = None
@@ -443,6 +418,7 @@ class AgentSessionRunner:
                 confirmed=confirmed,
                 confirmation_token=confirmation_token,
                 action_hash=action_hash,
+                engine=engine,
             )
             yield (
                 "run_started",
@@ -455,19 +431,22 @@ class AgentSessionRunner:
                 expected_version=plan.expected_version,
                 confirmed=confirmed,
             ) as span:
-                for kind, payload in self._graph.resume_stream(
+                for kind, payload in plan.engine.resume_stream(
                     conversation_id,
                     {"confirmed": confirmed, "confirmation_token": token},
                     state=plan.state,
-                    expected_version=plan.expected_version,
+                    runtime=runtime_for(plan, token=token if confirmed else None),
+                    runtime_cursor=cursor_for(self._checkpointer, conversation_id),
                 ):
                     if kind == "node_enter":
                         yield ("tool_started", {"node": payload["node"]})
                     elif kind == "node_exit":
                         yield ("tool_finished", {"node": payload["node"]})
                     elif kind == "__final__":
-                        turn = self._finalize(payload)
-                        self._assert_heartbeat_alive(plan)
+                        result = result_from_payload(payload)
+                        self._turn_guard.assert_alive(plan.lease, plan.heartbeat)
+                        publish_accepted(self._checkpointer, conversation_id, plan, result)
+                        turn = self._finalize(result)
                         action_text = "确认执行操作" if confirmed else "取消待确认操作"
                         self._persist_turn(plan.ctx, turn, action_text)
                         span.set_attribute("agent.intent", turn.state.intent)
@@ -490,8 +469,8 @@ class AgentSessionRunner:
             raise
         finally:
             if plan is not None:
-                self._stop_heartbeat(plan)
-                self._release_lease(conversation_id, plan.lease)
+                self._turn_guard.stop_heartbeat(plan.heartbeat)
+                self._turn_guard.release(conversation_id, plan.lease)
 
     def _plan_resume(
         self,
@@ -501,12 +480,13 @@ class AgentSessionRunner:
         confirmed: bool,
         confirmation_token: str | None,
         action_hash: str | None,
+        engine: GraphEngine | None = None,
     ) -> tuple["_TurnPlan", str | None]:
         # P0-2: lease 必须在最外层——restore、confirmation_token_provider（写
         # token + create_pending + approve）、graph.resume 都会修改 conversation
         # 状态，必须处于 lease ownership 下。
-        lease = self._acquire_lease(conversation_id, uuid4())
-        ctx = self._activate_lease_context(context, lease)
+        lease = self._turn_guard.acquire(conversation_id, uuid4())
+        ctx = self._turn_guard.activate(context, lease)
         restored = self._recovery.restore(conversation_id, ctx, expected_action_hash=action_hash)
         # HTTP 层不接受客户端令牌。生产装配存在 provider 时始终覆盖调用方值，
         # 令牌只能由服务端根据恢复后的可信待确认参数签发。
@@ -515,11 +495,11 @@ class AgentSessionRunner:
         if confirmed and not confirmation_token:
             raise RuntimeError("confirmation token provider is not configured")
         # P0-3: expected_version 在 acquire lease 后读取。
-        expected_version = self._turn_start_version(conversation_id)
+        expected_version = self._turn_guard.version(conversation_id)
         # P0-5: heartbeat——graph.resume 前先单次续期确认 lease 仍有效，
         # 成功后再启动后台周期续租（失败则不会启动后台线程，避免泄漏）。
-        self._heartbeat(lease)
-        heartbeat = self._start_heartbeat(lease)
+        self._turn_guard.renew(lease)
+        heartbeat = self._turn_guard.start_heartbeat(lease)
         plan = _TurnPlan(
             lease=lease,
             ctx=ctx,
@@ -527,6 +507,7 @@ class AgentSessionRunner:
             conversation=None,
             expected_version=expected_version,
             repair_followup_message=None,
+            engine=engine or LegacyGraphEngine(self._graph),
             heartbeat=heartbeat,
         )
         return plan, confirmation_token
@@ -545,23 +526,29 @@ class AgentSessionRunner:
     def close(self, *, conversation_id: str, context: AgentContext) -> ConversationSnapshot:
         # P0-2/P0-7: close 必须在 lease 内——防止与正在运行的 turn 竞争，
         # CLOSED conversation 不允许被旧 run 的 sync_from_state 恢复为 ACTIVE。
-        lease = self._acquire_lease(conversation_id, uuid4())
+        lease = self._turn_guard.acquire(conversation_id, uuid4())
         try:
             self._conversations.require_owned_by(conversation_id, context)
             return self._conversations.close(conversation_id)
         finally:
-            self._release_lease(conversation_id, lease)
+            self._turn_guard.release(conversation_id, lease)
 
     # ---- 内部 ----
 
-    def _finalize(self, result: dict[str, Any]) -> AgentTurn:
-        state: GraphState = result["state"]
-        done = bool(result["done"])
+    def _finalize(self, result: GraphExecutionResult | dict[str, Any]) -> AgentTurn:
+        if isinstance(result, GraphExecutionResult):
+            state = result.state
+            done = bool(result.done)
+            interrupt = result.interrupt
+        else:
+            state = result["state"]
+            done = bool(result.get("done", True))
+            interrupt = result.get("interrupt")
         conversation = self._conversations.sync_from_state(state, waiting_confirm=not done)
         return AgentTurn(
             state=state,
             conversation=conversation,
-            interrupt=result.get("interrupt"),
+            interrupt=interrupt,
             done=done,
         )
 

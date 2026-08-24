@@ -31,13 +31,13 @@ from property_agent.agent.adapters.api.presentation import (
     turn_data,
 )
 from property_agent.agent.adapters.api.schemas import ConfirmRequest, SendMessageRequest
-from property_agent.agent.application.runner import AgentSessionRunner
+from property_agent.agent.application.facade import AgentRuntimeFacade
 from property_agent.platform.errors import BusinessError
 from property_agent.platform.schemas import Envelope
 
 router = APIRouter(prefix="/api/agent/conversations", tags=["agent"])
 
-RunnerDep = Annotated[AgentSessionRunner, Depends(get_agent_runner)]
+RunnerDep = Annotated[AgentRuntimeFacade, Depends(get_agent_runner)]
 ContextDep = Annotated[AgentRequestContext, Depends(get_agent_context)]
 ConversationId = Annotated[str, Path(min_length=1, max_length=64)]
 
