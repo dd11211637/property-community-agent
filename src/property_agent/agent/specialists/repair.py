@@ -37,10 +37,19 @@ class RepairPilotSpecialist:
         state.capability_invocation = self._progress(invocation, result.fingerprint)
         if not result.ok:
             state.error = result.error.code if result.error else "CAPABILITY_EXECUTION_FAILED"
+            state.tool_result = {
+                "ok": False,
+                "tool": result.capability,
+                "error": {
+                    "code": state.error,
+                    "message": result.error.message if result.error else "操作失败。",
+                },
+            }
             state.add_message("assistant", result.error.message if result.error else "操作失败。")
             return state
-        state.tool_result = result.output.model_dump(mode="json")
-        state.add_message("assistant", self._message(name, state.tool_result))
+        facts = result.output.model_dump(mode="json")
+        state.tool_result = {"ok": True, "tool": result.capability, "data": facts}
+        state.add_message("assistant", self._message(name, facts))
         return state
 
     @staticmethod

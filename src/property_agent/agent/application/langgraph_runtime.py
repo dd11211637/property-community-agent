@@ -9,10 +9,12 @@ from typing import Any, TypedDict
 from uuid import uuid4
 
 from property_agent.agent.application.graph_engine import GraphExecutionResult
+from property_agent.agent.policies import OperationLevel
 from property_agent.agent.runtime import RuntimeContext
 from property_agent.agent.specialists.repair import RepairPilotSpecialist
 from property_agent.agent.state import GraphState, ProposedAction
 from property_agent.agent.subgraphs.repair import select_repair_tool
+from property_agent.agent.working_state import synchronize_typed_domain
 from property_agent.platform.application.hashing import canonical_hash, canonical_payload
 
 
@@ -107,6 +109,7 @@ def _classify(envelope: LangGraphState) -> LangGraphState:
         state.add_message("assistant", "当前试点运行时仅支持报修业务。")
         return _update(state)
     state.intent = "REPAIR"
+    synchronize_typed_domain(state)
     return _update(state)
 
 
@@ -143,20 +146,30 @@ def _prepare_action(envelope: LangGraphState) -> LangGraphState:
     )
     state.proposed_action = proposed
     state.pending_action = {
-        "action": proposed.capability,
+        "tool": proposed.capability,
         "params": proposed.params,
         "params_hash": proposed.params_hash,
         "issued_at": proposed.issued_at,
     }
-    state.operation_level = "WRITE_LOW"
+    state.operation_level = OperationLevel.WRITE_LOW_RISK.value
     return _update(state)
+
+
+def _confirmation_envelope(state: GraphState) -> dict[str, Any]:
+    pending = dict(state.pending_action or {})
+    return {
+        "type": "confirmation",
+        "summary": f"确认执行 REPAIR 操作：{pending.get('tool')}",
+        "action": pending,
+        "action_hash": pending.get("params_hash"),
+    }
 
 
 def _await_confirmation(envelope: LangGraphState) -> LangGraphState:
     from langgraph.types import interrupt
 
     state = _state(envelope)
-    decision = interrupt(dict(state.pending_action or {}))
+    decision = interrupt(_confirmation_envelope(state))
     state._resume = {"confirmed": bool(decision.get("confirmed"))}
     return _update(state)
 
@@ -299,7 +312,7 @@ class LangGraphEngine:
             "__final__",
             GraphExecutionResult(
                 state=state,
-                interrupt=dict(state.pending_action or {}) if interrupted else None,
+                interrupt=_confirmation_envelope(state) if interrupted else None,
                 done=not interrupted,
                 runtime_cursor={
                     "thread_id": str(last_cursor["thread_id"]),
