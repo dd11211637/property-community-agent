@@ -8,6 +8,12 @@ from typing import Any
 from uuid import UUID
 
 from property_agent.agent.capabilities.contracts import CapabilityInvocationState
+from property_agent.agent.orchestration import (
+    GoalOutcome,
+    OrchestrationBudget,
+    Plan,
+    SpecialistResult,
+)
 from property_agent.agent.state import (
     AgentState,
     ClarificationState,
@@ -66,6 +72,14 @@ class CheckpointStateCodec:
             "clarification": asdict(clarification),
             "proposed_action": asdict(proposed) if proposed else None,
             "orchestration": asdict(orchestration),
+            "plan": state.plan.to_dict() if state.plan else None,
+            "orchestration_budget": (
+                state.orchestration_budget.to_dict() if state.orchestration_budget else None
+            ),
+            "specialist_results": [result.to_dict() for result in state.specialist_results],
+            "goal_outcomes": {
+                step_id: outcome.value for step_id, outcome in state.goal_outcomes.items()
+            },
             "actor_id": self._uuid(state.actor_id),
             "community_id": self._uuid(state.community_id),
             "current_house_id": self._uuid(state.current_house_id),
@@ -164,6 +178,20 @@ class CheckpointStateCodec:
             clarification=clarification,
             proposed_action=proposed,
             orchestration=orchestration,
+            plan=Plan.from_dict(payload["plan"]) if payload.get("plan") else None,
+            orchestration_budget=(
+                OrchestrationBudget.from_dict(payload["orchestration_budget"])
+                if payload.get("orchestration_budget")
+                else None
+            ),
+            specialist_results=tuple(
+                SpecialistResult.from_dict(value)
+                for value in payload.get("specialist_results") or ()
+            ),
+            goal_outcomes={
+                step_id: GoalOutcome(outcome)
+                for step_id, outcome in dict(payload.get("goal_outcomes") or {}).items()
+            },
             actor_id=self._decode_uuid(payload.get("actor_id")),
             community_id=self._decode_uuid(payload.get("community_id")),
             current_house_id=self._decode_uuid(payload.get("current_house_id")),

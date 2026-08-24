@@ -37,6 +37,24 @@ class PreparedWrite:
     confirmation_token: str = field(repr=False)
     idempotency_key: str = field(repr=False)
     approval_ref: str | None = field(default=None, repr=False)
+    capability: str | None = None
+    params_hash: str | None = None
+    plan_id: str | None = None
+    plan_step_id: str | None = None
+
+    def matches(
+        self,
+        *,
+        capability: str,
+        params_hash: str,
+        plan_id: str | None = None,
+        plan_step_id: str | None = None,
+    ) -> bool:
+        if self.capability != capability or self.params_hash != params_hash:
+            return False
+        if plan_id is not None and self.plan_id != plan_id:
+            return False
+        return plan_step_id is None or self.plan_step_id == plan_step_id
 
 
 @dataclass(frozen=True, slots=True)

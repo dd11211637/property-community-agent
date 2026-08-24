@@ -7,6 +7,12 @@ from typing import Any, TypedDict
 from uuid import UUID
 
 from property_agent.agent.capabilities.contracts import CapabilityInvocationState
+from property_agent.agent.orchestration import (
+    GoalOutcome,
+    OrchestrationBudget,
+    Plan,
+    SpecialistResult,
+)
 from property_agent.agent.working_state import DomainWorkingState, EmptyWorkingState
 
 
@@ -55,6 +61,10 @@ class AgentState:
     clarification: ClarificationState = field(default_factory=ClarificationState)
     proposed_action: ProposedAction | None = None
     orchestration: OrchestrationState = field(default_factory=OrchestrationState)
+    plan: Plan | None = None
+    orchestration_budget: OrchestrationBudget | None = None
+    specialist_results: tuple[SpecialistResult, ...] = ()
+    goal_outcomes: dict[str, GoalOutcome] = field(default_factory=dict)
     actor_id: UUID | None = None
     community_id: UUID | None = None
     current_house_id: UUID | None = None
