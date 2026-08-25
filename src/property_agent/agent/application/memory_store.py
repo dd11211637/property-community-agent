@@ -13,6 +13,8 @@ from sqlalchemy import text as sa_text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from property_agent.agent.application.memory_reindex import MemoryReindexer
+from property_agent.agent.application.memory_retention import governed_retention_days
 from property_agent.agent.infrastructure.models import AgentMemoryModel
 from property_agent.agent.memory_contracts import (
     EmbeddingProvider,
@@ -22,6 +24,7 @@ from property_agent.agent.memory_contracts import (
     MemoryLifecycle,
     MemoryQuery,
     MemorySource,
+    ReindexResult,
     RetrievedMemory,
 )
 from property_agent.platform.application.hashing import canonical_hash
@@ -102,26 +105,33 @@ class MemoryRecordStore:
             degradation_reason=degraded_reason,
         )
 
-    def revalidate(self, query: MemoryQuery, memory_ids: set[UUID]) -> MemoryContext:
-        if not memory_ids:
+    def revalidate(self, query: MemoryQuery, previous: MemoryContext) -> MemoryContext:
+        if not previous.items:
             return MemoryContext()
-        result = self.retrieve(
-            MemoryQuery(
-                text=query.text,
-                actor_id=query.actor_id,
-                community_id=query.community_id,
-                current_house_id=query.current_house_id,
-                bound_house_ids=query.bound_house_ids,
-                kinds=query.kinds,
-                limit=min(20, len(memory_ids)),
-                token_budget=query.token_budget,
+        references = {item.memory_id: item for item in previous.items}
+        rows = self._session.execute(
+            select(AgentMemoryModel).where(
+                AgentMemoryModel.id.in_(references),
+                AgentMemoryModel.actor_id == query.actor_id,
+                AgentMemoryModel.community_id == query.community_id,
             )
-        )
+        ).scalars()
+        current = {row.id: row for row in rows}
+        valid: list[RetrievedMemory] = []
+        invalidated = False
+        for item in previous.items:
+            row = current.get(item.memory_id)
+            if row is None or not self._same_effective_reference(row, item, query):
+                invalidated = True
+                continue
+            valid.append(item)
         return MemoryContext(
-            tuple(item for item in result.items if item.memory_id in memory_ids),
-            result.query_fingerprint,
-            result.degraded,
-            result.degradation_reason,
+            tuple(valid),
+            previous.query_fingerprint,
+            previous.degraded,
+            previous.degradation_reason,
+            basis_invalidated=invalidated,
+            invalidation_reason="MEMORY_BASIS_CHANGED" if invalidated else None,
         )
 
     def persist_candidate(
@@ -194,6 +204,7 @@ class MemoryRecordStore:
             row.embedding_status = "PENDING"
             return
         try:
+            row.embedding = None
             result = self._embedding_provider.embed(row.content)
         except Exception:
             row.embedding_status = "FAILED"
@@ -202,6 +213,14 @@ class MemoryRecordStore:
         row.embedding_model = result.model
         row.embedding_version = result.version
         row.embedding_status = "READY"
+
+    def reindex(self, *, limit: int = 100) -> ReindexResult:
+        return MemoryReindexer(
+            self._session,
+            self._embedding_provider,
+            self.index,
+            clock=now_utc,
+        ).run(limit=limit)
 
     def prepare_explicit_create(self, context: ScopedMemoryContext, row: AgentMemoryModel) -> None:
         """Serialize and supersede an existing governed explicit preference."""
@@ -292,11 +311,8 @@ class MemoryRecordStore:
         lifecycle,
         conflict_key,
     ):
-        expires_at = (
-            now_utc() + timedelta(days=candidate.retention_days)
-            if candidate.retention_days is not None
-            else None
-        )
+        retention_days = governed_retention_days(candidate)
+        expires_at = now_utc() + timedelta(days=retention_days) if retention_days else None
         return AgentMemoryModel(
             actor_id=context.actor_id,
             community_id=context.community_id,
@@ -319,8 +335,23 @@ class MemoryRecordStore:
             lifecycle_status=lifecycle.value,
             conflict_key=conflict_key,
             supersedes_id=old.id if old is not None else None,
-            retention_class=("SHORT_LIVED" if candidate.retention_days else "LONG_LIVED"),
+            retention_class=("BOUNDED" if retention_days else "LONG_LIVED"),
             expires_at=expires_at,
+        )
+
+    @staticmethod
+    def _same_effective_reference(row, item, query: MemoryQuery) -> bool:
+        now = now_utc()
+        scope_valid = row.house_id is None or (
+            row.house_id == query.current_house_id and row.house_id in query.bound_house_ids
+        )
+        return bool(
+            scope_valid
+            and row.lifecycle_status == MemoryLifecycle.ACTIVE.value
+            and row.deleted_at is None
+            and (row.expires_at is None or as_utc(row.expires_at) > now)
+            and row.version == item.record_version
+            and memory_fingerprint(row) == item.content_fingerprint
         )
 
     def _retrieval_filters(self, query: MemoryQuery) -> tuple[object, ...]:
@@ -360,6 +391,8 @@ class MemoryRecordStore:
             created_at=row.created_at,
             updated_at=row.updated_at,
             expires_at=row.expires_at,
+            record_version=row.version,
+            content_fingerprint=memory_fingerprint(row),
             semantic_score=semantic_score,
             rank_score=score + procedure_penalty,
         )
@@ -425,3 +458,14 @@ class MemoryRecordStore:
             return None
         value = candidate.conflict_key.strip().lower()
         return value[:128] if value.replace("-", "").replace("_", "").isalnum() else None
+
+
+def memory_fingerprint(row: AgentMemoryModel) -> str:
+    return canonical_hash(
+        {
+            "id": str(row.id),
+            "version": row.version,
+            "content": row.content,
+            "house_id": str(row.house_id) if row.house_id else None,
+        }
+    )

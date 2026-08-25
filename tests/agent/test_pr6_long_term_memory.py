@@ -9,20 +9,29 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from property_agent.agent.application.conversation_service import ConversationSnapshot
+from property_agent.agent.application.memory_outcome import accepted_turn_outcome
 from property_agent.agent.application.memory_service import AgentMemoryService
 from property_agent.agent.application.memory_writer import AcceptedEvidenceMemoryWriter
 from property_agent.agent.application.runner import AgentSessionRunner
 from property_agent.agent.infrastructure.models import AgentMemoryModel
 from property_agent.agent.memory_contracts import (
+    AcceptedTurnOutcome,
     MemoryCandidate,
     MemoryContext,
     MemoryKind,
     MemoryQuery,
     MemorySource,
 )
+from property_agent.agent.orchestration import (
+    ObjectiveClassification,
+    OrchestrationBudget,
+    Plan,
+    PlanStatus,
+)
 from property_agent.agent.planning import SupervisorPlanner
 from property_agent.agent.planning_contracts import PlanProposal, PlanStepProposal
-from property_agent.agent.runtime import RuntimeContext
+from property_agent.agent.runtime import PreparedWrite, RuntimeContext
+from property_agent.agent.specialists.supervisor import Supervisor
 from property_agent.agent.state import AgentState
 from property_agent.platform.adapters.api.dependencies import RequestContext
 from property_agent.platform.context import ExecutionSource
@@ -109,6 +118,7 @@ def test_writer_replay_is_idempotent_and_correction_supersedes_atomically():
         user_text="以后上门前打电话",
         assistant_text="好的",
         accepted_version=3,
+        outcome=AcceptedTurnOutcome.COMPLETED,
     )
     writer.write_accepted_turn(
         context=context,
@@ -116,6 +126,7 @@ def test_writer_replay_is_idempotent_and_correction_supersedes_atomically():
         user_text="以后上门前打电话",
         assistant_text="好的",
         accepted_version=3,
+        outcome=AcceptedTurnOutcome.COMPLETED,
     )
     correction = MemoryCandidate(
         MemoryKind.SEMANTIC,
@@ -131,6 +142,7 @@ def test_writer_replay_is_idempotent_and_correction_supersedes_atomically():
         user_text="以后不要打电话，只发站内消息",
         assistant_text="已更正",
         accepted_version=4,
+        outcome=AcceptedTurnOutcome.COMPLETED,
     )
     with factory() as session:
         rows = list(session.scalars(select(AgentMemoryModel).order_by(AgentMemoryModel.created_at)))
@@ -215,8 +227,48 @@ def test_writer_rejects_secret_authority_business_fact_and_failed_episode():
         ),
     )
     assert not any(
-        AcceptedEvidenceMemoryWriter._eligible(candidate, "failed") for candidate in candidates
+        AcceptedEvidenceMemoryWriter._eligible(candidate, AcceptedTurnOutcome.FAILED)
+        for candidate in candidates
     )
+
+
+def test_canonical_outcomes_cover_v1_waiting_cancel_failed_and_v2_completed():
+    waiting = AgentState(conversation_id="v1-waiting")
+    failed = AgentState(conversation_id="v1-failed", error="backend failed")
+    completed = AgentState(
+        conversation_id="v2-completed",
+        plan=Plan(
+            "plan-1",
+            "完成查询",
+            ObjectiveClassification.SINGLE_DOMAIN,
+            (),
+            None,
+            PlanStatus.COMPLETED,
+        ),
+    )
+    assert accepted_turn_outcome(waiting, done=False) is AcceptedTurnOutcome.PENDING
+    assert (
+        accepted_turn_outcome(waiting, done=True, cancelled=True) is AcceptedTurnOutcome.CANCELLED
+    )
+    assert accepted_turn_outcome(failed, done=True) is AcceptedTurnOutcome.FAILED
+    assert accepted_turn_outcome(completed, done=True) is AcceptedTurnOutcome.COMPLETED
+
+
+def test_episode_writer_requires_canonical_completed_outcome():
+    episode = MemoryCandidate(
+        MemoryKind.EPISODIC,
+        "SERVICE_NOTE",
+        "报修任务已经完成",
+        MemorySource.COMPLETED_PLAN,
+    )
+    assert AcceptedEvidenceMemoryWriter._eligible(episode, AcceptedTurnOutcome.COMPLETED)
+    for outcome in (
+        AcceptedTurnOutcome.PENDING,
+        AcceptedTurnOutcome.CANCELLED,
+        AcceptedTurnOutcome.FAILED,
+        AcceptedTurnOutcome.PARTIAL,
+    ):
+        assert not AcceptedEvidenceMemoryWriter._eligible(episode, outcome)
 
 
 class _MemoryAwareGateway:
@@ -292,6 +344,224 @@ def test_checkpoint_roundtrip_keeps_only_bounded_typed_memory_context():
     assert restored.retrieved_memories.degradation_reason == "TEST"
 
 
+def test_revalidation_keeps_exact_prior_basis_and_ignores_new_ranked_memory():
+    engine, factory = _factory()
+    house = uuid4()
+    context = Context(uuid4(), uuid4(), frozenset({house}))
+    with factory() as session:
+        service = AgentMemoryService(session)
+        service.create_memory(
+            context,
+            memory_type="COMMUNICATION",
+            content="上门前发站内消息",
+            house_id=house,
+        )
+        query = _query(context, house)
+        previous = service.retrieve(query)
+        unchanged = service.revalidate(query, previous)
+        service.create_memory(
+            context,
+            memory_type="PREFERENCE",
+            content="所有通知都要极简",
+            house_id=house,
+        )
+        after_unrelated_insert = service.revalidate(query, previous)
+    assert unchanged == previous
+    assert after_unrelated_insert == previous
+    engine.dispose()
+
+
+def test_update_invalidates_prior_memory_without_silent_content_swap():
+    engine, factory = _factory()
+    house = uuid4()
+    context = Context(uuid4(), uuid4(), frozenset({house}))
+    with factory() as session:
+        service = AgentMemoryService(session)
+        created = service.create_memory(
+            context,
+            memory_type="COMMUNICATION",
+            content="上门前打电话",
+            house_id=house,
+        )
+        query = _query(context, house)
+        previous = service.retrieve(query)
+        service.update_memory(
+            UUID(created["id"]),
+            context,
+            content="上门前只发站内消息",
+            expected_version=created["version"],
+        )
+        revalidated = service.revalidate(query, previous)
+    assert revalidated.items == ()
+    assert revalidated.basis_invalidated is True
+    assert revalidated.invalidation_reason == "MEMORY_BASIS_CHANGED"
+    engine.dispose()
+
+
+def test_delete_expiry_supersession_and_scope_loss_invalidate_prior_reference():
+    for mutation in ("delete", "expire", "supersede", "scope"):
+        engine, factory = _factory()
+        house = uuid4()
+        context = Context(uuid4(), uuid4(), frozenset({house}))
+        with factory() as session:
+            service = AgentMemoryService(session)
+            created = service.create_memory(
+                context,
+                memory_type="COMMUNICATION",
+                content="上门前打电话",
+                house_id=house,
+            )
+            query = _query(context, house)
+            previous = service.retrieve(query)
+            if mutation == "delete":
+                service.delete_memory(
+                    UUID(created["id"]), context, expected_version=created["version"]
+                )
+            elif mutation == "expire":
+                row = session.get(AgentMemoryModel, UUID(created["id"]))
+                row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+                session.commit()
+            elif mutation == "supersede":
+                service.create_memory(
+                    context,
+                    memory_type="COMMUNICATION",
+                    content="改为只发站内消息",
+                    house_id=house,
+                )
+            validation_query = (
+                MemoryQuery(
+                    text=query.text,
+                    actor_id=context.actor_id,
+                    community_id=context.community_id,
+                    current_house_id=house,
+                    bound_house_ids=frozenset(),
+                )
+                if mutation == "scope"
+                else query
+            )
+            revalidated = service.revalidate(validation_query, previous)
+        assert revalidated.basis_invalidated is True, mutation
+        assert revalidated.items == (), mutation
+        engine.dispose()
+
+
+class _RevalidatingReader:
+    def __init__(self, invalidated):
+        self.invalidated = invalidated
+        self.called = False
+
+    def __call__(self, _text, _runtime):
+        raise AssertionError("existing plan must revalidate, not retrieve")
+
+    def revalidate(self, _text, _runtime, _previous):
+        self.called = True
+        return self.invalidated
+
+
+def test_supervisor_stops_on_invalidated_basis_without_rebinding_pending_write():
+    actor, community, house = uuid4(), uuid4(), uuid4()
+    engine, factory = _factory()
+    context = Context(actor, community, frozenset({house}))
+    with factory() as session:
+        service = AgentMemoryService(session)
+        service.create_memory(
+            context,
+            memory_type="COMMUNICATION",
+            content="上门前发站内消息",
+            house_id=house,
+        )
+        previous = service.retrieve(_query(context, house))
+    request = RequestContext(
+        actor_id=actor,
+        community_id=community,
+        roles=frozenset({"RESIDENT"}),
+        bound_house_ids=frozenset({house}),
+        current_house_id=house,
+        request_id="memory-revalidate",
+        execution_source=ExecutionSource.AGENT,
+    )
+    prepared = PreparedWrite(
+        "confirmation-token",
+        "idempotency-key",
+        capability="repair_create",
+        params_hash="bound-original",
+        plan_id="plan-existing",
+    )
+    runtime = RuntimeContext.from_request_context(
+        request,
+        conversation_id="conv-revalidate",
+        prepared_write=prepared,
+    )
+    plan = Plan(
+        "plan-existing",
+        "提交报修",
+        ObjectiveClassification.SINGLE_DOMAIN,
+        (),
+        None,
+    )
+    pending = {"tool": "repair_create", "params_hash": "bound-original"}
+    state = AgentState(
+        conversation_id="conv-revalidate",
+        plan=plan,
+        pending_action=pending.copy(),
+        retrieved_memories=previous,
+        orchestration_budget=OrchestrationBudget.start(
+            now=datetime.now(UTC), duration=timedelta(minutes=1)
+        ),
+    )
+    reader = _RevalidatingReader(
+        MemoryContext(basis_invalidated=True, invalidation_reason="MEMORY_BASIS_CHANGED")
+    )
+    planner = SupervisorPlanner(
+        _MemoryAwareGateway(),
+        memory_reader=reader,
+    )
+    Supervisor(planner, {}).prepare(state, runtime)
+    assert state.plan.status is PlanStatus.NEEDS_CLARIFICATION
+    assert state.plan.replan_reason == "MEMORY_BASIS_INVALIDATED"
+    assert state.pending_action == pending
+    assert runtime.prepared_write is prepared
+    assert reader.called is True
+    engine.dispose()
+
+
+def test_server_retention_defaults_and_caps_automatic_episode_and_procedure():
+    engine, factory = _factory()
+    context = Context(uuid4(), uuid4(), frozenset())
+    cases = (
+        (MemoryKind.EPISODIC, None, 90),
+        (MemoryKind.EPISODIC, -7, 90),
+        (MemoryKind.EPISODIC, 999, 180),
+        (MemoryKind.EPISODIC, 14, 14),
+        (MemoryKind.PROCEDURAL_CANDIDATE, 0, 30),
+        (MemoryKind.PROCEDURAL_CANDIDATE, 999, 60),
+        (MemoryKind.PROCEDURAL_CANDIDATE, 7, 7),
+    )
+    with factory() as session:
+        service = AgentMemoryService(session)
+        for index, (kind, proposed, _expected) in enumerate(cases):
+            service.persist_candidate(
+                context,
+                candidate=MemoryCandidate(
+                    kind,
+                    "SERVICE_NOTE",
+                    f"受限记忆 {index}",
+                    MemorySource.COMPLETED_PLAN,
+                    retention_days=proposed,
+                ),
+                source_evidence_id=f"accepted:retention:{index}",
+                provenance={"conversation_id": "conv-retention"},
+                house_id=None,
+            )
+        rows = list(session.scalars(select(AgentMemoryModel).order_by(AgentMemoryModel.content)))
+    actual_days = sorted(
+        round((row.expires_at - row.created_at).total_seconds() / 86400) for row in rows
+    )
+    assert actual_days == [7, 14, 30, 60, 90, 90, 180]
+    assert all(row.retention_class == "BOUNDED" for row in rows)
+    engine.dispose()
+
+
 class _Conversations:
     def __init__(self, context):
         self.context = context
@@ -334,11 +604,24 @@ class _RejectAcceptedHead:
         raise RuntimeError("accepted-head CAS failed")
 
 
-class _WriterSpy:
-    calls = 0
+class _AcceptedHead:
+    def __init__(self, version):
+        self.version = version
 
-    def write_accepted_turn(self, **_kwargs):
+    def publish_accepted(self, *_args, **_kwargs):
+        return self.version
+
+
+class _WriterSpy:
+    def __init__(self):
+        self.calls = 0
+        self.outcomes = []
+        self.accepted_versions = []
+
+    def write_accepted_turn(self, **kwargs):
         self.calls += 1
+        self.outcomes.append(kwargs["outcome"])
+        self.accepted_versions.append(kwargs["accepted_version"])
 
 
 def test_failed_accepted_head_publication_produces_zero_writer_calls():
@@ -359,3 +642,35 @@ def test_failed_accepted_head_publication_produces_zero_writer_calls():
     else:
         raise AssertionError("publication failure must propagate")
     assert writer.calls == 0
+
+
+def test_missing_checkpointer_cannot_count_as_accepted_for_writer():
+    context = Context(uuid4(), uuid4(), frozenset())
+    writer = _WriterSpy()
+    runner = AgentSessionRunner(
+        graph=_Graph(),
+        conversations=_Conversations(context),
+        recovery=_Recovery(),
+        checkpointer=None,
+        memory_writer=writer,
+        enforce_concurrency=False,
+    )
+    turn = runner.start(conversation_id="conv-no-checkpoint", context=context, user_text="记住")
+    assert turn.done is True
+    assert writer.calls == 0
+
+
+def test_writer_receives_actual_published_version_and_canonical_outcome():
+    context = Context(uuid4(), uuid4(), frozenset())
+    writer = _WriterSpy()
+    runner = AgentSessionRunner(
+        graph=_Graph(),
+        conversations=_Conversations(context),
+        recovery=_Recovery(),
+        checkpointer=_AcceptedHead(17),
+        memory_writer=writer,
+        enforce_concurrency=False,
+    )
+    runner.start(conversation_id="conv-accepted", context=context, user_text="记住")
+    assert writer.accepted_versions == [17]
+    assert writer.outcomes == [AcceptedTurnOutcome.COMPLETED]

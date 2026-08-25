@@ -18,16 +18,18 @@ def result_from_payload(payload: Any) -> GraphExecutionResult:
     )
 
 
-def publish_accepted(checkpointer: Any, conversation_id: str, plan: Any, result: Any) -> None:
+def publish_accepted(checkpointer: Any, conversation_id: str, plan: Any, result: Any) -> int | None:
     """Publish only after graph durability and the lifecycle heartbeat assertion."""
     if checkpointer is None:
-        return
+        return None
     normalized = result_from_payload(result)
-    checkpointer.publish_accepted(
-        conversation_id,
-        normalized.state,
-        expected_version=plan.expected_version,
-        runtime_cursor=normalized.runtime_cursor,
+    return int(
+        checkpointer.publish_accepted(
+            conversation_id,
+            normalized.state,
+            expected_version=plan.expected_version,
+            runtime_cursor=normalized.runtime_cursor,
+        )
     )
 
 

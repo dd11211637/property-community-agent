@@ -36,6 +36,7 @@ from property_agent.agent.application.graph_engine import (
     GraphExecutionResult,
     LegacyGraphEngine,
 )
+from property_agent.agent.application.memory_outcome import accepted_turn_outcome
 from property_agent.agent.application.pending_confirmation import (
     confirmation_envelope,
 )
@@ -171,9 +172,11 @@ class AgentSessionRunner:
                     plan.state, thread_id=conversation_id, runtime=runtime_for(plan)
                 )
                 self._turn_guard.assert_alive(plan.lease, plan.heartbeat)
-                publish_accepted(self._checkpointer, conversation_id, plan, result)
+                accepted_version = publish_accepted(
+                    self._checkpointer, conversation_id, plan, result
+                )
                 turn = self._finalize(result)
-                self._persist_accepted(plan, turn, user_text)
+                self._persist_accepted(plan, turn, user_text, accepted_version)
                 span.set_attribute("agent.intent", turn.state.intent)
                 span.set_attribute("agent.degraded", self._observability.degraded)
                 return turn
@@ -253,13 +256,14 @@ class AgentSessionRunner:
                     elif kind == "__final__":
                         result = result_from_payload(payload)
                         self._turn_guard.assert_alive(plan.lease, plan.heartbeat)
-                        publish_accepted(self._checkpointer, conversation_id, plan, result)
+                        accepted_version = publish_accepted(
+                            self._checkpointer, conversation_id, plan, result
+                        )
                         turn = self._finalize(result)
-                        self._persist_accepted(plan, turn, user_text)
+                        self._persist_accepted(plan, turn, user_text, accepted_version)
                         span.set_attribute("agent.intent", turn.state.intent)
                         span.set_attribute("agent.degraded", self._observability.degraded)
                         yield ("__turn__", turn)
-                return
         except AgentSessionError as exc:
             if exc.code == AgentSessionErrorCode.CONVERSATION_BUSY:
                 self._observability.metrics.conversation_busy.inc()
@@ -406,10 +410,14 @@ class AgentSessionRunner:
                     runtime_cursor=cursor_for(self._checkpointer, conversation_id),
                 )
                 self._turn_guard.assert_alive(plan.lease, plan.heartbeat)
-                publish_accepted(self._checkpointer, conversation_id, plan, result)
+                accepted_version = publish_accepted(
+                    self._checkpointer, conversation_id, plan, result
+                )
                 turn = self._finalize(result)
                 action_text = "确认执行操作" if confirmed else "取消待确认操作"
-                self._persist_accepted(plan, turn, action_text)
+                self._persist_accepted(
+                    plan, turn, action_text, accepted_version, cancelled=not confirmed
+                )
                 span.set_attribute("agent.intent", turn.state.intent)
                 span.set_attribute("agent.degraded", self._observability.degraded)
                 return turn
@@ -480,10 +488,14 @@ class AgentSessionRunner:
                     elif kind == "__final__":
                         result = result_from_payload(payload)
                         self._turn_guard.assert_alive(plan.lease, plan.heartbeat)
-                        publish_accepted(self._checkpointer, conversation_id, plan, result)
+                        accepted_version = publish_accepted(
+                            self._checkpointer, conversation_id, plan, result
+                        )
                         turn = self._finalize(result)
                         action_text = "确认执行操作" if confirmed else "取消待确认操作"
-                        self._persist_accepted(plan, turn, action_text)
+                        self._persist_accepted(
+                            plan, turn, action_text, accepted_version, cancelled=not confirmed
+                        )
                         span.set_attribute("agent.intent", turn.state.intent)
                         span.set_attribute("agent.degraded", self._observability.degraded)
                         yield ("__turn__", turn)
@@ -594,6 +606,7 @@ class AgentSessionRunner:
         user_text: str,
         *,
         accepted_version: int | None = None,
+        outcome: Any | None = None,
     ) -> None:
         from property_agent.agent.application.transcript import record_turn
 
@@ -606,6 +619,7 @@ class AgentSessionRunner:
                     user_text=user_text,
                     assistant_text=turn.reply,
                     accepted_version=accepted_version,
+                    outcome=outcome,
                 )
             except Exception:
                 logger.exception(
@@ -613,10 +627,19 @@ class AgentSessionRunner:
                     extra={"conversation_id": turn.state.conversation_id},
                 )
 
-    def _persist_accepted(self, plan: _TurnPlan, turn: AgentTurn, user_text: str) -> None:
+    def _persist_accepted(
+        self,
+        plan: _TurnPlan,
+        turn: AgentTurn,
+        user_text: str,
+        accepted_version: int | None,
+        *,
+        cancelled: bool = False,
+    ) -> None:
         self._persist_turn(
             plan.ctx,
             turn,
             user_text,
-            accepted_version=(plan.expected_version or 0) + 1,
+            accepted_version=accepted_version,
+            outcome=accepted_turn_outcome(turn.state, done=turn.done, cancelled=cancelled),
         )

@@ -11,7 +11,11 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from property_agent.agent.application.memory_service import AgentMemoryService, MemoryContext
-from property_agent.agent.memory_contracts import MemoryCandidate, MemoryCandidateExtractor
+from property_agent.agent.memory_contracts import (
+    AcceptedTurnOutcome,
+    MemoryCandidate,
+    MemoryCandidateExtractor,
+)
 from property_agent.agent.state import AgentState
 
 logger = logging.getLogger(__name__)
@@ -58,14 +62,14 @@ class AcceptedEvidenceMemoryWriter:
         user_text: str,
         assistant_text: str,
         accepted_version: int,
+        outcome: AcceptedTurnOutcome,
     ) -> WriterResult:
         source_id = f"accepted-head:{state.conversation_id}:{accepted_version}"
-        outcome = self._outcome(state)
         try:
             candidates = self._extractor.extract_candidates(
                 user_text=user_text[:2000],
                 assistant_text=assistant_text[:2000],
-                outcome=outcome,
+                outcome=outcome.value.lower(),
             )
         except Exception:
             logger.exception("memory_writer_extraction_failed", extra={"source_id": source_id})
@@ -85,7 +89,7 @@ class AcceptedEvidenceMemoryWriter:
                         provenance={
                             "accepted_head_version": accepted_version,
                             "conversation_id": state.conversation_id,
-                            "outcome": outcome,
+                            "outcome": outcome.value,
                         },
                         house_id=state.current_house_id,
                     )
@@ -101,7 +105,7 @@ class AcceptedEvidenceMemoryWriter:
         )
 
     @staticmethod
-    def _eligible(candidate: MemoryCandidate, outcome: str) -> bool:
+    def _eligible(candidate: MemoryCandidate, outcome: AcceptedTurnOutcome) -> bool:
         content = candidate.content.strip()
         if (
             not content
@@ -111,7 +115,8 @@ class AcceptedEvidenceMemoryWriter:
         ):
             return False
         if candidate.kind.value == "EPISODIC" and (
-            candidate.source_type.value != "COMPLETED_PLAN" or outcome != "completed"
+            candidate.source_type.value != "COMPLETED_PLAN"
+            or outcome is not AcceptedTurnOutcome.COMPLETED
         ):
             return False
         if candidate.kind.value == "PROCEDURAL_CANDIDATE" and candidate.confirmed_by_user:
@@ -124,17 +129,6 @@ class AcceptedEvidenceMemoryWriter:
             "ACCESSIBILITY",
             "SERVICE_NOTE",
         }
-
-    @staticmethod
-    def _outcome(state: AgentState) -> str:
-        if state.plan is None:
-            return "completed" if not state.error else "failed"
-        value = state.plan.status.value.lower()
-        return {
-            "waiting-confirmation": "pending",
-            "needs-clarification": "partial",
-            "handover": "partial",
-        }.get(value, value)
 
 
 class NullMemoryCandidateExtractor:

@@ -122,7 +122,7 @@ class GovernedMemoryReader:
         )
         with self._sessions() as session:
             return AgentMemoryService(session, embedding_provider=self._embedding).revalidate(
-                query, {item.memory_id for item in previous.items}
+                query, previous
             )
 
 

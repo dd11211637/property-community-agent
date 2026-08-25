@@ -37,10 +37,22 @@ class Context:
 
 
 class SemanticEmbedding:
+    def __init__(self, *, model: str = "test-semantic", version: str = "1") -> None:
+        self._model = model
+        self._version = version
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def version(self) -> str:
+        return self._version
+
     def embed(self, content: str) -> EmbeddingResult:
         vector = [0.0] * 1536
         vector[0 if "联系" in content or "站内" in content else 1] = 1.0
-        return EmbeddingResult(tuple(vector), "test-semantic", "1")
+        return EmbeddingResult(tuple(vector), self.model, self.version)
 
 
 @pytest.fixture
@@ -154,3 +166,50 @@ def test_concurrent_corrections_leave_exactly_one_effective_record(sessions):
     assert failures == []
     assert len([row for row in rows if row.lifecycle_status == "ACTIVE"]) == 1
     assert len([row for row in rows if row.lifecycle_status == "SUPERSEDED"]) == 2
+
+
+def test_bounded_reindex_promotes_pending_and_refreshes_old_model_version(sessions):
+    house = uuid4()
+    context = Context(uuid4(), uuid4(), frozenset({house}))
+    with sessions() as session:
+        pending_service = AgentMemoryService(session)
+        created = pending_service.create_memory(
+            context,
+            memory_type="COMMUNICATION",
+            content="上门前用站内消息联系",
+            house_id=house,
+        )
+        row = session.get(AgentMemoryModel, UUID(created["id"]))
+        assert row.embedding_status == "PENDING"
+
+        v1 = AgentMemoryService(session, embedding_provider=SemanticEmbedding(version="1"))
+        first = v1.reindex_memories(limit=1)
+        session.refresh(row)
+        assert (first.selected, first.ready, first.failed, first.remaining) == (1, 1, 0, 0)
+        assert row.embedding_status == "READY"
+        assert v1.retrieve(_query(context, house, "维修人员如何联系")).items[0].memory_id == row.id
+
+        canonical_before = (
+            row.version,
+            row.content,
+            dict(row.provenance),
+            row.lifecycle_status,
+            row.source_type,
+            row.source_evidence_id,
+        )
+        v2 = AgentMemoryService(session, embedding_provider=SemanticEmbedding(version="2"))
+        refreshed = v2.reindex_memories(limit=10)
+        session.refresh(row)
+        canonical_after = (
+            row.version,
+            row.content,
+            dict(row.provenance),
+            row.lifecycle_status,
+            row.source_type,
+            row.source_evidence_id,
+        )
+    assert refreshed.selected == 1
+    assert refreshed.ready == 1
+    assert refreshed.remaining == 0
+    assert row.embedding_version == "2"
+    assert canonical_after == canonical_before

@@ -30,6 +30,14 @@ class MemorySource(StrEnum):
     HUMAN_SERVICE_NOTE = "HUMAN_SERVICE_NOTE"
 
 
+class AcceptedTurnOutcome(StrEnum):
+    COMPLETED = "COMPLETED"
+    PENDING = "PENDING"
+    CANCELLED = "CANCELLED"
+    FAILED = "FAILED"
+    PARTIAL = "PARTIAL"
+
+
 @dataclass(frozen=True, slots=True)
 class RetrievedMemory:
     memory_id: UUID
@@ -46,6 +54,8 @@ class RetrievedMemory:
     created_at: datetime
     updated_at: datetime
     expires_at: datetime | None
+    record_version: int
+    content_fingerprint: str
     semantic_score: float | None = None
     rank_score: float = 0.0
 
@@ -65,6 +75,8 @@ class RetrievedMemory:
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
             "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+            "record_version": self.record_version,
+            "content_fingerprint": self.content_fingerprint,
             "semantic_score": self.semantic_score,
             "rank_score": self.rank_score,
         }
@@ -92,6 +104,8 @@ class RetrievedMemory:
                 if value.get("expires_at")
                 else None
             ),
+            record_version=int(value.get("record_version") or 1),
+            content_fingerprint=str(value.get("content_fingerprint") or ""),
             semantic_score=(
                 float(value["semantic_score"]) if value.get("semantic_score") is not None else None
             ),
@@ -117,6 +131,8 @@ class MemoryContext:
     query_fingerprint: str | None = None
     degraded: bool = False
     degradation_reason: str | None = None
+    basis_invalidated: bool = False
+    invalidation_reason: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -124,6 +140,8 @@ class MemoryContext:
             "query_fingerprint": self.query_fingerprint,
             "degraded": self.degraded,
             "degradation_reason": self.degradation_reason,
+            "basis_invalidated": self.basis_invalidated,
+            "invalidation_reason": self.invalidation_reason,
         }
 
     @classmethod
@@ -138,6 +156,10 @@ class MemoryContext:
             degradation_reason=(
                 str(value["degradation_reason"]) if value.get("degradation_reason") else None
             ),
+            basis_invalidated=bool(value.get("basis_invalidated")),
+            invalidation_reason=(
+                str(value["invalidation_reason"]) if value.get("invalidation_reason") else None
+            ),
         )
 
 
@@ -149,7 +171,22 @@ class EmbeddingResult:
 
 
 class EmbeddingProvider(Protocol):
+    @property
+    def model(self) -> str: ...
+
+    @property
+    def version(self) -> str: ...
+
     def embed(self, text: str) -> EmbeddingResult: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ReindexResult:
+    selected: int
+    ready: int
+    failed: int
+    remaining: int
+    degraded: bool = False
 
 
 @dataclass(frozen=True, slots=True)

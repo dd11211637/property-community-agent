@@ -35,6 +35,14 @@ class OpenAICompatibleEmbeddingProvider:
         self._timeout = timeout_seconds
         self._transport = transport
 
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def version(self) -> str:
+        return self._version
+
     def embed(self, text: str) -> EmbeddingResult:
         value = text.strip()[:2000]
         if not self._api_key or not value:

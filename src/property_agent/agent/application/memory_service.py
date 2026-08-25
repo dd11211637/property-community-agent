@@ -21,6 +21,7 @@ from property_agent.agent.memory_contracts import (
     MemoryLifecycle,
     MemoryQuery,
     MemorySource,
+    ReindexResult,
 )
 from property_agent.agent.memory_contracts import (
     MemoryContext as RetrievedMemoryContext,
@@ -236,8 +237,14 @@ class AgentMemoryService:
     def retrieve(self, query: MemoryQuery) -> RetrievedMemoryContext:
         return self._store.retrieve(query)
 
-    def revalidate(self, query: MemoryQuery, memory_ids: set[UUID]) -> RetrievedMemoryContext:
-        return self._store.revalidate(query, memory_ids)
+    def revalidate(
+        self, query: MemoryQuery, previous: RetrievedMemoryContext
+    ) -> RetrievedMemoryContext:
+        return self._store.revalidate(query, previous)
+
+    def reindex_memories(self, *, limit: int = 100) -> ReindexResult:
+        """Bounded internal maintenance; it never changes canonical Memory content/version."""
+        return self._store.reindex(limit=limit)
 
     def persist_candidate(
         self,
