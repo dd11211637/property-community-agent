@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 from sqlalchemy import create_engine, select
@@ -562,6 +563,47 @@ def test_server_retention_defaults_and_caps_automatic_episode_and_procedure():
     engine.dispose()
 
 
+def test_confirmed_semantic_retention_only_explicit_none_is_long_lived():
+    engine, factory = _factory()
+    context = Context(uuid4(), uuid4(), frozenset())
+    cases = (
+        (None, None),
+        (-7, 365),
+        (0, 365),
+        (30, 30),
+        (730, 730),
+        (999_999, 730),
+    )
+    with factory() as session:
+        service = AgentMemoryService(session)
+        for index, (proposed, _expected) in enumerate(cases):
+            service.persist_candidate(
+                context,
+                candidate=MemoryCandidate(
+                    MemoryKind.SEMANTIC,
+                    "PREFERENCE",
+                    f"已确认偏好 {index}",
+                    MemorySource.EXPLICIT_STATEMENT,
+                    retention_days=proposed,
+                    confirmed_by_user=True,
+                ),
+                source_evidence_id=f"accepted:semantic-retention:{index}",
+                provenance={"conversation_id": "conv-semantic-retention"},
+                house_id=None,
+            )
+        rows = list(session.scalars(select(AgentMemoryModel).order_by(AgentMemoryModel.content)))
+    for row, (_proposed, expected) in zip(rows, cases, strict=True):
+        if expected is None:
+            assert row.expires_at is None
+            assert row.retention_class == "LONG_LIVED"
+        else:
+            assert row.expires_at is not None
+            actual_days = round((row.expires_at - row.created_at).total_seconds() / 86400)
+            assert actual_days == expected
+            assert row.retention_class == "BOUNDED"
+    engine.dispose()
+
+
 class _Conversations:
     def __init__(self, context):
         self.context = context
@@ -589,14 +631,50 @@ class _Conversations:
 
 
 class _Recovery:
+    def __init__(self, restored_state=None):
+        self.restored_state = restored_state
+
     def peek(self, _conversation_id):
         return None
+
+    def restore(self, _conversation_id, _context, expected_action_hash=None):
+        del expected_action_hash
+        return SimpleNamespace(state=self.restored_state)
 
 
 class _Graph:
     def invoke(self, state, **_kwargs):
         state.add_message("assistant", "已处理")
         return {"state": state, "interrupt": None, "done": True}
+
+
+class _WaitingGraph:
+    def invoke(self, state, **_kwargs):
+        state.add_message("assistant", "请确认是否执行")
+        return {"state": state, "interrupt": {"kind": "confirmation"}, "done": False}
+
+
+class _CancelledGraph:
+    def resume(self, _thread_id, _resume_value, *, state):
+        state.add_message("assistant", "已取消")
+        return {"state": state, "interrupt": None, "done": True}
+
+
+class _FailedGraph:
+    def invoke(self, state, **_kwargs):
+        state.error = "provider failed"
+        state.add_message("assistant", "处理失败")
+        return {"state": state, "interrupt": None, "done": True}
+
+
+class _OutcomeCapturingCandidates(_Candidates):
+    def __init__(self, candidate):
+        super().__init__(candidate)
+        self.outcomes = []
+
+    def extract_candidates(self, **kwargs):
+        self.outcomes.append(kwargs["outcome"])
+        return super().extract_candidates(**kwargs)
 
 
 class _RejectAcceptedHead:
@@ -610,6 +688,9 @@ class _AcceptedHead:
 
     def publish_accepted(self, *_args, **_kwargs):
         return self.version
+
+    def load_accepted(self, _conversation_id):
+        return None
 
 
 class _WriterSpy:
@@ -674,3 +755,92 @@ def test_writer_receives_actual_published_version_and_canonical_outcome():
     runner.start(conversation_id="conv-accepted", context=context, user_text="记住")
     assert writer.accepted_versions == [17]
     assert writer.outcomes == [AcceptedTurnOutcome.COMPLETED]
+
+
+def test_v1_waiting_confirm_is_pending_and_writes_no_completed_plan_episode():
+    engine, factory = _factory()
+    context = Context(uuid4(), uuid4(), frozenset())
+    extractor = _OutcomeCapturingCandidates(
+        MemoryCandidate(
+            MemoryKind.EPISODIC,
+            "SERVICE_NOTE",
+            "报修任务已经完成",
+            MemorySource.COMPLETED_PLAN,
+        )
+    )
+    runner = AgentSessionRunner(
+        graph=_WaitingGraph(),
+        conversations=_Conversations(context),
+        recovery=_Recovery(),
+        checkpointer=_AcceptedHead(21),
+        memory_writer=AcceptedEvidenceMemoryWriter(factory, extractor),
+        enforce_concurrency=False,
+    )
+    turn = runner.start(conversation_id="v1-waiting-path", context=context, user_text="提交报修")
+    with factory() as session:
+        episodes = list(session.scalars(select(AgentMemoryModel)))
+    assert turn.done is False
+    assert extractor.outcomes == ["pending"]
+    assert episodes == []
+    engine.dispose()
+
+
+def test_v1_cancelled_confirmation_writes_no_completed_plan_episode():
+    engine, factory = _factory()
+    context = Context(uuid4(), uuid4(), frozenset())
+    state = AgentState(conversation_id="v1-cancelled-path")
+    extractor = _OutcomeCapturingCandidates(
+        MemoryCandidate(
+            MemoryKind.EPISODIC,
+            "SERVICE_NOTE",
+            "报修任务已经完成",
+            MemorySource.COMPLETED_PLAN,
+        )
+    )
+    runner = AgentSessionRunner(
+        graph=_CancelledGraph(),
+        conversations=_Conversations(context),
+        recovery=_Recovery(state),
+        checkpointer=_AcceptedHead(22),
+        memory_writer=AcceptedEvidenceMemoryWriter(factory, extractor),
+        enforce_concurrency=False,
+    )
+    turn = runner.resume(
+        conversation_id=state.conversation_id,
+        context=context,
+        confirmed=False,
+    )
+    with factory() as session:
+        episodes = list(session.scalars(select(AgentMemoryModel)))
+    assert turn.done is True
+    assert extractor.outcomes == ["cancelled"]
+    assert episodes == []
+    engine.dispose()
+
+
+def test_v1_failed_turn_is_failed_and_writes_no_completed_plan_episode():
+    engine, factory = _factory()
+    context = Context(uuid4(), uuid4(), frozenset())
+    extractor = _OutcomeCapturingCandidates(
+        MemoryCandidate(
+            MemoryKind.EPISODIC,
+            "SERVICE_NOTE",
+            "报修任务已经完成",
+            MemorySource.COMPLETED_PLAN,
+        )
+    )
+    runner = AgentSessionRunner(
+        graph=_FailedGraph(),
+        conversations=_Conversations(context),
+        recovery=_Recovery(),
+        checkpointer=_AcceptedHead(23),
+        memory_writer=AcceptedEvidenceMemoryWriter(factory, extractor),
+        enforce_concurrency=False,
+    )
+    turn = runner.start(conversation_id="v1-failed-path", context=context, user_text="提交报修")
+    with factory() as session:
+        episodes = list(session.scalars(select(AgentMemoryModel)))
+    assert turn.done is True
+    assert extractor.outcomes == ["failed"]
+    assert episodes == []
+    engine.dispose()
