@@ -19,8 +19,8 @@ MUST NOT be pulled into an earlier stage merely because it is convenient.
 | PR2 | Capability Layer | **DONE / MERGED / VERIFIED** |
 | PR3 | Typed State and Runner de-domainization | **DONE / MERGED / VERIFIED** |
 | PR4 | LangGraph runtime foundation | **DONE / MERGED / VERIFIED** |
-| PR5 | Supervisor and stateless specialists | Planned (Stage Contract established) |
-| PR6 | Long-term memory | Planned |
+| PR5 | Supervisor and stateless specialists | **DONE / MERGED / VERIFIED** |
+| PR6 | Long-term memory | Planned (Stage Contract established) |
 | PR7 | Productionization and runtime drain | Planned |
 
 ## 3. PR1 — Correctness substrate
@@ -185,7 +185,11 @@ through LangGraph without changing business authority.
 
 ## 7. PR5 — Supervisor and stateless specialists
 
-**Status:** Planned (Stage Contract established)
+**Status:** **DONE / MERGED / VERIFIED**
+
+**Final PR head:** `38f3d1ac68ae5183eca6b990595af1dada32fbb6`
+
+**Merged to `main`:** `635da922094c84cc2c3219d00e1f5c960fb9ef92`
 
 **Stage Contract:**
 [`stages/PR5_SUPERVISOR_SPECIALISTS.md`](stages/PR5_SUPERVISOR_SPECIALISTS.md)
@@ -220,6 +224,11 @@ the durable runtime.
 - multi-domain acceptance and regression gates pass.
 
 ## 8. PR6 — Long-term memory
+
+**Status:** Planned (Stage Contract established)
+
+**Stage Contract:**
+[`stages/PR6_LONG_TERM_MEMORY.md`](stages/PR6_LONG_TERM_MEMORY.md)
 
 ### Goal
 
