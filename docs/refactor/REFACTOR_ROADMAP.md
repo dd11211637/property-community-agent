@@ -20,8 +20,8 @@ MUST NOT be pulled into an earlier stage merely because it is convenient.
 | PR3 | Typed State and Runner de-domainization | **DONE / MERGED / VERIFIED** |
 | PR4 | LangGraph runtime foundation | **DONE / MERGED / VERIFIED** |
 | PR5 | Supervisor and stateless specialists | **DONE / MERGED / VERIFIED** |
-| PR6 | Long-term memory | Planned (Stage Contract established) |
-| PR7 | Productionization and runtime drain | Planned |
+| PR6 | Long-term memory | **DONE / MERGED / VERIFIED** |
+| PR7 | Productionization and runtime drain | Planned (Stage Contract established) |
 
 ## 3. PR1 — Correctness substrate
 
@@ -225,7 +225,14 @@ the durable runtime.
 
 ## 8. PR6 — Long-term memory
 
-**Status:** Planned (Stage Contract established)
+**Status:** **DONE / MERGED / VERIFIED**
+
+**Final PR head:** `8f655413a4e0533932acf46d3b71844e372bbdcd`
+
+**Merged to `main`:** `79abc26b5fd022026acbb99e6e3a31d1fb2578de`
+
+**Post-merge verification:** backend, PostgreSQL, frontend, and browser E2E Quality Gates
+passed on the merge commit.
 
 **Stage Contract:**
 [`stages/PR6_LONG_TERM_MEMORY.md`](stages/PR6_LONG_TERM_MEMORY.md)
@@ -260,6 +267,11 @@ of business truth.
 - security, privacy, and regression gates pass.
 
 ## 9. PR7 — Productionization and runtime drain
+
+**Status:** Planned (Stage Contract established)
+
+**Stage Contract:**
+[`stages/PR7_PRODUCTIONIZATION_RUNTIME_DRAIN.md`](stages/PR7_PRODUCTIONIZATION_RUNTIME_DRAIN.md)
 
 ### Goal
 
