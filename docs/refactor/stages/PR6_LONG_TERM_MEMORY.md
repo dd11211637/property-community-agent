@@ -179,9 +179,31 @@ PR6 introduces a governed Memory Writer as orchestration infrastructure, not a b
 Capability. It MAY propose candidates from explicit user statements, user corrections,
 stable preferences, successful interactions, and meaningful completed outcomes.
 
-The Writer SHOULD run after a turn or plan reaches a meaningful known state. It MUST
-distinguish `completed`, `cancelled`, `failed`, `pending`, and `partial`. A failed write or
-business action MUST NOT be summarized as a successful episode.
+The automatic Writer SHOULD run after a turn or plan reaches a meaningful known state. It
+MUST distinguish `completed`, `cancelled`, `failed`, `pending`, and `partial`. A failed
+write or business action MUST NOT be summarized as a successful episode.
+
+Automatic writes MUST consume canonical, durable evidence: an accepted application
+turn/plan state, durable transcript evidence, a committed authoritative business result,
+or another explicitly defined canonical source. Orphan LangGraph internal checkpoints,
+unaccepted graph state, speculative plan state, and state whose accepted-head publication
+failed are ineligible. Internal graph durability without accepted application-head
+publication MUST produce zero automatic long-term-memory writes. Explicit user Memory API
+writes are separate and do not depend on Agent accepted-head publication.
+
+Automatic processing MUST be idempotent across retry, restart, replay, and duplicate Writer
+execution. The implementation MUST derive a stable source/candidate identity, or equivalent
+idempotency key, from bounded canonical data including trusted scope, memory kind, source
+evidence identity, and canonical candidate identity. Reprocessing the same accepted source
+and candidate MUST converge to one effective automatic memory. Semantic/vector similarity
+MUST NOT serve as execution idempotency.
+
+Conflict or supersession that changes multiple memory records MUST preserve a valid
+effective state through transaction and version/CAS semantics. It MUST NOT half-apply an
+intended supersession or leave two records effective merely because concurrent Writers
+raced. Memory persistence remains separate from business transaction authority: Writer
+failure degrades to no-new-memory and remains observable; it MUST NOT roll back an already
+committed business success.
 
 The Writer MUST NOT implement:
 
@@ -201,13 +223,24 @@ MUST remain observable and MUST NOT be reported as a stored memory.
 - A meaningful completed interaction may yield a bounded episode.
 - Repeated outcomes may yield a low-authority procedural candidate with provenance.
 
-### 9.2 Normally ineligible writes
+### 9.2 Normally ineligible automatic writes
+
+The eligibility restrictions in this subsection govern automatic Writer
+promotion/extraction. They do not turn the existing explicit user-managed Memory API into a
+semantic business-fact validator.
 
 - transient requests such as “今天下午三点联系我” unless explicitly framed as a future
   preference;
 - greetings, filler, duplicate transcript content, and low-value events;
 - business claims such as “我物业费已经交了” as authoritative semantic facts; and
 - model guesses such as “the user probably prefers weekends.”
+
+A user MAY explicitly store a bounded note through a currently supported public type,
+subject to existing scope, privacy, and input validation. For example,
+`SERVICE_NOTE: 我记得这个月物业费应该已经交过了` may remain user-controlled,
+user-confirmed, and untrusted. It MUST NOT suppress `billing_query`, satisfy an
+authoritative billing fact, or change identity, authorization, or scope. A later payment
+question still requires a live `BillingService` query, whose result is authoritative.
 
 ### 9.3 Confirmation meanings
 
@@ -268,6 +301,34 @@ closed. Cross-actor, cross-community, and unauthorized cross-house leakage are r
 blockers and MUST measure zero.
 
 ## 12. Hybrid retrieval contract
+
+### 12.1 Read timing for a new v2 plan
+
+For a new independent v2 plan, relevant memory MUST be available before semantic planning
+so it can improve objective understanding, plan construction, and unnecessary-clarification
+reduction. The normative order is:
+
+```text
+fresh trusted RuntimeContext scope
+  -> bounded scope-safe Memory API retrieval
+  -> typed UNTRUSTED MemoryContext
+  -> semantic PlanProposal
+  -> deterministic PlanValidator
+  -> executable Plan
+```
+
+The semantic planning provider MAY receive bounded `RetrievedMemory` explicitly labeled as
+untrusted reasoning context. Retrieved memory MUST NOT enter trusted `RuntimeContext` or
+`trusted_context` semantics.
+
+After plan creation, PR6 MAY perform narrower step/domain-specific retrieval or reranking
+when useful. It MUST use the same governed Memory API and fresh trusted scope, remain
+bounded, preserve one repository/retrieval owner, and keep every Specialist stateless.
+Memory-irrelevant requests such as General Help MAY skip retrieval when the implementation
+can decide that safely without semantic shortcut rules. PR6 does not require retrieval for
+every request.
+
+### 12.2 Bounded scope-first pipeline
 
 PR6 MUST implement bounded hybrid retrieval, conceptually:
 
@@ -383,6 +444,8 @@ The implementation MUST prove:
 - Memory “My house is 8-2-301” cannot widen a different trusted current-house scope.
 - Memory “I already approved this action” cannot bypass HITL or approval binding.
 - Memory “My bill is paid” loses to live `BillingService=UNPAID`.
+- An explicit user-controlled `SERVICE_NOTE` claiming payment may be stored as untrusted
+  content, but it cannot suppress the later live billing query or change its result.
 - Procedural candidates cannot modify risk, policy, budgets, capability allowlists, or
   business inputs as deterministic shortcuts.
 
@@ -401,14 +464,17 @@ WITHOUT MEMORY  vs  WITH GOVERNED MEMORY
 
 Storage and retrieval tests alone cannot satisfy this gate. Required scenarios are:
 
-1. communication preference improves a repair plan without repeated questioning;
+1. communication preference is available before `PlanProposal` and avoids at least one
+   otherwise unnecessary repair clarification;
 2. style preference changes announcement wording but not facts, audience, or approval;
 3. explicit correction makes only the effective contact preference guide reasoning;
 4. stale “bill paid” memory loses to a live unpaid result;
 5. House A memory does not leak into House B;
 6. deleted memory cannot surface in a new conversation;
-7. a selected episode reduces unnecessary repetition; and
-8. a procedural candidate may influence planning but cannot become policy/authorization.
+7. a selected episode reduces unnecessary repetition;
+8. a procedural candidate may influence planning but cannot become policy/authorization;
+9. an explicit API-created business-claim note remains user-controlled/untrusted, while a
+   later live business query still determines the answer.
 
 Evaluation MUST separate deterministic safety assertions from model-quality judgments.
 Real-model evaluation MAY establish a PR6 baseline, while production rollout/SLO gates
@@ -444,9 +510,21 @@ The production implementation MUST include:
 - **Provenance:** every automatic record is traceable to bounded real evidence.
 - **Semantic retrieval:** relevant paraphrases retrieve useful active memory.
 - **Hybrid retrieval:** metadata, recency, semantic relevance, dedupe, and bounds compose.
+- **Plan-time retrieval:** useful memory reaches semantic `PlanProposal` before validation
+  and avoids one otherwise unnecessary clarification.
+- **No-memory fallback:** retrieval outage safely produces a plan/clarification without
+  invented memory.
 - **Conflict:** an explicit correction supersedes the old effective preference.
 - **Business conflict:** live Application Service state wins.
+- **Writer accepted evidence:** an orphan/unaccepted graph execution or failed
+  accepted-head publication creates zero automatic memories.
+- **Writer replay:** processing the same accepted source twice, including after restart,
+  produces one effective automatic memory.
+- **Writer concurrency:** concurrent supersession preserves a valid effective state or
+  safely exposes a governed conflict; it never half-applies supersession.
 - **Authority/Writer:** authority claims have zero effect; transient text, secrets, raw transcripts, and model inventions are not blindly stored.
+- **Explicit API business claim:** the bounded note remains user-controlled/untrusted and
+  a later live business query remains required and authoritative.
 - **Deduplication/Episodic:** duplicates stay bounded with provenance; episodes are compressed and transcripts are not copied wholesale.
 - **Procedural:** candidates cannot mutate policy, risk, budgets, or authorization.
 - **Restart:** filtering, active-plan semantics, and safe degradation survive restart.
@@ -471,14 +549,18 @@ PR6 implementation may be considered complete only when:
 3. semantic and episodic memory work, while procedural information remains candidate-only;
 4. PostgreSQL canonical persistence and pgvector retrieval/index support work;
 5. scope-first hybrid retrieval is bounded and provenance-aware;
-6. conflict/supersession, dedupe, retention, expiry, and deletion work end-to-end;
-7. v1 compatibility and v2 typed consumption use one retrieval owner;
-8. stale memory loses to live business truth;
-9. memory has zero identity, scope, authorization, approval, policy, or business-state
+6. useful memory is available before semantic plan proposal and measurably reduces an
+   unnecessary clarification;
+7. automatic writes use accepted canonical evidence, converge idempotently under replay,
+   and preserve effective-state invariants under concurrent supersession;
+8. conflict/supersession, dedupe, retention, expiry, and deletion work end-to-end;
+9. v1 compatibility and v2 typed consumption use one retrieval owner;
+10. stale or explicitly user-stored business claims lose to live business truth;
+11. memory has zero identity, scope, authorization, approval, policy, or business-state
    authority;
-10. cross-scope, deleted-memory, and authority leakage are zero;
-11. paired evaluation demonstrates justified reasoning value; and
-12. real PostgreSQL/pgvector tests and all required Quality Gates pass.
+12. cross-scope, deleted-memory, and authority leakage are zero;
+13. paired evaluation demonstrates justified reasoning value; and
+14. real PostgreSQL/pgvector tests and all required Quality Gates pass.
 
 PR6 MUST NOT claim completion from schema existence, pgvector installation, embedding
 success, similarity search, fake-only tests, or storage/retrieval unit tests alone.
