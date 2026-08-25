@@ -6,9 +6,7 @@ from dataclasses import replace
 from time import perf_counter
 from typing import Any
 
-import httpx
-
-from property_agent.agent.model_contracts import ModelGatewayError
+from property_agent.agent.telemetry_contracts import model_failure_category
 from property_agent.platform.application.approval_service import ApprovalError
 
 _MODEL_METHODS = frozenset(
@@ -28,18 +26,7 @@ _MODEL_METHODS = frozenset(
 
 
 def _model_failure(exc: BaseException) -> str:
-    current: BaseException | None = exc
-    while current is not None:
-        if isinstance(current, httpx.TimeoutException):
-            return "timeout"
-        if isinstance(current, httpx.TransportError):
-            return "transport_failure"
-        current = current.__cause__
-    if isinstance(exc, (ValueError, KeyError, TypeError)):
-        return "schema_failure"
-    if isinstance(exc, ModelGatewayError):
-        return "provider_failure"
-    return "infrastructure_failure"
+    return model_failure_category(exc)
 
 
 class ObservedModelGateway:
@@ -59,33 +46,34 @@ class ObservedModelGateway:
         return observed
 
     def _invoke(self, operation: str, method: Any, args: tuple, kwargs: dict):
-        attributes = {"provider": self._provider, "operation": operation}
+        attributes = {"operation": operation}
         started = perf_counter()
-        self._telemetry.count("agent_model_request_total", attributes=attributes)
+        self._telemetry.count("agent_model_operation_request_total", attributes=attributes)
         try:
             with self._telemetry.span("model.request", attributes=attributes):
                 result = method(*args, **kwargs)
         except Exception as exc:
             outcome = _model_failure(exc)
             self._telemetry.count(
-                "agent_model_outcome_total", attributes={**attributes, "outcome": outcome}
+                "agent_model_operation_outcome_total",
+                attributes={**attributes, "outcome": outcome},
             )
             self._telemetry.duration(
-                "agent_model_request_duration_seconds",
+                "agent_model_operation_duration_seconds",
                 perf_counter() - started,
                 attributes=attributes,
             )
             raise
         self._telemetry.count(
-            "agent_model_outcome_total",
+            "agent_model_operation_outcome_total",
             attributes={
                 **attributes,
-                "outcome": "success",
-                "reason": "fallback" if getattr(result, "degraded", False) else "primary",
+                "outcome": "degraded_success" if getattr(result, "degraded", False) else "success",
+                "reason": "degraded" if getattr(result, "degraded", False) else "primary",
             },
         )
         self._telemetry.duration(
-            "agent_model_request_duration_seconds",
+            "agent_model_operation_duration_seconds",
             perf_counter() - started,
             attributes=attributes,
         )
@@ -321,10 +309,29 @@ def capability_observer(observability: Any):
 
 def model_provider_observer(observability: Any):
     def observe(event: str, fields: dict[str, Any]) -> None:
+        attributes = {
+            "provider": fields.get("provider"),
+            "operation": fields.get("operation"),
+        }
+        if event == "model_provider_request":
+            observability.count("agent_model_provider_request_total", attributes=attributes)
+        elif event == "model_provider_outcome":
+            outcome_attributes = {**attributes, "outcome": fields.get("outcome")}
+            observability.count("agent_model_provider_outcome_total", attributes=outcome_attributes)
+            observability.duration(
+                "agent_model_provider_duration_seconds",
+                float(fields.get("duration_seconds") or 0.0),
+                attributes=outcome_attributes,
+            )
         if event == "model_retry":
             observability.count(
                 "agent_model_retry_total",
-                attributes={"operation": fields.get("operation"), "reason": "retryable"},
+                attributes={**attributes, "reason": "retryable"},
+            )
+        elif event == "model_fallback":
+            observability.count(
+                "agent_model_fallback_total",
+                attributes={**attributes, "outcome": fields.get("outcome")},
             )
 
     return observe

@@ -62,7 +62,11 @@ def _build_v2_engine(app: FastAPI) -> Any | None:
         dsn = None
         if not is_sqlite:
             dsn = settings.database_url.replace("postgresql+psycopg", "postgresql")
-        resource = build_saver_resource(in_memory=is_sqlite, dsn=dsn)
+        resource = build_saver_resource(
+            in_memory=is_sqlite,
+            dsn=dsn,
+            observability=app.state.agent_observability,
+        )
         app.state.langgraph_saver_resource = resource
         return LangGraphEngine(resource.saver, build_supervisor(app))
     except Exception:

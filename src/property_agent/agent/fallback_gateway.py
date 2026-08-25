@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import Any
 
 from property_agent.agent.deterministic_gateway import (
@@ -132,9 +133,16 @@ def _apply_deterministic_slot_guards(
 class FallbackModelGateway:
     """Use a deterministic gateway after a controlled primary-model failure."""
 
-    def __init__(self, primary: ModelGateway, fallback: ModelGateway | None = None) -> None:
+    def __init__(
+        self,
+        primary: ModelGateway,
+        fallback: ModelGateway | None = None,
+        *,
+        observe: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> None:
         self._primary = primary
         self._fallback = fallback or DeterministicModelGateway()
+        self._observe = observe or (lambda _event, _fields: None)
 
     def ready(self) -> bool:
         return self._primary.ready() or self._fallback.ready()
@@ -163,7 +171,7 @@ class FallbackModelGateway:
                 else self._primary.analyze(text)
             )
         except ModelGatewayError:
-            return _apply_deterministic_slot_guards(
+            result = _apply_deterministic_slot_guards(
                 text,
                 ModelAnalysis(
                     intent=deterministic.intent,
@@ -174,6 +182,8 @@ class FallbackModelGateway:
                 ),
                 deterministic.slots,
             )
+            self._fallback_outcome("analyze_with_context", "success")
+            return result
 
         # Explicit domain words are authoritative routing signals.  The model still
         # contributes non-authoritative slots, but a syntactically valid UNCERTAIN or
@@ -252,8 +262,11 @@ class FallbackModelGateway:
                 topic=topic, audience=audience, requirements=requirements
             )
         except (AttributeError, ModelGatewayError):
-            return self._fallback.draft_announcement(
-                topic=topic, audience=audience, requirements=requirements
+            return self._use_fallback(
+                "draft_announcement",
+                lambda: self._fallback.draft_announcement(
+                    topic=topic, audience=audience, requirements=requirements
+                ),
             )
 
     def revise_announcement(
@@ -264,8 +277,11 @@ class FallbackModelGateway:
                 draft=draft, audience=audience, instruction=instruction
             )
         except (AttributeError, ModelGatewayError):
-            return self._fallback.revise_announcement(
-                draft=draft, audience=audience, instruction=instruction
+            return self._use_fallback(
+                "revise_announcement",
+                lambda: self._fallback.revise_announcement(
+                    draft=draft, audience=audience, instruction=instruction
+                ),
             )
 
     def plan_read(self, **context: Any):
@@ -273,3 +289,22 @@ class FallbackModelGateway:
         if method is None:
             raise ModelGatewayError("Primary model does not support read planning")
         return method(**context)
+
+    def _use_fallback(self, operation: str, invoke: Callable[[], Any]) -> Any:
+        try:
+            result = invoke()
+        except Exception:
+            self._fallback_outcome(operation, "failure")
+            raise
+        self._fallback_outcome(operation, "success")
+        return result
+
+    def _fallback_outcome(self, operation: str, outcome: str) -> None:
+        self._observe(
+            "model_fallback",
+            {
+                "provider": type(self._fallback).__name__,
+                "operation": operation,
+                "outcome": outcome,
+            },
+        )

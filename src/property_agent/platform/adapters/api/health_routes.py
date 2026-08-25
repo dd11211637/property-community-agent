@@ -64,6 +64,7 @@ async def ready(request: Request) -> dict:
         "services": "UP" if svc_up else "UNCONFIGURED",
         "accepted_head_store": "UP" if accepted_head_up else "DOWN",
         "telemetry": _telemetry_status(request),
+        "stream_execution": _stream_execution_status(request),
         "memory_embedding": _optional_component(request, "agent_memory_embedding_provider"),
         "memory_writer": _optional_component(request, "agent_memory_writer"),
     }
@@ -94,4 +95,11 @@ def _telemetry_status(request: Request) -> dict[str, object]:
 
 def _optional_component(request: Request, state_name: str) -> dict[str, str]:
     configured = getattr(request.app.state, state_name, None) is not None
-    return {"state": "ENABLED_HEALTHY" if configured else "DISABLED"}
+    return {"state": "CONFIGURED_UNKNOWN" if configured else "DISABLED"}
+
+
+def _stream_execution_status(request: Request) -> dict[str, object]:
+    registry = getattr(request.app.state, "agent_stream_executions", None)
+    if registry is None:
+        return {"state": "UNAVAILABLE", "active": 0, "capacity": 0}
+    return registry.snapshot()

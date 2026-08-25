@@ -33,6 +33,7 @@ def publish_accepted(
     normalized = result_from_payload(result)
     started = perf_counter()
     attributes = {"runtime": plan.runtime_version, "operation": "publish"}
+    v1_overlap = plan.runtime_version == "v1"
     try:
         value = int(
             checkpointer.publish_accepted(
@@ -48,10 +49,15 @@ def publish_accepted(
                 "agent_accepted_head_publish_total",
                 attributes={**attributes, "outcome": "FAILED_INFRASTRUCTURE"},
             )
-            observability.count(
-                "agent_checkpoint_persist_total",
-                attributes={**attributes, "outcome": "FAILED_INFRASTRUCTURE"},
-            )
+            if v1_overlap:
+                observability.count(
+                    "agent_checkpoint_persist_total",
+                    attributes={
+                        **attributes,
+                        "operation": "v1_accepted_snapshot",
+                        "outcome": "FAILED_INFRASTRUCTURE",
+                    },
+                )
             observability.count(
                 "agent_accepted_head_orphan_total",
                 attributes={**attributes, "reason": "publish_failure"},
@@ -64,20 +70,26 @@ def publish_accepted(
                 perf_counter() - started,
                 attributes=attributes,
             )
-            observability.duration(
-                "agent_checkpoint_persist_duration_seconds",
-                perf_counter() - started,
-                attributes=attributes,
-            )
+            if v1_overlap:
+                observability.duration(
+                    "agent_checkpoint_persist_duration_seconds",
+                    perf_counter() - started,
+                    attributes={**attributes, "operation": "v1_accepted_snapshot"},
+                )
     if observability is not None:
         observability.count(
             "agent_accepted_head_publish_total",
             attributes={**attributes, "outcome": "COMPLETED"},
         )
-        observability.count(
-            "agent_checkpoint_persist_total",
-            attributes={**attributes, "outcome": "COMPLETED"},
-        )
+        if v1_overlap:
+            observability.count(
+                "agent_checkpoint_persist_total",
+                attributes={
+                    **attributes,
+                    "operation": "v1_accepted_snapshot",
+                    "outcome": "COMPLETED",
+                },
+            )
     return value
 
 

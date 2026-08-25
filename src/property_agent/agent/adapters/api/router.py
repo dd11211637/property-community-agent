@@ -99,6 +99,7 @@ def send_message_stream(
             house_id=house_id,
             slots=dict(payload.slots or {}),
         ),
+        registry=request.app.state.agent_stream_executions,
         observability=getattr(request.app.state, "agent_observability", None),
     )
 

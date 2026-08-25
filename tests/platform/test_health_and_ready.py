@@ -110,6 +110,16 @@ class TestReadyReadinessSuccess:
         assert data["status"] == "READY"
         assert data["components"]["database"] == "UP"
         assert data["components"]["services"] == "UP"
+        assert data["components"]["stream_execution"]["state"] == "ACCEPTING"
+        assert data["components"]["stream_execution"]["active"] == 0
+        assert data["components"]["memory_embedding"]["state"] in {
+            "DISABLED",
+            "CONFIGURED_UNKNOWN",
+        }
+        assert data["components"]["memory_writer"]["state"] in {
+            "DISABLED",
+            "CONFIGURED_UNKNOWN",
+        }
 
     def test_ready_response_structure(self, app: FastAPI):
         """GET /ready response should have the correct structure."""

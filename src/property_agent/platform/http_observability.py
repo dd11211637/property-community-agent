@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from contextlib import nullcontext
 from time import perf_counter
 from uuid import uuid4
@@ -12,13 +13,15 @@ from fastapi import Request
 from property_agent.config import settings
 
 MAX_REQUEST_ID_LENGTH = 64
+_OPAQUE_REQUEST_ID = re.compile(r"req_[0-9a-f]{32}\Z")
 access_logger = logging.getLogger("property_agent.access")
 
 
 def request_id(header_value: str | None) -> str:
+    """Accept only an opaque server-format ID; replace all other untrusted input."""
     if header_value is not None:
         candidate = header_value.strip()
-        if 1 <= len(candidate) <= MAX_REQUEST_ID_LENGTH:
+        if len(candidate) <= MAX_REQUEST_ID_LENGTH and _OPAQUE_REQUEST_ID.fullmatch(candidate):
             return candidate
     return f"req_{uuid4().hex}"
 

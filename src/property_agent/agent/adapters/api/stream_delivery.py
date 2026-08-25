@@ -5,10 +5,14 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Callable, Iterator
 from contextvars import copy_context
-from threading import Condition, Thread
+from threading import Condition
 from time import perf_counter
 from typing import Any
 
+from property_agent.agent.application.stream_execution import (
+    BoundedStreamExecutionRegistry,
+    StreamExecutionRejected,
+)
 from property_agent.agent.stream_events import AgentStreamEvent, coerce_stream_event
 
 DEFAULT_MAX_BUFFERED_EVENTS = 32
@@ -70,10 +74,12 @@ class BoundedStreamBridge:
         self,
         source: Callable[[], Any],
         *,
+        registry: BoundedStreamExecutionRegistry,
         observability: Any | None = None,
         max_buffered_events: int = DEFAULT_MAX_BUFFERED_EVENTS,
     ) -> None:
         self._source = source
+        self._registry = registry
         self._telemetry = observability
         self.buffer = BoundedEventBuffer(max_buffered_events)
         self._request_context = copy_context()
@@ -83,12 +89,12 @@ class BoundedStreamBridge:
         completed = False
         terminal_outcome = "unknown"
         first = True
-        producer = Thread(
-            target=lambda: self._request_context.run(self._produce),
-            daemon=True,
-            name="agent-sse-producer",
-        )
-        producer.start()
+        try:
+            self._registry.submit(lambda: self._request_context.run(self._produce))
+        except StreamExecutionRejected:
+            self.buffer.put(AgentStreamEvent.failed("unknown", "capacity_exhausted"))
+            self.buffer.finish()
+            self._count("agent_stream_total", outcome="admission_rejected")
         try:
             while (event := self.buffer.next()) is not None:
                 if first:

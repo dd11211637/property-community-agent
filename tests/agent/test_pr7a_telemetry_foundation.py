@@ -2,19 +2,27 @@
 
 from __future__ import annotations
 
+from time import perf_counter
 from types import SimpleNamespace
 
 import httpx
+import pytest
 from opentelemetry.sdk.metrics.export import MetricExporter, MetricExportResult
 from opentelemetry.sdk.trace.export import SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from property_agent.agent.application.accepted_head import publish_accepted
 from property_agent.agent.application.graph_engine import GraphExecutionResult
+from property_agent.agent.application.runner_telemetry import TimedTurnSpan, finish_turn
+from property_agent.agent.deepseek_gateway import DeepSeekModelGateway
+from property_agent.agent.deterministic_gateway import DeterministicModelGateway
+from property_agent.agent.fallback_gateway import FallbackModelGateway
+from property_agent.agent.model_contracts import ModelGatewayError
 from property_agent.agent.observability import AgentObservability
 from property_agent.agent.observed_boundaries import (
     ObservedMemoryService,
     ObservedModelGateway,
+    model_provider_observer,
 )
 from property_agent.config import Settings
 
@@ -94,6 +102,42 @@ def test_export_failure_is_degraded_and_does_not_raise_into_business_path():
         assert status["last_export_failure_category"] == "trace_export_failure"
     finally:
         observation.shutdown()
+
+
+def test_turn_degradation_attribute_reads_current_provider_health() -> None:
+    class CurrentHealth:
+        def __init__(self) -> None:
+            self.attributes = {}
+
+        def status(self):
+            return {"state": "ENABLED_DEGRADED"}
+
+        def duration(self, *_args, **_kwargs):
+            return None
+
+        def count(self, *_args, **_kwargs):
+            return None
+
+    health = CurrentHealth()
+    turn = SimpleNamespace(
+        awaiting_confirmation=False,
+        state=SimpleNamespace(
+            intent="GENERAL_HELP",
+            handover_required=False,
+            missing_slots=(),
+            requested_slot=None,
+            error=None,
+            plan=None,
+        ),
+    )
+    delegate = SimpleNamespace(
+        set_attribute=lambda key, value: health.attributes.update({key: value})
+    )
+    span = TimedTurnSpan(delegate, perf_counter())
+
+    finish_turn(health, SimpleNamespace(runtime_version="v1"), turn, "start", span)
+
+    assert health.attributes["agent.degraded"] is True
 
 
 def test_missing_endpoint_and_disabled_modes_are_explicit():
@@ -176,12 +220,12 @@ def test_model_success_timeout_and_schema_failure_have_bounded_outcomes_and_dura
     outcomes = {
         point.attributes.get("outcome")
         for point in observation.points
-        if point.name == "agent_model_outcome_total"
+        if point.name == "agent_model_operation_outcome_total"
     }
     durations = [
         point
         for point in observation.points
-        if point.name == "agent_model_request_duration_seconds"
+        if point.name == "agent_model_operation_duration_seconds"
     ]
     assert outcomes == {"success", "timeout", "schema_failure"}
     assert len(durations) == 3
@@ -225,7 +269,7 @@ def test_trace_attribute_allowlist_rejects_adversarial_content_markers():
     assert all(marker not in rendered for marker in markers.values())
 
 
-def test_checkpoint_and_accepted_head_share_durable_publish_outcome_timing():
+def test_v2_accepted_head_does_not_impersonate_langgraph_checkpoint_persistence():
     class Checkpointer:
         def publish_accepted(self, *args, **kwargs):
             return 2
@@ -236,12 +280,10 @@ def test_checkpoint_and_accepted_head_share_durable_publish_outcome_timing():
 
     assert publish_accepted(Checkpointer(), "conv", plan, result, observability=observation) == 2
     names = {point.name for point in observation.points}
-    assert {
-        "agent_checkpoint_persist_total",
-        "agent_checkpoint_persist_duration_seconds",
-        "agent_accepted_head_publish_total",
-        "agent_accepted_head_publish_duration_seconds",
-    } <= names
+    assert "agent_accepted_head_publish_total" in names
+    assert "agent_accepted_head_publish_duration_seconds" in names
+    assert "agent_checkpoint_persist_total" not in names
+    assert "agent_checkpoint_persist_duration_seconds" not in names
 
 
 def test_accepted_head_failure_has_no_completed_outcome():
@@ -263,3 +305,139 @@ def test_accepted_head_failure_has_no_completed_outcome():
         if point.name == "agent_accepted_head_publish_total"
     ]
     assert outcomes == ["FAILED_INFRASTRUCTURE"]
+
+
+def _production_model_shape(handler):
+    observation = AgentObservability.in_memory()
+    observe = model_provider_observer(observation)
+    primary = DeepSeekModelGateway(
+        api_key="test-key",
+        base_url="https://deepseek.test",
+        model="deepseek-test",
+        connect_timeout_seconds=0.1,
+        read_timeout_seconds=0.1,
+        total_timeout_seconds=1.0,
+        transport=httpx.MockTransport(handler),
+        observe=observe,
+    )
+    logical = FallbackModelGateway(primary, DeterministicModelGateway(), observe=observe)
+    return ObservedModelGateway(logical, observation), observation
+
+
+def _analysis_response() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "choices": [
+                {"message": {"content": '{"intent":"GENERAL_HELP","confidence":0.9,"slots":{}}'}}
+            ]
+        },
+    )
+
+
+def _points(observation, name):
+    return [point.attributes for point in observation.points if point.name == name]
+
+
+def test_production_model_shape_separates_primary_success_from_logical_success():
+    gateway, observation = _production_model_shape(lambda _request: _analysis_response())
+
+    assert gateway.analyze("PRIVATE_PRIMARY_SUCCESS").degraded is False
+    assert _points(observation, "agent_model_provider_outcome_total") == [
+        {"provider": "DeepSeek", "operation": "analyze", "outcome": "success"}
+    ]
+    assert _points(observation, "agent_model_fallback_total") == []
+    assert _points(observation, "agent_model_operation_outcome_total") == [
+        {"operation": "analyze", "outcome": "success", "reason": "primary"}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("failure_type", "expected"),
+    [
+        (httpx.ReadTimeout, "timeout"),
+        (httpx.ConnectError, "transport_failure"),
+    ],
+)
+def test_production_model_shape_records_primary_failure_then_fallback_success(
+    failure_type, expected
+):
+    def handler(request):
+        raise failure_type("PRIVATE_PHONE_13800000000", request=request)
+
+    gateway, observation = _production_model_shape(handler)
+
+    assert gateway.analyze("PRIVATE_PROMPT").degraded is True
+    provider = _points(observation, "agent_model_provider_outcome_total")
+    assert [point["outcome"] for point in provider] == [expected, expected]
+    assert all(point["provider"] == "DeepSeek" for point in provider)
+    assert len(_points(observation, "agent_model_retry_total")) == 1
+    assert _points(observation, "agent_model_fallback_total") == [
+        {
+            "provider": "DeterministicModelGateway",
+            "operation": "analyze_with_context",
+            "outcome": "success",
+        }
+    ]
+    assert (
+        _points(observation, "agent_model_operation_outcome_total")[0]["outcome"]
+        == "degraded_success"
+    )
+    assert _points(observation, "agent_model_operation_outcome_total")[0]["reason"] == "degraded"
+    rendered = repr(observation.points) + repr(observation.spans)
+    assert "PRIVATE_" not in rendered
+    assert "13800000000" not in rendered
+
+
+def test_production_model_shape_records_schema_failure_before_fallback():
+    gateway, observation = _production_model_shape(
+        lambda _request: httpx.Response(
+            200, json={"choices": [{"message": {"content": "PRIVATE_INVALID_JSON"}}]}
+        )
+    )
+
+    assert gateway.analyze("PRIVATE_SCHEMA_PROMPT").degraded is True
+    assert [
+        point["outcome"] for point in _points(observation, "agent_model_provider_outcome_total")
+    ] == ["schema_failure", "schema_failure"]
+    assert len(_points(observation, "agent_model_retry_total")) == 1
+    assert len(_points(observation, "agent_model_fallback_total")) == 1
+    assert "PRIVATE_" not in repr(observation.points) + repr(observation.spans)
+
+
+def test_production_model_shape_records_nonretryable_provider_failure_then_fallback():
+    gateway, observation = _production_model_shape(
+        lambda _request: httpx.Response(401, json={"error": "PRIVATE_PROVIDER_BODY"})
+    )
+
+    assert gateway.analyze("PRIVATE_PROVIDER_PROMPT").degraded is True
+    assert [
+        point["outcome"] for point in _points(observation, "agent_model_provider_outcome_total")
+    ] == ["provider_failure"]
+    assert _points(observation, "agent_model_retry_total") == []
+    assert len(_points(observation, "agent_model_fallback_total")) == 1
+    assert "PRIVATE_" not in repr(observation.points) + repr(observation.spans)
+
+
+def test_semantic_plan_primary_failure_propagates_without_fallback():
+    def handler(request):
+        raise httpx.ConnectError("PRIVATE_SEMANTIC_PROMPT", request=request)
+
+    gateway, observation = _production_model_shape(handler)
+
+    with pytest.raises(ModelGatewayError):
+        gateway.propose_plan(
+            "PRIVATE_PLAN_TEXT",
+            history=[],
+            trusted_context={},
+            memory_context={},
+        )
+    assert [
+        point["outcome"] for point in _points(observation, "agent_model_provider_outcome_total")
+    ] == ["transport_failure", "transport_failure"]
+    assert _points(observation, "agent_model_fallback_total") == []
+    assert (
+        _points(observation, "agent_model_operation_outcome_total")[0]["outcome"]
+        == "transport_failure"
+    )
+    assert "PRIVATE_" not in repr(observation.points) + repr(observation.spans)

@@ -1,15 +1,40 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import contextmanager
 from contextvars import ContextVar
 from threading import Event
+from types import SimpleNamespace
 
+import pytest
+from fastapi import FastAPI
+
+import property_agent.platform.container as container_module
 from property_agent.agent.adapters.api.presentation import stream_turn_data, wire_events
 from property_agent.agent.adapters.api.stream_delivery import (
     BoundedEventBuffer,
     BoundedStreamBridge,
 )
+from property_agent.agent.application.stream_execution import (
+    BoundedStreamExecutionRegistry,
+    StreamExecutionRejected,
+    drain_stream_executions,
+)
 from property_agent.agent.observability import AgentObservability
 from property_agent.agent.stream_events import AgentStreamEvent, StreamEventKind
+
+
+@contextmanager
+def _owned_bridge(source, *, observability=None, max_concurrency=2):
+    registry = BoundedStreamExecutionRegistry(max_concurrency, observability)
+    try:
+        yield BoundedStreamBridge(
+            source,
+            registry=registry,
+            observability=observability,
+        )
+    finally:
+        registry.shutdown(2)
 
 
 def test_bounded_buffer_drops_only_progress_and_reserves_final() -> None:
@@ -35,7 +60,8 @@ def test_bridge_converts_execution_failure_to_one_safe_terminal() -> None:
         yield AgentStreamEvent.started("conv", "v2")
         raise RuntimeError("secret payload must not cross the wire")
 
-    events = list(BoundedStreamBridge(source).events())
+    with _owned_bridge(source) as bridge:
+        events = list(bridge.events())
 
     assert [event.kind for event in events] == [
         StreamEventKind.TURN_STARTED,
@@ -49,9 +75,8 @@ def test_bridge_converts_execution_failure_to_one_safe_terminal() -> None:
 
 
 def test_bridge_emits_failure_when_source_omits_authoritative_terminal() -> None:
-    events = list(
-        BoundedStreamBridge(lambda: iter((AgentStreamEvent.started("conv", "v1"),))).events()
-    )
+    with _owned_bridge(lambda: iter((AgentStreamEvent.started("conv", "v1"),))) as bridge:
+        events = list(bridge.events())
 
     assert events[-1].kind is StreamEventKind.FAILED
     assert events[-1].data["category"] == "missing_terminal_event"
@@ -67,7 +92,8 @@ def test_bridge_stops_after_first_authoritative_terminal() -> None:
         finally:
             cleaned_up.set()
 
-    events = list(BoundedStreamBridge(source).events())
+    with _owned_bridge(source) as bridge:
+        events = list(bridge.events())
 
     assert [event.kind for event in events] == [StreamEventKind.FINAL]
     assert cleaned_up.is_set()
@@ -84,12 +110,12 @@ def test_disconnect_does_not_cancel_canonical_execution() -> None:
         side_effect_completed.set()
         yield AgentStreamEvent.final(object(), "v1")
 
-    stream = BoundedStreamBridge(source, observability=telemetry).events()
-    assert next(stream).kind is StreamEventKind.TURN_STARTED
-    stream.close()
-    continue_execution.set()
-
-    assert side_effect_completed.wait(timeout=2)
+    with _owned_bridge(source, observability=telemetry) as bridge:
+        stream = bridge.events()
+        assert next(stream).kind is StreamEventKind.TURN_STARTED
+        stream.close()
+        continue_execution.set()
+        assert side_effect_completed.wait(timeout=2)
     assert any(
         point.name == "agent_stream_total"
         and point.attributes.get("outcome") == "client_disconnect"
@@ -143,4 +169,113 @@ def test_delivery_thread_preserves_trusted_request_context() -> None:
         assert trusted_context.get() == "server-owned"
         yield AgentStreamEvent.final(object(), "v1")
 
-    assert list(BoundedStreamBridge(source).events())[0].kind is StreamEventKind.FINAL
+    with _owned_bridge(source) as bridge:
+        assert list(bridge.events())[0].kind is StreamEventKind.FINAL
+
+
+def test_application_registry_has_no_unbounded_waiting_queue() -> None:
+    release = Event()
+    registry = BoundedStreamExecutionRegistry(1)
+    try:
+        registry.submit(lambda: release.wait(timeout=2))
+        assert registry.snapshot() == {"state": "ACCEPTING", "active": 1, "capacity": 1}
+        with pytest.raises(StreamExecutionRejected, match="capacity"):
+            registry.submit(lambda: None)
+    finally:
+        release.set()
+        assert registry.shutdown(2) is True
+
+
+@pytest.mark.asyncio
+async def test_application_shutdown_drains_disconnected_producer_before_resources(
+    monkeypatch,
+) -> None:
+    continue_execution = Event()
+    producer_finished = Event()
+    order = []
+    registry = BoundedStreamExecutionRegistry(1)
+
+    def source():
+        yield AgentStreamEvent.started("conv", "v1")
+        continue_execution.wait(timeout=2)
+        order.append("producer_finished")
+        producer_finished.set()
+        yield AgentStreamEvent.final(object(), "v1")
+
+    bridge = BoundedStreamBridge(source, registry=registry)
+    delivery = bridge.events()
+    assert next(delivery).kind is StreamEventKind.TURN_STARTED
+    delivery.close()
+    app = SimpleNamespace(state=SimpleNamespace(agent_stream_executions=registry))
+    monkeypatch.setattr(
+        "property_agent.platform.container.settings.agent_stream_shutdown_grace_seconds", 2.0
+    )
+
+    drain = asyncio.create_task(drain_stream_executions(app, 2.0))
+    await asyncio.sleep(0)
+    assert registry.snapshot()["state"] == "DRAINING"
+    continue_execution.set()
+    assert await drain is True
+    order.append("runtime_resources_closed")
+
+    assert producer_finished.is_set()
+    assert order == ["producer_finished", "runtime_resources_closed"]
+
+
+@pytest.mark.asyncio
+async def test_fastapi_lifespan_drains_detached_stream_before_runtime_shutdown(
+    monkeypatch,
+) -> None:
+    order = []
+    continue_execution = Event()
+    registry = BoundedStreamExecutionRegistry(1)
+
+    class Worker:
+        def __init__(self) -> None:
+            self.stopped = asyncio.Event()
+
+        async def run(self):
+            await self.stopped.wait()
+
+        async def stop(self):
+            self.stopped.set()
+
+    dispatcher = Worker()
+    scheduler = Worker()
+
+    def build_container(app):
+        app.state.outbox_dispatcher = dispatcher
+        app.state.announcement_service = object()
+        app.state.agent_stream_executions = registry
+
+    monkeypatch.setattr(container_module, "get_async_engine", lambda: object())
+    monkeypatch.setattr(container_module, "get_async_session_factory", lambda: object())
+    monkeypatch.setattr(container_module, "build_production_container", build_container)
+    monkeypatch.setattr(container_module, "AnnouncementScheduler", lambda _service: scheduler)
+    monkeypatch.setattr(
+        container_module,
+        "close_runtime_resources",
+        lambda _app: order.append("runtime_resources_closed"),
+    )
+    monkeypatch.setattr(container_module.settings, "agent_stream_shutdown_grace_seconds", 2.0)
+
+    app = FastAPI()
+    async with container_module.lifespan(app):
+
+        def source():
+            yield AgentStreamEvent.started("conv", "v1")
+            continue_execution.wait(timeout=2)
+            order.append("producer_finished")
+            yield AgentStreamEvent.final(object(), "v1")
+
+        delivery = BoundedStreamBridge(source, registry=registry).events()
+        assert next(delivery).kind is StreamEventKind.TURN_STARTED
+        delivery.close()
+
+        async def release_producer():
+            await asyncio.sleep(0.05)
+            continue_execution.set()
+
+        asyncio.create_task(release_producer())
+
+    assert order == ["producer_finished", "runtime_resources_closed"]

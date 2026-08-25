@@ -77,6 +77,8 @@ class Settings(BaseSettings):
     agent_approval_ttl_minutes: int = 5
     # 单 turn lease 时长：足够覆盖一次 LLM 调用，又短到过期后能快速抢占。
     agent_run_lease_seconds: int = 30
+    agent_stream_max_concurrency: int = 16
+    agent_stream_shutdown_grace_seconds: float = 15.0
 
     # ── OpenTelemetry 可观测性（PR7-A） ──────────────────────────
     otel_enabled: bool = True
@@ -136,6 +138,10 @@ class Settings(BaseSettings):
             problems.append("AGENT_RUN_LEASE_SECONDS must be positive")
         if self.agent_approval_ttl_minutes <= 0:
             problems.append("AGENT_APPROVAL_TTL_MINUTES must be positive")
+        if self.agent_stream_max_concurrency <= 0:
+            problems.append("AGENT_STREAM_MAX_CONCURRENCY must be positive")
+        if self.agent_stream_shutdown_grace_seconds <= 0:
+            problems.append("AGENT_STREAM_SHUTDOWN_GRACE_SECONDS must be positive")
 
         if problems:
             raise RuntimeError("Unsafe production configuration: " + "; ".join(problems))

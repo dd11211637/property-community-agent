@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from property_agent.agent import observed_boundaries
+from property_agent.agent.application import stream_execution as stream_exec
 from property_agent.agent.application.composition import bind_runtime, close_runtime_resources
 from property_agent.agent.application.confirmation_provider import prepare_confirmation
 from property_agent.agent.application.conversation_service import ConversationService
@@ -227,8 +228,8 @@ async def lifespan(app: FastAPI):
         await announcement_scheduler_task
         await dispatcher.stop()
         await dispatcher_task
+        await stream_exec.drain_stream_executions(app, settings.agent_stream_shutdown_grace_seconds)
         close_runtime_resources(app)
-
     # ── Shutdown ─────────────────────────────────────────────────
     logger.info("Container shutting down...")
     _services_configured = False
@@ -238,7 +239,6 @@ async def lifespan(app: FastAPI):
     _async_engine = None
     _async_session_factory = None
     dispose_engine()
-
     logger.info("Container shutdown complete")
 
 
@@ -573,6 +573,11 @@ def build_model_gateway(observability: Any | None = None) -> ModelGateway:
     fallback = DeterministicModelGateway()
     if not settings.deepseek_api_key.strip():
         return fallback
+    observe = (
+        observed_boundaries.model_provider_observer(observability)
+        if observability is not None
+        else None
+    )
     primary = DeepSeekModelGateway(
         api_key=settings.deepseek_api_key,
         base_url=settings.deepseek_base_url,
@@ -580,13 +585,9 @@ def build_model_gateway(observability: Any | None = None) -> ModelGateway:
         connect_timeout_seconds=settings.deepseek_connect_timeout_seconds,
         read_timeout_seconds=settings.deepseek_read_timeout_seconds,
         total_timeout_seconds=settings.deepseek_total_timeout_seconds,
-        observe=(
-            observed_boundaries.model_provider_observer(observability)
-            if observability is not None
-            else None
-        ),
+        observe=observe,
     )
-    return FallbackModelGateway(primary, fallback)
+    return FallbackModelGateway(primary, fallback, observe=observe)
 
 
 def resolve_agent_request_context(state: GraphState) -> RequestContext:
@@ -619,6 +620,7 @@ def _build_services(app: FastAPI) -> dict[str, Any]:
 
     services: dict[str, Any] = {}
     app.state.agent_observability = AgentObservability.build(settings)
+    stream_exec.install_stream_execution(app, settings, services)
 
     # Session-scoped platform services are constructed per request from the
     # `get_db` dependency, so here we only record that they are available.

@@ -71,7 +71,10 @@ def engine_span_name(plan: Any, action: str) -> str:
 def finish_turn(observability: Any, plan: Any, turn: Any, operation: str, span: Any) -> None:
     outcome = classify_turn(turn).value
     span.set_attribute("agent.intent", turn.state.intent)
-    span.set_attribute("agent.degraded", observability.degraded)
+    span.set_attribute(
+        "agent.degraded",
+        observability.status()["state"] == "ENABLED_DEGRADED",
+    )
     steps = getattr(getattr(turn.state, "plan", None), "steps", ())
     latency_class = "multi_step" if len(steps) > 1 else "simple"
     observability.duration(

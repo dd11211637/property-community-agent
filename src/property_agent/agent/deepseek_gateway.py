@@ -10,13 +10,17 @@ from typing import Any
 import httpx
 
 from property_agent.agent.capabilities.catalog import default_capability_registry
+from property_agent.agent.deepseek_parsing import parse_deepseek_analysis
 from property_agent.agent.memory_extraction import MEMORY_WRITER_PROMPT, parse_memory_candidates
 from property_agent.agent.model_contracts import ModelAnalysis, ModelGatewayError
 from property_agent.agent.planning_contracts import PlanProposal, RelevanceJudgment
-from property_agent.agent.policies import Intent
 from property_agent.agent.semantic_planning_provider import SemanticPlanningClient
+from property_agent.agent.telemetry_contracts import (
+    model_failure_category,
+    model_schema_failure,
+    observe_model_provider_attempt,
+)
 
-_VALID_INTENTS = frozenset(intent.value for intent in Intent)
 _SYSTEM_PROMPT = """You classify requests for a Chinese property-management assistant.
 Return JSON only, matching this exact schema:
 {"intent":"REPAIR|ANNOUNCEMENT|BILLING|INSPECTION|GENERAL_HELP|UNCERTAIN",
@@ -124,6 +128,7 @@ class DeepSeekModelGateway:
             read_timeout_seconds=read_timeout_seconds,
             total_timeout_seconds=total_timeout_seconds,
             transport=transport,
+            observe=self._observe,
         )
 
     def ready(self) -> bool:
@@ -149,18 +154,22 @@ class DeepSeekModelGateway:
             if remaining <= 0:
                 break
             try:
-                return self._request(
-                    text,
-                    history=history[-12:],
-                    trusted_context=trusted_context,
-                    remaining_seconds=remaining,
+                return observe_model_provider_attempt(
+                    self._observe,
+                    "analyze",
+                    lambda remaining=remaining: self._request(
+                        text,
+                        history=history[-12:],
+                        trusted_context=trusted_context,
+                        remaining_seconds=remaining,
+                    ),
                 )
             except ModelGatewayError as exc:
                 last_error = exc
                 if not exc.retryable:
                     raise
                 if attempt == 0:
-                    self._observe("model_retry", {"operation": "analyze"})
+                    self._observe("model_retry", {"provider": "DeepSeek", "operation": "analyze"})
         raise ModelGatewayError("DeepSeek request failed after one retry") from last_error
 
     def propose_plan(
@@ -180,7 +189,10 @@ class DeepSeekModelGateway:
             "capability_inventory": semantic_planner_capability_inventory(),
         }
         value = self._semantic_planning.request_json(
-            _SEMANTIC_PLANNER_PROMPT, context, max_tokens=1400
+            _SEMANTIC_PLANNER_PROMPT,
+            context,
+            max_tokens=1400,
+            operation="propose_plan",
         )
         return PlanProposal.from_dict(value, provider="deepseek")
 
@@ -191,6 +203,7 @@ class DeepSeekModelGateway:
             MEMORY_WRITER_PROMPT,
             {"user_text": user_text, "assistant_text": assistant_text, "outcome": outcome},
             max_tokens=900,
+            operation="extract_candidates",
         )
         return parse_memory_candidates(value, user_text)
 
@@ -204,6 +217,7 @@ class DeepSeekModelGateway:
             _RELEVANCE_PROMPT,
             {"semantic_goal": semantic_goal, "evidence": evidence},
             max_tokens=256,
+            operation="judge_relevance",
         )
         return RelevanceJudgment.from_dict(value)
 
@@ -216,6 +230,7 @@ class DeepSeekModelGateway:
 
     def draft_announcement(self, *, topic: str, audience: Any, requirements: str) -> dict[str, str]:
         return self._announcement_copy_request(
+            operation="draft_announcement",
             system_prompt="""请为物业社区起草一份正式、清晰、不过度承诺的中文公告。
 只返回JSON：{"title":"不超过128字","body":"完整正文","category":"GENERAL|MAINTENANCE|SAFETY|EMERGENCY"}
 不得编造用户未提供的日期、电话、费用、部门承诺或安全事实。""",
@@ -226,6 +241,7 @@ class DeepSeekModelGateway:
         self, *, draft: dict[str, str], audience: Any, instruction: str
     ) -> dict[str, str]:
         return self._announcement_copy_request(
+            operation="revise_announcement",
             system_prompt="""你负责修改一份尚未保存的物业公告草稿。
 只返回JSON：{"title":"不超过128字","body":"完整正文","category":"GENERAL|MAINTENANCE|SAFETY|EMERGENCY"}。
 严格以原稿和本轮修改要求为准；保留未要求修改的事实和受众，不得编造日期、时间、电话、费用、部门承诺或安全事实。""",
@@ -233,7 +249,7 @@ class DeepSeekModelGateway:
         )
 
     def _announcement_copy_request(
-        self, *, system_prompt: str, inputs: dict[str, Any]
+        self, *, operation: str, system_prompt: str, inputs: dict[str, Any]
     ) -> dict[str, str]:
         payload = {
             "model": self._model,
@@ -256,7 +272,8 @@ class DeepSeekModelGateway:
             write=self._read_timeout_seconds,
             pool=self._connect_timeout_seconds,
         )
-        try:
+
+        def request() -> dict[str, str]:
             with httpx.Client(transport=self._transport, timeout=timeout) as client:
                 response = client.post(
                     self._url,
@@ -273,6 +290,9 @@ class DeepSeekModelGateway:
             ):
                 raise ValueError("invalid draft schema")
             return value
+
+        try:
+            return observe_model_provider_attempt(self._observe, operation, request)
         except (
             httpx.HTTPError,
             ValueError,
@@ -281,7 +301,14 @@ class DeepSeekModelGateway:
             TypeError,
             json.JSONDecodeError,
         ) as exc:
-            raise ModelGatewayError("DeepSeek announcement drafting failed") from exc
+            raise ModelGatewayError(
+                "DeepSeek announcement drafting failed",
+                category=(
+                    "schema_failure"
+                    if isinstance(exc, (ValueError, KeyError, IndexError, TypeError))
+                    else model_failure_category(exc)
+                ),
+            ) from exc
 
     def plan_read(self, **context: Any):
         """Produce one strict read-plan decision; execution remains application-controlled."""
@@ -294,13 +321,19 @@ class DeepSeekModelGateway:
             if remaining <= 0:
                 break
             try:
-                return self._request_read_plan(context, remaining_seconds=remaining)
+                return observe_model_provider_attempt(
+                    self._observe,
+                    "plan_read",
+                    lambda remaining=remaining: self._request_read_plan(
+                        context, remaining_seconds=remaining
+                    ),
+                )
             except ModelGatewayError as exc:
                 last_error = exc
                 if not exc.retryable:
                     raise
                 if attempt == 0:
-                    self._observe("model_retry", {"operation": "plan_read"})
+                    self._observe("model_retry", {"provider": "DeepSeek", "operation": "plan_read"})
         raise ModelGatewayError("DeepSeek read planning failed after one retry") from last_error
 
     def _request_read_plan(self, context: dict[str, Any], *, remaining_seconds: float):
@@ -354,7 +387,7 @@ class DeepSeekModelGateway:
                 raise ValueError("empty content")
             return PlannerDecision.from_dict(json.loads(content))
         except (ValueError, KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-            raise ModelGatewayError("DeepSeek returned an invalid read plan") from exc
+            raise model_schema_failure("DeepSeek returned an invalid read plan") from exc
 
     def _request(
         self,
@@ -431,10 +464,10 @@ class DeepSeekModelGateway:
             envelope = response.json()
             content = envelope["choices"][0]["message"]["content"]
         except (ValueError, KeyError, IndexError, TypeError) as exc:
-            raise ModelGatewayError("DeepSeek returned an invalid response envelope") from exc
+            raise model_schema_failure("DeepSeek returned an invalid response envelope") from exc
         if not isinstance(content, str) or not content.strip():
-            raise ModelGatewayError("DeepSeek returned empty content")
-        return self._parse_analysis(content)
+            raise model_schema_failure("DeepSeek returned empty content")
+        return parse_deepseek_analysis(content)
 
     @staticmethod
     def _safe_history(history: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -443,29 +476,3 @@ class DeepSeekModelGateway:
             for item in history[-12:]
             if item.get("role") in {"user", "assistant"} and item.get("content")
         ]
-
-    @staticmethod
-    def _parse_analysis(content: str) -> ModelAnalysis:
-        try:
-            value = json.loads(content)
-        except json.JSONDecodeError as exc:
-            raise ModelGatewayError("DeepSeek returned invalid JSON") from exc
-        if not isinstance(value, dict) or set(value) != {"intent", "confidence", "slots"}:
-            raise ModelGatewayError("DeepSeek JSON does not match the required schema")
-        intent = value["intent"]
-        confidence = value["confidence"]
-        slots = value["slots"]
-        if intent not in _VALID_INTENTS:
-            raise ModelGatewayError("DeepSeek returned an unsupported intent")
-        if isinstance(confidence, bool) or not isinstance(confidence, int | float):
-            raise ModelGatewayError("DeepSeek returned an invalid confidence")
-        if not 0 <= float(confidence) <= 1:
-            raise ModelGatewayError("DeepSeek confidence is outside [0, 1]")
-        if not isinstance(slots, dict) or not all(isinstance(key, str) for key in slots):
-            raise ModelGatewayError("DeepSeek returned invalid slots")
-        return ModelAnalysis(
-            intent=intent,
-            confidence=float(confidence),
-            slots=slots,
-            provider="deepseek",
-        )
