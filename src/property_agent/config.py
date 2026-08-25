@@ -78,11 +78,13 @@ class Settings(BaseSettings):
     # 单 turn lease 时长：足够覆盖一次 LLM 调用，又短到过期后能快速抢占。
     agent_run_lease_seconds: int = 30
 
-    # ── OpenTelemetry 可观测性（P1 观测与流式） ──────────────────
-    # 不安装 opentelemetry 依赖时自动降级为进程内计数器 + NullTracer，不影响业务；
-    # 生产建议安装 ``opentelemetry-api``/``opentelemetry-sdk`` 并设好导出端点。
+    # ── OpenTelemetry 可观测性（PR7-A） ──────────────────────────
     otel_enabled: bool = True
     otel_service_name: str = "property-agent"
+    otel_exporter_endpoint: str = ""
+    otel_export_interval_ms: int = 30_000
+    release_sha: str = ""
+    deployment_environment: str = ""
 
     def validate_runtime_security(self) -> None:
         """Reject development credentials when the production profile is selected."""
@@ -109,6 +111,10 @@ class Settings(BaseSettings):
             problems.append("MEMORY_EMBEDDING_DIMENSIONS must match the pgvector schema (1536)")
         if self.memory_embedding_timeout_seconds <= 0:
             problems.append("MEMORY_EMBEDDING_TIMEOUT_SECONDS must be positive")
+        if self.otel_enabled and not self.otel_exporter_endpoint.strip():
+            problems.append("OTEL_EXPORTER_ENDPOINT is required when OTEL_ENABLED is true")
+        if self.otel_export_interval_ms <= 0:
+            problems.append("OTEL_EXPORT_INTERVAL_MS must be positive")
 
         if self.login_failure_limit <= 0:
             problems.append("LOGIN_FAILURE_LIMIT must be positive")

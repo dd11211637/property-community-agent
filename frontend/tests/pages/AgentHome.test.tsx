@@ -10,6 +10,13 @@ function envelope(data: unknown) {
   });
 }
 
+function sseTurn(data: unknown) {
+  return new Response(`event: run_started\ndata: {}\n\nevent: turn\ndata: ${JSON.stringify(data)}\n\nevent: done\ndata: {"done":true}\n\n`, {
+    status: 200,
+    headers: { "Content-Type": "text/event-stream" },
+  });
+}
+
 function mockAgentApi(...turns: unknown[]) {
   let turnIndex = 0;
   return vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
@@ -23,7 +30,7 @@ function mockAgentApi(...turns: unknown[]) {
     }
     const turn = turns[turnIndex++];
     if (turn === undefined) throw new Error(`Unexpected Agent request: ${method} ${url}`);
-    return Promise.resolve(envelope(turn));
+    return Promise.resolve(url.endsWith("/messages/stream") ? sseTurn(turn) : envelope(turn));
   });
 }
 

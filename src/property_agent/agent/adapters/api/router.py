@@ -17,7 +17,7 @@ import json
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Path
+from fastapi import APIRouter, Depends, Path, Request
 from fastapi.responses import StreamingResponse
 
 from property_agent.agent.adapters.api.dependencies import (
@@ -26,11 +26,12 @@ from property_agent.agent.adapters.api.dependencies import (
     get_agent_runner,
 )
 from property_agent.agent.adapters.api.presentation import (
-    sse_events,
     status_data,
     turn_data,
+    wire_events,
 )
 from property_agent.agent.adapters.api.schemas import ConfirmRequest, SendMessageRequest
+from property_agent.agent.adapters.api.stream_delivery import BoundedStreamBridge
 from property_agent.agent.application.facade import AgentRuntimeFacade
 from property_agent.platform.errors import BusinessError
 from property_agent.platform.schemas import Envelope
@@ -80,30 +81,34 @@ def send_message_stream(
     payload: SendMessageRequest,
     runner: RunnerDep,
     context: ContextDep,
+    request: Request,
 ) -> StreamingResponse:
     """真流式消息接口（P1 观测与流式）。
 
-    ``runner.stream_start`` 生成器先 yield ``run_started``（graph 完成前即发出），
-    再按图节点生命周期 yield ``tool_started`` / ``tool_finished``，最后 yield
-    ``("__turn__", AgentTurn)``；此处把 ``__turn__`` 展开为
-    intent / message / confirmation / facts / handover / done 事件序列。
+    Runner yields a bounded internal event contract. This adapter projects it onto the
+    compatible run/progress/intent/message/confirmation/facts/turn/done SSE family without
+    exposing graph node names or checkpointed state.
     """
 
-    def _stream():
-        for event, data in runner.stream_start(
+    house_id = _resolve_house(context, payload.house_id)
+    bridge = BoundedStreamBridge(
+        lambda: runner.stream_start(
             conversation_id=conversation_id,
             context=context,
             user_text=payload.text,
-            house_id=_resolve_house(context, payload.house_id),
+            house_id=house_id,
             slots=dict(payload.slots or {}),
-        ):
-            if event == "__turn__":
-                for sub_event, sub_data in sse_events(data):
-                    body = json.dumps(sub_data, ensure_ascii=False, default=str)
-                    yield f"event: {sub_event}\ndata: {body}\n\n"
-            else:
+        ),
+        observability=getattr(request.app.state, "agent_observability", None),
+    )
+
+    def _stream():
+        for event in bridge.events():
+            for name, data in wire_events(event):
                 body = json.dumps(data, ensure_ascii=False, default=str)
-                yield f"event: {event}\ndata: {body}\n\n"
+                if len(body.encode("utf-8")) > 262_144:
+                    raise RuntimeError("SSE event exceeds the bounded presentation limit")
+                yield f"event: {name}\ndata: {body}\n\n"
 
     return StreamingResponse(
         _stream(),

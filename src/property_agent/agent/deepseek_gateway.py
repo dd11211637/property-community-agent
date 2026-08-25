@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -105,6 +106,7 @@ class DeepSeekModelGateway:
         read_timeout_seconds: float,
         total_timeout_seconds: float = 6.0,
         transport: httpx.BaseTransport | None = None,
+        observe: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> None:
         self._api_key = api_key.strip()
         self._url = f"{base_url.rstrip('/')}/chat/completions"
@@ -113,6 +115,7 @@ class DeepSeekModelGateway:
         self._read_timeout_seconds = read_timeout_seconds
         self._total_timeout_seconds = total_timeout_seconds
         self._transport = transport
+        self._observe = observe or (lambda _event, _fields: None)
         self._semantic_planning = SemanticPlanningClient(
             api_key=self._api_key,
             url=self._url,
@@ -141,7 +144,7 @@ class DeepSeekModelGateway:
 
         last_error: Exception | None = None
         deadline = time.monotonic() + self._total_timeout_seconds
-        for _attempt in range(2):
+        for attempt in range(2):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
@@ -156,6 +159,8 @@ class DeepSeekModelGateway:
                 last_error = exc
                 if not exc.retryable:
                     raise
+                if attempt == 0:
+                    self._observe("model_retry", {"operation": "analyze"})
         raise ModelGatewayError("DeepSeek request failed after one retry") from last_error
 
     def propose_plan(
@@ -284,7 +289,7 @@ class DeepSeekModelGateway:
             raise ModelGatewayError("DeepSeek API key is not configured")
         last_error: Exception | None = None
         deadline = time.monotonic() + self._total_timeout_seconds
-        for _attempt in range(2):
+        for attempt in range(2):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
@@ -294,6 +299,8 @@ class DeepSeekModelGateway:
                 last_error = exc
                 if not exc.retryable:
                     raise
+                if attempt == 0:
+                    self._observe("model_retry", {"operation": "plan_read"})
         raise ModelGatewayError("DeepSeek read planning failed after one retry") from last_error
 
     def _request_read_plan(self, context: dict[str, Any], *, remaining_seconds: float):

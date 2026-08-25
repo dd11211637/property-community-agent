@@ -13,6 +13,7 @@ from property_agent.agent.adapters.api.memory_schemas import (
     UpdateMemoryRequest,
 )
 from property_agent.agent.application.memory_service import AgentMemoryService
+from property_agent.agent.observed_boundaries import ObservedMemoryService
 from property_agent.platform.infrastructure.database import get_db
 from property_agent.platform.schemas import Envelope
 
@@ -23,7 +24,9 @@ DbDep = Annotated[Session, Depends(get_db)]
 
 def get_memory_service(request: Request, db: DbDep) -> AgentMemoryService:
     provider = getattr(request.app.state, "agent_memory_embedding_provider", None)
-    return AgentMemoryService(db, embedding_provider=provider)
+    service = AgentMemoryService(db, embedding_provider=provider)
+    observability = getattr(request.app.state, "agent_observability", None)
+    return ObservedMemoryService(service, observability) if observability is not None else service
 
 
 MemoryServiceDep = Annotated[AgentMemoryService, Depends(get_memory_service)]

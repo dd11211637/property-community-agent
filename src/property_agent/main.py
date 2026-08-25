@@ -19,10 +19,6 @@
 
 from __future__ import annotations
 
-import logging
-from time import perf_counter
-from uuid import uuid4
-
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -49,20 +45,10 @@ from property_agent.platform.adapters.api.routes import router as platform_route
 from property_agent.platform.container import lifespan
 from property_agent.platform.dependencies import bind_request_context_to_jwt
 from property_agent.platform.errors import BusinessError as PlatformBusinessError
+from property_agent.platform.http_observability import observe_http_request
 from property_agent.platform.observability import configure_logging
 from property_agent.repair.adapters.api.router import router as repair_router
 from property_agent.repair.domain.errors import BusinessError as RepairBusinessError
-
-MAX_REQUEST_ID_LENGTH = 64
-access_logger = logging.getLogger("property_agent.access")
-
-
-def _request_id(header_value: str | None) -> str:
-    if header_value is not None:
-        candidate = header_value.strip()
-        if 1 <= len(candidate) <= MAX_REQUEST_ID_LENGTH:
-            return candidate
-    return f"req_{uuid4().hex}"
 
 
 def create_app() -> FastAPI:
@@ -86,36 +72,7 @@ def create_app() -> FastAPI:
     )
 
     # ── Middleware ──────────────────────────────────────────────
-    @app.middleware("http")
-    async def request_id_middleware(request: Request, call_next):
-        request.state.request_id = _request_id(request.headers.get("X-Request-ID"))
-        started = perf_counter()
-        status_code = 500
-        try:
-            response = await call_next(request)
-            status_code = response.status_code
-            response.headers["X-Request-ID"] = request.state.request_id
-            return response
-        finally:
-            duration_ms = round((perf_counter() - started) * 1000, 2)
-            route = request.scope.get("route")
-            route_template = getattr(route, "path", "unmatched")
-            level = (
-                logging.WARNING
-                if duration_ms >= settings.slow_request_threshold_ms or status_code >= 500
-                else logging.INFO
-            )
-            access_logger.log(
-                level,
-                "http_request",
-                extra={
-                    "request_id": request.state.request_id,
-                    "method": request.method,
-                    "route": route_template,
-                    "status_code": status_code,
-                    "duration_ms": duration_ms,
-                },
-            )
+    app.middleware("http")(observe_http_request)
 
     # ── Error Handlers ─────────────────────────────────────────
     @app.exception_handler(RepairBusinessError)

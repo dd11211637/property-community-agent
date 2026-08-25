@@ -14,6 +14,7 @@ from property_agent.agent.application.runner import AgentTurn
 from property_agent.agent.capabilities.compatibility import migrated_presentation
 from property_agent.agent.slot_prompts import repair_slot_prompt
 from property_agent.agent.state import GraphState
+from property_agent.agent.stream_events import AgentStreamEvent, StreamEventKind
 
 
 def _repair_slot_prompt(state) -> dict[str, Any] | None:
@@ -198,15 +199,54 @@ def sse_events(turn: AgentTurn) -> list[tuple[str, dict[str, Any]]]:
     events: list[tuple[str, dict[str, Any]]] = [
         ("intent", {"intent": state.intent, "confidence": state.confidence})
     ]
-    for message in state.messages:
-        if message.get("role") == "assistant":
-            events.append(("message", {"content": message.get("content", "")}))
     data = turn_data(turn)
+    if data["reply"]:
+        events.append(("message", {"content": data["reply"]}))
+    if data["slot_prompt"] is not None:
+        events.append(("clarification", {"slot_prompt": data["slot_prompt"]}))
     if data["pending_confirmation"] is not None:
         events.append(("confirmation", data["pending_confirmation"]))
     if data["facts"] is not None:
         events.append(("facts", {"facts": data["facts"]}))
     if data["handover_required"]:
         events.append(("handover", {"conversation_id": state.conversation_id}))
+    events.append(("turn", stream_turn_data(data)))
     events.append(("done", {"done": turn.done, "status": data["status"]}))
     return events
+
+
+def stream_turn_data(data: dict[str, Any]) -> dict[str, Any]:
+    """Explicit public snapshot; excludes messages, trace, graph state, and internal errors."""
+    allowed = (
+        "conversation_id",
+        "status",
+        "done",
+        "intent",
+        "confidence",
+        "operation_level",
+        "reply",
+        "facts",
+        "missing_slots",
+        "requested_slot",
+        "slot_prompt",
+        "handover_required",
+        "pending_confirmation",
+    )
+    return {key: data[key] for key in allowed}
+
+
+def wire_events(event: AgentStreamEvent | tuple[str, Any]):
+    """One internal typed event to the stable external SSE event family."""
+    if not isinstance(event, AgentStreamEvent):
+        name, data = event
+        if name == "__turn__":
+            return sse_events(data)
+        return [(name, data)]
+    if event.kind is StreamEventKind.TURN_STARTED:
+        return [("run_started", event.data)]
+    if event.kind is StreamEventKind.PROGRESS:
+        name = "tool_started" if event.data["active"] else "tool_finished"
+        return [(name, {"stage": event.data["stage"]})]
+    if event.kind is StreamEventKind.FAILED:
+        return [("failed", event.data)]
+    return sse_events(event.turn)

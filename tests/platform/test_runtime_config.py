@@ -21,10 +21,24 @@ def test_production_profile_accepts_explicit_secure_configuration():
         env="production",
         jwt_secret="production-secret-that-is-longer-than-thirty-two-characters",
         database_url="postgresql+psycopg://property_app:strong-password@database/property_agent",
+        otel_exporter_endpoint="http://otel-collector:4318",
         _env_file=None,
     )
 
     config.validate_runtime_security()
+
+
+def test_production_profile_rejects_enabled_telemetry_without_exporter():
+    config = Settings(
+        env="production",
+        jwt_secret="production-secret-that-is-longer-than-thirty-two-characters",
+        database_url="postgresql+psycopg://property_app:strong-password@database/property_agent",
+        otel_exporter_endpoint="",
+        _env_file=None,
+    )
+
+    with pytest.raises(RuntimeError, match="OTEL_EXPORTER_ENDPOINT"):
+        config.validate_runtime_security()
 
 
 def test_production_profile_rejects_disabled_concurrency_guard():

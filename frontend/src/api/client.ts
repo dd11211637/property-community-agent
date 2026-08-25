@@ -108,6 +108,65 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   return payload as T;
 }
 
+export async function streamAgentTurn<T>(path: string, body: unknown): Promise<T> {
+  const token = sessionStorage.getItem("property_agent_token");
+  const houseId = sessionStorage.getItem("property_agent_house_id");
+  const headers = new Headers({
+    Accept: "text/event-stream",
+    "Content-Type": "application/json",
+    "X-Request-ID": requestId(),
+  });
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  if (houseId) headers.set("X-Current-House-ID", houseId);
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new ApiError(0, "NETWORK_ERROR", "无法连接服务，请检查网络或稍后重试。");
+  }
+  if (!response.ok || !response.body) {
+    throw new ApiError(response.status, `HTTP_${response.status}`, "Agent 流式请求未成功。");
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalTurn: T | undefined;
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const blocks = buffer.split("\n\n");
+    buffer = blocks.pop() ?? "";
+    for (const block of blocks) {
+      const parsed = parseSseBlock(block);
+      if (parsed?.event === "turn") finalTurn = parsed.data as T;
+      if (parsed?.event === "failed") {
+        throw new ApiError(503, "AGENT_STREAM_FAILED", "Agent 执行失败，可刷新会话查看状态。");
+      }
+    }
+    if (done) break;
+  }
+  if (finalTurn === undefined) {
+    throw new ApiError(502, "STREAM_FINAL_MISSING", "流式响应缺少最终会话状态。");
+  }
+  return finalTurn;
+}
+
+function parseSseBlock(block: string): { event: string; data: unknown } | null {
+  const lines = block.split(/\r?\n/);
+  const event = lines.find((line) => line.startsWith("event:"))?.slice(6).trim();
+  const data = lines.find((line) => line.startsWith("data:"))?.slice(5).trim();
+  if (!event || data === undefined) return null;
+  try {
+    return { event, data: JSON.parse(data) as unknown };
+  } catch {
+    throw new ApiError(502, "INVALID_STREAM_EVENT", "服务返回了无法识别的流式事件。");
+  }
+}
+
 export function queryString(params: Record<string, string | number | boolean | undefined>): string {
   const query = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {

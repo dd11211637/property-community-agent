@@ -1,15 +1,4 @@
-"""
-Production Composition Root — PRD 5.4.
-
-Manages the full lifecycle of:
-- Async SQLAlchemy engine and session factory
-- Application services (Auth, Audit, Idempotency, Confirmation, Outbox)
-- FastAPI dependency overrides for production service injection
-
-The assembly pipeline is:
-  Configuration → Database Engine / SessionFactory
-    → Application Services → FastAPI dependency_overrides
-"""
+"""Production composition root for infrastructure and application services."""
 
 from __future__ import annotations
 
@@ -29,6 +18,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from property_agent.agent import observed_boundaries
 from property_agent.agent.application.composition import bind_runtime, close_runtime_resources
 from property_agent.agent.application.confirmation_provider import prepare_confirmation
 from property_agent.agent.application.conversation_service import ConversationService
@@ -447,15 +437,22 @@ def build_agent_runner(
     """
     from property_agent.agent.observability import AgentObservability
 
-    observability = AgentObservability.build(settings)
+    observability = getattr(app.state, "agent_observability", None)
+    if observability is None:
+        observability = AgentObservability.build(settings)
+    app.state.agent_observability = observability
 
     session_factory = get_session_factory()
     checkpointer = SqlAlchemyCheckpointer(session_factory)
-    gateway = build_model_gateway()
+    gateway = observed_boundaries.ObservedModelGateway(
+        build_model_gateway(observability), observability
+    )
     app.state.agent_model_gateway = gateway
     memory_runtime = build_memory_runtime(settings, session_factory, gateway)
+    memory_runtime = observed_boundaries.observe_memory_runtime(memory_runtime, observability)
     app.state.agent_memory_embedding_provider = memory_runtime.embedding_provider
     app.state.agent_memory_reader = memory_runtime.reader
+    app.state.agent_memory_writer = memory_runtime.writer
 
     context_loader = build_agent_context_loader(session_factory)
     graph, *_ = _build_agent_tooling(
@@ -520,6 +517,7 @@ def _build_agent_tooling(
         announcement_model_gateway=gateway,
         inspection_task_service=app.state.task_service,
         inspection_event_service=app.state.event_service,
+        observe=observed_boundaries.capability_observer(app.state.agent_observability),
     )
     app.state.agent_capability_executor = capability_executor
     repair_tools = build_repair_tools(agent_work_orders, context_provider, capability_executor)
@@ -570,7 +568,7 @@ def _build_agent_tooling(
     )  # noqa: E501
 
 
-def build_model_gateway() -> ModelGateway:
+def build_model_gateway(observability: Any | None = None) -> ModelGateway:
     """Build the production model adapter without exposing the API key downstream."""
     fallback = DeterministicModelGateway()
     if not settings.deepseek_api_key.strip():
@@ -582,6 +580,11 @@ def build_model_gateway() -> ModelGateway:
         connect_timeout_seconds=settings.deepseek_connect_timeout_seconds,
         read_timeout_seconds=settings.deepseek_read_timeout_seconds,
         total_timeout_seconds=settings.deepseek_total_timeout_seconds,
+        observe=(
+            observed_boundaries.model_provider_observer(observability)
+            if observability is not None
+            else None
+        ),
     )
     return FallbackModelGateway(primary, fallback)
 
@@ -612,7 +615,10 @@ def _build_services(app: FastAPI) -> dict[str, Any]:
     sessions, real JWT secret, etc.). No fake/mock backends are used.
     Fakes live in ``tests/``; local demo adapters live in ``testing/``.
     """
+    from property_agent.agent.observability import AgentObservability
+
     services: dict[str, Any] = {}
+    app.state.agent_observability = AgentObservability.build(settings)
 
     # Session-scoped platform services are constructed per request from the
     # `get_db` dependency, so here we only record that they are available.
@@ -625,9 +631,12 @@ def _build_services(app: FastAPI) -> dict[str, Any]:
     # P0 正确性底座：审批服务（同一会话的 PENDING/APPROVED/CONSUMED 生命周期）
     # 与运行 lease（fencing）由容器一次性装配，业务 Service 通过端口复用。
     session_factory = get_session_factory()
-    approval_service = ApprovalService(
-        session_factory,
-        ttl_minutes=settings.agent_approval_ttl_minutes,
+    approval_service = observed_boundaries.ObservedApprovalService(
+        ApprovalService(
+            session_factory,
+            ttl_minutes=settings.agent_approval_ttl_minutes,
+        ),
+        app.state.agent_observability,
     )
     services["approval_service"] = approval_service
     run_lease_service = RunLeaseService(

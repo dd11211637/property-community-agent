@@ -9,6 +9,11 @@ from property_agent.agent.application.conversation_service import ConversationSe
 from property_agent.agent.application.facade import AgentRuntimeFacadeImpl
 from property_agent.agent.application.runner import AgentSessionRunner
 from property_agent.agent.model_gateway import DeterministicModelGateway
+from property_agent.agent.observed_boundaries import (
+    ObservedPlanner,
+    ObservedSpecialist,
+    supervisor_observer,
+)
 from property_agent.agent.planning import SupervisorPlanner
 from property_agent.agent.runtime_version import RuntimeSelectionPolicy
 from property_agent.agent.specialists import (
@@ -27,15 +32,22 @@ def build_supervisor(app: FastAPI) -> Supervisor:
     """Assemble the four canonical stateless specialists around one executor."""
     executor = app.state.agent_capability_executor
     gateway = getattr(app.state, "agent_model_gateway", DeterministicModelGateway())
-    specialists = (
-        RepairSpecialist(executor),
-        BillingSpecialist(executor),
-        AnnouncementSpecialist(executor),
-        InspectionSpecialist(executor),
+    specialists = tuple(
+        ObservedSpecialist(specialist, app.state.agent_observability)
+        for specialist in (
+            RepairSpecialist(executor),
+            BillingSpecialist(executor),
+            AnnouncementSpecialist(executor),
+            InspectionSpecialist(executor),
+        )
+    )
+    planner = SupervisorPlanner(
+        gateway, memory_reader=getattr(app.state, "agent_memory_reader", None)
     )
     return Supervisor(
-        SupervisorPlanner(gateway, memory_reader=getattr(app.state, "agent_memory_reader", None)),
+        ObservedPlanner(planner, app.state.agent_observability),
         {specialist.name: specialist for specialist in specialists},
+        observe=supervisor_observer(app.state.agent_observability),
     )
 
 
@@ -84,3 +96,6 @@ def close_runtime_resources(app) -> None:
     resource = getattr(app.state, "langgraph_saver_resource", None)
     if resource is not None:
         resource.close()
+    observability = getattr(app.state, "agent_observability", None)
+    if observability is not None:
+        observability.shutdown()
