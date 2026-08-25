@@ -8,10 +8,35 @@ from fastapi import FastAPI
 from property_agent.agent.application.conversation_service import ConversationService
 from property_agent.agent.application.facade import AgentRuntimeFacadeImpl
 from property_agent.agent.application.runner import AgentSessionRunner
+from property_agent.agent.model_gateway import DeterministicModelGateway
+from property_agent.agent.planning import SupervisorPlanner
 from property_agent.agent.runtime_version import RuntimeSelectionPolicy
+from property_agent.agent.specialists import (
+    AnnouncementSpecialist,
+    BillingSpecialist,
+    InspectionSpecialist,
+    RepairSpecialist,
+)
+from property_agent.agent.specialists.supervisor import Supervisor
 from property_agent.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def build_supervisor(app: FastAPI) -> Supervisor:
+    """Assemble the four canonical stateless specialists around one executor."""
+    executor = app.state.agent_capability_executor
+    gateway = getattr(app.state, "agent_model_gateway", DeterministicModelGateway())
+    specialists = (
+        RepairSpecialist(executor),
+        BillingSpecialist(executor),
+        AnnouncementSpecialist(executor),
+        InspectionSpecialist(executor),
+    )
+    return Supervisor(
+        SupervisorPlanner(gateway),
+        {specialist.name: specialist for specialist in specialists},
+    )
 
 
 def _build_v2_engine(app: FastAPI) -> Any | None:
@@ -20,7 +45,6 @@ def _build_v2_engine(app: FastAPI) -> Any | None:
             LangGraphEngine,
             build_saver_resource,
         )
-        from property_agent.agent.specialists.repair import RepairPilotSpecialist
 
         is_sqlite = settings.database_url.strip().lower().startswith("sqlite")
         dsn = None
@@ -28,8 +52,7 @@ def _build_v2_engine(app: FastAPI) -> Any | None:
             dsn = settings.database_url.replace("postgresql+psycopg", "postgresql")
         resource = build_saver_resource(in_memory=is_sqlite, dsn=dsn)
         app.state.langgraph_saver_resource = resource
-        specialist = RepairPilotSpecialist(app.state.agent_capability_executor)
-        return LangGraphEngine(resource.saver, specialist)
+        return LangGraphEngine(resource.saver, build_supervisor(app))
     except Exception:
         logger.exception("v2 LangGraph engine unavailable; v1 remains the public runtime")
         return None

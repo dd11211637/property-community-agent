@@ -13,7 +13,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from property_agent.agent.adapters.api.presentation import turn_data
-from property_agent.agent.application.composition import close_runtime_resources
+from property_agent.agent.application.composition import build_supervisor, close_runtime_resources
 from property_agent.agent.application.conversation_service import ConversationService
 from property_agent.agent.application.errors import AgentSessionError, AgentSessionErrorCode
 from property_agent.agent.application.facade import AgentRuntimeFacadeImpl
@@ -22,7 +22,6 @@ from property_agent.agent.infrastructure.checkpointer import SqlAlchemyCheckpoin
 from property_agent.agent.infrastructure.models import AgentActionApprovalModel
 from property_agent.agent.infrastructure.run_lease import RunLeaseService
 from property_agent.agent.runtime_version import RuntimeSelectionPolicy
-from property_agent.agent.specialists.repair import RepairPilotSpecialist
 from property_agent.platform.application.approval_service import ApprovalService
 from property_agent.platform.container import build_agent_runner, build_production_container
 from property_agent.platform.context import RequestContext
@@ -35,6 +34,7 @@ from property_agent.platform.infrastructure.orm_models import (
     UserRoleModel,
 )
 from property_agent.repair.infrastructure.models import WorkOrderModel
+from tests.agent.pr5_semantic_fakes import proposal, step
 
 POSTGRES_URL = os.getenv("TEST_POSTGRES_URL")
 
@@ -97,7 +97,13 @@ def vertical_runtime() -> VerticalRuntime:
     context, house_id = _seed_identity(sessions)
     app = FastAPI()
     build_production_container(app)
+    app.state.langgraph_saver_resource.saver.setup()
+    app.state.agent_model_gateway = RepairSemanticPlanningGateway()
     production = app.state.agent_runner
+    production._v2_engine = LangGraphEngine(
+        app.state.langgraph_saver_resource.saver,
+        build_supervisor(app),
+    )
     facade = AgentRuntimeFacadeImpl(
         lifecycle=app.state.agent_lifecycle,
         conversations=ConversationService(sessions),
@@ -108,6 +114,19 @@ def vertical_runtime() -> VerticalRuntime:
     close_runtime_resources(app)
     Base.metadata.drop_all(engine)
     engine.dispose()
+
+
+class RepairSemanticPlanningGateway:
+    def propose_plan(self, text, *, history, trusted_context):
+        del text, history, trusted_context
+        return proposal(
+            step(
+                "repair-create",
+                "repair",
+                "repair_create",
+                "提交厨房水管漏水报修",
+            )
+        )
 
 
 def _start(facade: Any, context: RequestContext, house_id: Any, conversation_id: str):
@@ -135,13 +154,14 @@ def _reconstruct(runtime: VerticalRuntime) -> tuple[AgentRuntimeFacadeImpl, Any]
         approval_service=approvals,
         run_lease_service=RunLeaseService(runtime.sessions),
     )
+    runtime.app.state.agent_model_gateway = RepairSemanticPlanningGateway()
     resource = build_saver_resource(
         dsn=str(POSTGRES_URL).replace("postgresql+psycopg", "postgresql")
     )
     runtime.app.state.langgraph_saver_resource = resource
     engine = LangGraphEngine(
         resource.saver,
-        RepairPilotSpecialist(runtime.app.state.agent_capability_executor),
+        build_supervisor(runtime.app),
     )
     facade = AgentRuntimeFacadeImpl(
         lifecycle=lifecycle,

@@ -406,6 +406,30 @@ def test_legacy_alias_resolves_to_one_canonical_capability_identity():
     assert calls == [1]
 
 
+def test_repair_confirmation_derives_category_from_exact_pending_description():
+    house_id = uuid4()
+    state = AgentState(
+        conversation_id="conv-repair-confirm",
+        current_house_id=house_id,
+        pending_action={
+            "tool": "repair_create",
+            "params": {
+                "description": "厨房水管漏水",
+                "location": "厨房",
+                "urgency": "NORMAL",
+            },
+        },
+        slots={"category": "OTHER", "description": "stale legacy description"},
+    )
+
+    action, parameters = derive_confirmation_params(state, announcement_service=None)
+
+    assert action == "CREATE_WORK_ORDER"
+    assert parameters["house_id"] == house_id
+    assert parameters["category"].value == "WATER_PLUMBING"
+    assert parameters["description"] == "厨房水管漏水"
+
+
 def test_legacy_graph_never_reexposes_internal_capability_cause():
     secret = "postgres password=secret-value"
     executor = CapabilityExecutor(

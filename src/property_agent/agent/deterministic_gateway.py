@@ -374,7 +374,7 @@ class DeterministicModelGateway:
         return best, confidence
 
     def extract_slots(self, text: str, intent: str) -> dict[str, Any]:
-        return {}
+        return self._slots_for_intent(text, intent)
 
     def draft_announcement(self, *, topic: str, audience: Any, requirements: str) -> dict[str, str]:
         title = topic.strip()[:128] or "社区通知"

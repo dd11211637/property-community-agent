@@ -366,7 +366,7 @@ def test_billing_query_adapter_calls_existing_application_service():
     )()
     service = Mock()
     service.list_bills.return_value = [bill]
-    session = object()
+    session = Mock()
     context = object()
     adapter = BillingQueryAdapter(service, lambda _runtime: session)
 
@@ -377,6 +377,7 @@ def test_billing_query_adapter_calls_existing_application_service():
     )
     assert output.count == 1
     assert output.items[0].total_amount == "88.00"
+    session.close.assert_called_once_with()
 
 
 @pytest.mark.parametrize(
@@ -418,7 +419,7 @@ def test_billing_write_adapter_forwards_server_approval_to_application_service()
     )()
     service = Mock()
     service.create_draft.return_value = ticket
-    session = object()
+    session = Mock()
     context = object()
     adapter = BillingConsultAdapter(service, lambda _runtime: session)
     request = BillingConsultInput(
@@ -445,6 +446,7 @@ def test_billing_write_adapter_forwards_server_approval_to_application_service()
         approval_ref="approval-id",
     )
     assert output.consultation.id == "C-1"
+    session.close.assert_called_once_with()
 
 
 def test_real_write_path_preserves_single_execution_and_service_invariants(

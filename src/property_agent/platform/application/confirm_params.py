@@ -13,7 +13,6 @@ from typing import Any
 from uuid import UUID
 
 from property_agent.agent.state import GraphState
-from property_agent.agent.tools.repair import normalize_repair_category
 from property_agent.announcement.domain.classification import classify_announcement_category
 from property_agent.announcement.domain.enums import AnnouncementAction
 from property_agent.announcement.domain.policies import normalize_audience_condition
@@ -25,6 +24,7 @@ from property_agent.inspection.application.commands import (
 )
 from property_agent.inspection.domain.classification import normalize_security_event
 from property_agent.inspection.domain.enums import EventAction, TaskAction, TaskRecordType
+from property_agent.repair.domain.classification import classify_repair_category
 from property_agent.repair.domain.enums import Urgency
 
 
@@ -177,8 +177,11 @@ def _optional_datetime(value: Any) -> datetime | None:
 
 
 def _repair_create_params(state: GraphState) -> tuple[str, dict[str, Any]]:
-    urgency_value = str(state.slots.get("urgency") or "NORMAL").upper()
-    category = normalize_repair_category(state.slots.get("category"))
+    pending = dict((state.pending_action or {}).get("params") or {})
+    description = str(pending.get("description") or state.slots.get("description") or "")
+    location = str(pending.get("location") or state.slots.get("location") or "")
+    urgency_value = str(pending.get("urgency") or state.slots.get("urgency") or "NORMAL").upper()
+    category = classify_repair_category(description)
     try:
         urgency = Urgency(urgency_value)
     except ValueError:
@@ -188,8 +191,8 @@ def _repair_create_params(state: GraphState) -> tuple[str, dict[str, Any]]:
         {
             "house_id": state.current_house_id,
             "category": category,
-            "location": str(state.slots.get("location") or ""),
-            "description": str(state.slots.get("description") or ""),
+            "location": location,
+            "description": description,
             "urgency": urgency,
             "attachment_ids": (),
         },
@@ -197,12 +200,13 @@ def _repair_create_params(state: GraphState) -> tuple[str, dict[str, Any]]:
 
 
 def _billing_consult_params(state: GraphState) -> tuple[str, dict[str, Any]]:
-    raw_bill_id = state.slots.get("bill_id")
+    pending = dict((state.pending_action or {}).get("params") or {})
+    raw_bill_id = pending.get("bill_id", state.slots.get("bill_id"))
     return (
         "CREATE_CONSULTATION",
         {
-            "subject": str(state.slots.get("subject") or ""),
-            "description": str(state.slots.get("description") or ""),
+            "subject": str(pending.get("subject") or state.slots.get("subject") or ""),
+            "description": str(pending.get("description") or state.slots.get("description") or ""),
             # Match ConsultationService's authoritative optional-field contract:
             # an absent bill association is None, not an empty string.
             "bill_id": str(raw_bill_id) if raw_bill_id else None,

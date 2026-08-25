@@ -8,8 +8,11 @@ from typing import Any
 
 import httpx
 
+from property_agent.agent.capabilities.catalog import default_capability_registry
 from property_agent.agent.model_contracts import ModelAnalysis, ModelGatewayError
+from property_agent.agent.planning_contracts import PlanProposal, RelevanceJudgment
 from property_agent.agent.policies import Intent
+from property_agent.agent.semantic_planning_provider import SemanticPlanningClient
 
 _VALID_INTENTS = frozenset(intent.value for intent in Intent)
 _SYSTEM_PROMPT = """You classify requests for a Chinese property-management assistant.
@@ -52,6 +55,38 @@ confirmation, database access, URLs, code, or unknown tools. Use observations as
 business facts. Stop with FINAL once enough verified facts exist. Do not output reasoning.
 """
 
+_SEMANTIC_PLANNER_PROMPT = """You propose a bounded semantic task plan for a Chinese
+property-management assistant. Return JSON only:
+{"objective_classification":"single-domain|multi-domain|general-help|uncertain",
+ "steps":[{"step_id":"stable-local-id","goal":"semantic user goal",
+ "domain":"repair|billing|announcement|inspection",
+ "specialist":"RepairSpecialist|BillingSpecialist|AnnouncementSpecialist|InspectionSpecialist",
+ "capability":"registered capability name","parameters":{},"dependencies":[],
+ "condition":null|{"kind":"no-equivalent-active-repair|relevant-inspection-issue",
+ "semantic_goal":"what live evidence must establish"}}]}
+Use at most 8 steps. Represent every requested goal, dependencies, negation, irrelevance,
+and conditions semantically; omit explicitly excluded or irrelevant goals. Choose capability
+only from the supplied capability_inventory canonical name/domain entries. Never emit an
+alias as a capability. Never invent identity, roles, scope, risk, approval, runtime,
+lease/fence, confirmation, business state, or commit authority. Unknown or ambiguous
+requests must be uncertain with no executable steps.
+"""
+
+_RELEVANCE_PROMPT = """Judge whether supplied live evidence establishes the semantic goal.
+Return JSON only: {"decision":"match|no-match|ambiguous","evidence_refs":[]}.
+Facts exist only at the supplied evidence reference keys. A match requires one or more exact
+reference keys. Never infer an unreported finding, and use ambiguous when relevance is not
+established. This judgment controls orchestration only and grants no business authority.
+"""
+
+
+def semantic_planner_capability_inventory() -> tuple[dict[str, str], ...]:
+    """Project canonical, non-sensitive capability metadata for semantic planning."""
+    return tuple(
+        {"name": spec.name, "domain": spec.domain}
+        for spec in default_capability_registry().inventory()
+    )
+
 
 class DeepSeekModelGateway:
     """Direct DeepSeek Chat Completions adapter with strict JSON validation."""
@@ -74,6 +109,15 @@ class DeepSeekModelGateway:
         self._read_timeout_seconds = read_timeout_seconds
         self._total_timeout_seconds = total_timeout_seconds
         self._transport = transport
+        self._semantic_planning = SemanticPlanningClient(
+            api_key=self._api_key,
+            url=self._url,
+            model=self._model,
+            connect_timeout_seconds=connect_timeout_seconds,
+            read_timeout_seconds=read_timeout_seconds,
+            total_timeout_seconds=total_timeout_seconds,
+            transport=transport,
+        )
 
     def ready(self) -> bool:
         return bool(self._api_key)
@@ -109,6 +153,37 @@ class DeepSeekModelGateway:
                 if not exc.retryable:
                     raise
         raise ModelGatewayError("DeepSeek request failed after one retry") from last_error
+
+    def propose_plan(
+        self,
+        text: str,
+        *,
+        history: list[dict[str, Any]],
+        trusted_context: dict[str, Any],
+    ) -> PlanProposal:
+        context = {
+            "objective": text,
+            "history": self._safe_history(history),
+            "trusted_context": trusted_context,
+            "capability_inventory": semantic_planner_capability_inventory(),
+        }
+        value = self._semantic_planning.request_json(
+            _SEMANTIC_PLANNER_PROMPT, context, max_tokens=1400
+        )
+        return PlanProposal.from_dict(value, provider="deepseek")
+
+    def judge_relevance(
+        self,
+        *,
+        semantic_goal: str,
+        evidence: dict[str, Any],
+    ) -> RelevanceJudgment:
+        value = self._semantic_planning.request_json(
+            _RELEVANCE_PROMPT,
+            {"semantic_goal": semantic_goal, "evidence": evidence},
+            max_tokens=256,
+        )
+        return RelevanceJudgment.from_dict(value)
 
     def classify_intent(self, text: str) -> tuple[str, float]:
         result = self.analyze(text)
@@ -324,6 +399,14 @@ class DeepSeekModelGateway:
         if not isinstance(content, str) or not content.strip():
             raise ModelGatewayError("DeepSeek returned empty content")
         return self._parse_analysis(content)
+
+    @staticmethod
+    def _safe_history(history: list[dict[str, Any]]) -> list[dict[str, str]]:
+        return [
+            {"role": str(item["role"]), "content": str(item.get("content") or "")[:1000]}
+            for item in history[-12:]
+            if item.get("role") in {"user", "assistant"} and item.get("content")
+        ]
 
     @staticmethod
     def _parse_analysis(content: str) -> ModelAnalysis:

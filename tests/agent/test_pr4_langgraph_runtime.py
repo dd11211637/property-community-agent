@@ -9,21 +9,54 @@ from property_agent.agent.application.langgraph_runtime import (
     LangGraphStateCodec,
     build_saver_resource,
 )
+from property_agent.agent.capabilities.catalog import default_capability_registry
+from property_agent.agent.capabilities.executor import CapabilityExecutor
+from property_agent.agent.capabilities.policy import default_capability_policy
+from property_agent.agent.planning import SupervisorPlanner
 from property_agent.agent.runtime import PreparedWrite, RuntimeContext
+from property_agent.agent.specialists import (
+    AnnouncementSpecialist,
+    BillingSpecialist,
+    InspectionSpecialist,
+    RepairSpecialist,
+)
+from property_agent.agent.specialists.supervisor import Supervisor
 from property_agent.agent.state import GraphState
 from property_agent.agent.working_state import synchronize_typed_domain
 from property_agent.platform.context import RequestContext
+from tests.agent.pr5_semantic_fakes import proposal, step
 
 
-class RecordingSpecialist:
-    def __init__(self) -> None:
-        self.calls = []
+class RepairProviderContractGateway:
+    def propose_plan(self, text, *, history, trusted_context):
+        del history, trusted_context
+        if text == "查询报修记录":
+            return proposal(step("repair-read", "repair", "repair_list", "查询报修记录"))
+        return proposal(
+            step(
+                "repair-create",
+                "repair",
+                "repair_create",
+                "提交水管漏水报修",
+                parameters={"description": "水管漏水", "location": "厨房"},
+            )
+        )
 
-    def invoke(self, state, runtime):
-        self.calls.append((state.slots["tool"], runtime))
-        state.tool_result = {"ok": True}
-        state.add_message("assistant", "ok")
-        return state
+
+def _supervisor(adapters):
+    executor = CapabilityExecutor(
+        default_capability_registry(), default_capability_policy(), adapters
+    )
+    specialists = (
+        RepairSpecialist(executor),
+        BillingSpecialist(executor),
+        AnnouncementSpecialist(executor),
+        InspectionSpecialist(executor),
+    )
+    return Supervisor(
+        SupervisorPlanner(RepairProviderContractGateway()),
+        {specialist.name: specialist for specialist in specialists},
+    )
 
 
 def runtime_fixture():
@@ -64,8 +97,15 @@ def repair_state(runtime, *, create=False):
 
 def test_official_state_graph_captures_exact_current_execution_cursor():
     runtime = runtime_fixture()
-    specialist = RecordingSpecialist()
-    engine = LangGraphEngine(build_saver_resource(in_memory=True).saver, specialist)
+    calls = []
+    supervisor = _supervisor(
+        {
+            "repair_list": lambda _request, _runtime: (
+                calls.append("repair_list") or {"count": 0, "items": ()}
+            )
+        }
+    )
+    engine = LangGraphEngine(build_saver_resource(in_memory=True).saver, supervisor)
     assert isinstance(engine._graph, CompiledStateGraph)
     result = engine.invoke(
         repair_state(runtime),
@@ -75,13 +115,29 @@ def test_official_state_graph_captures_exact_current_execution_cursor():
     assert result.done is True
     assert result.runtime_cursor["thread_id"].startswith("lg:pr4-conversation:")
     assert result.runtime_cursor["checkpoint_id"]
-    assert specialist.calls[0][0] == "repair_list"
+    assert calls == ["repair_list"]
 
 
 def test_interrupt_resume_is_replay_stable_and_uses_fresh_prepared_write():
     runtime = runtime_fixture()
-    specialist = RecordingSpecialist()
-    engine = LangGraphEngine(build_saver_resource(in_memory=True).saver, specialist)
+    calls = []
+
+    def create(_request, capability_runtime):
+        calls.append(capability_runtime.trusted_runtime)
+        return {
+            "work_order": {
+                "id": str(uuid4()),
+                "status": "PENDING",
+                "category": "WATER_PLUMBING",
+                "urgency": "NORMAL",
+            },
+            "idempotency_key": "server-key",
+        }
+
+    engine = LangGraphEngine(
+        build_saver_resource(in_memory=True).saver,
+        _supervisor({"repair_create": create}),
+    )
     interrupted = engine.invoke(
         repair_state(runtime, create=True),
         thread_id="pr4-conversation",
@@ -89,13 +145,21 @@ def test_interrupt_resume_is_replay_stable_and_uses_fresh_prepared_write():
     )
     proposal = dict(interrupted.interrupt)
     assert interrupted.done is False
-    assert specialist.calls == []
+    assert calls == []
 
     confirmed_runtime = RuntimeContext.from_request_context(
         runtime.request_context,
         conversation_id=runtime.conversation_id,
         current_house_id=runtime.current_house_id,
-        prepared_write=PreparedWrite("server-token", "server-key", "server-approval"),
+        prepared_write=PreparedWrite(
+            "server-token",
+            "server-key",
+            "server-approval",
+            capability=interrupted.state.pending_action["tool"],
+            params_hash=interrupted.state.pending_action["params_hash"],
+            plan_id=interrupted.state.pending_action["plan_id"],
+            plan_step_id=interrupted.state.pending_action["plan_step_id"],
+        ),
     )
     resumed = engine.resume(
         "pr4-conversation",
@@ -105,8 +169,8 @@ def test_interrupt_resume_is_replay_stable_and_uses_fresh_prepared_write():
         runtime_cursor=interrupted.runtime_cursor,
     )
     assert resumed.done is True
-    assert len(specialist.calls) == 1
-    assert specialist.calls[0][1].prepared_write.confirmation_token == "server-token"
+    assert len(calls) == 1
+    assert calls[0].prepared_write.confirmation_token == "server-token"
     assert interrupted.interrupt == proposal
     assert resumed.state.confirmation_token is None
     assert resumed.state.approval_ref is None
@@ -137,8 +201,12 @@ def test_postgres_saver_sync_cursor_is_exactly_resolvable():
         pytest.skip("TEST_POSTGRES_URL is required")
     resource = build_saver_resource(dsn=url.replace("postgresql+psycopg", "postgresql"))
     try:
+        resource.saver.setup()
         runtime = runtime_fixture()
-        engine = LangGraphEngine(resource.saver, RecordingSpecialist())
+        engine = LangGraphEngine(
+            resource.saver,
+            _supervisor({"repair_list": lambda _request, _runtime: {"count": 0, "items": ()}}),
+        )
         result = engine.invoke(
             repair_state(runtime), thread_id=f"pr4-pg-{uuid4()}", runtime=runtime
         )
