@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
+from time import perf_counter
 from typing import Any, TypedDict
 from uuid import uuid4
+
+from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from property_agent.agent.application.graph_engine import GraphExecutionResult
 from property_agent.agent.application.pending_confirmation import confirmation_envelope
@@ -14,6 +17,57 @@ from property_agent.agent.runtime import RuntimeContext
 from property_agent.agent.specialists.supervisor import Supervisor
 from property_agent.agent.state import GraphState
 from property_agent.platform.application.hashing import canonical_payload
+
+
+class ObservedCheckpointSaver(BaseCheckpointSaver):
+    """Non-authoritative proxy observing only the official saver `put` boundary."""
+
+    def __init__(self, delegate: Any, observability: Any) -> None:
+        super().__init__(serde=delegate.serde)
+        self._delegate = delegate
+        self._telemetry = observability
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._delegate, name)
+
+    @property
+    def config_specs(self):
+        return self._delegate.config_specs
+
+    def get_tuple(self, config):
+        return self._delegate.get_tuple(config)
+
+    def list(self, config, *, filter=None, before=None, limit=None):
+        return self._delegate.list(config, filter=filter, before=before, limit=limit)
+
+    def put(self, config, checkpoint, metadata, new_versions):
+        attributes = {"runtime": "v2", "operation": "langgraph_saver_put"}
+        started = perf_counter()
+        try:
+            result = self._delegate.put(config, checkpoint, metadata, new_versions)
+        except Exception:
+            self._telemetry.count(
+                "agent_checkpoint_persist_total",
+                attributes={**attributes, "outcome": "FAILED_INFRASTRUCTURE"},
+            )
+            raise
+        finally:
+            self._telemetry.duration(
+                "agent_checkpoint_persist_duration_seconds",
+                perf_counter() - started,
+                attributes=attributes,
+            )
+        self._telemetry.count(
+            "agent_checkpoint_persist_total",
+            attributes={**attributes, "outcome": "COMPLETED"},
+        )
+        return result
+
+    def put_writes(self, config, writes, task_id, task_path=""):
+        return self._delegate.put_writes(config, writes, task_id, task_path)
+
+    def get_next_version(self, current, channel):
+        return self._delegate.get_next_version(current, channel)
 
 
 class LangGraphState(TypedDict):
@@ -288,14 +342,19 @@ class LangGraphSaverResource:
             self.pool.close()
 
 
-def build_saver_resource(*, dsn: str | None = None, in_memory: bool = False):
+def build_saver_resource(
+    *, dsn: str | None = None, in_memory: bool = False, observability: Any | None = None
+):
     from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
     serde = JsonPlusSerializer(pickle_fallback=False, allowed_msgpack_modules=None)
     if in_memory:
         from langgraph.checkpoint.memory import MemorySaver
 
-        return LangGraphSaverResource(MemorySaver(serde=serde))
+        saver = MemorySaver(serde=serde)
+        return LangGraphSaverResource(
+            ObservedCheckpointSaver(saver, observability) if observability is not None else saver
+        )
     if not dsn:
         raise ValueError("PostgreSQL DSN is required for the v2 production saver")
     from langgraph.checkpoint.postgres import PostgresSaver
@@ -308,4 +367,7 @@ def build_saver_resource(*, dsn: str | None = None, in_memory: bool = False):
         min_size=1,
         open=True,
     )
-    return LangGraphSaverResource(PostgresSaver(pool, serde=serde), pool)
+    saver = PostgresSaver(pool, serde=serde)
+    if observability is not None:
+        saver = ObservedCheckpointSaver(saver, observability)
+    return LangGraphSaverResource(saver, pool)

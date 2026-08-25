@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import replace
+from time import perf_counter
 from typing import Any
 
 from pydantic import ValidationError
@@ -52,58 +53,89 @@ class CapabilityExecutor:
         runtime: CapabilityRuntimeContext,
         invocation: CapabilityInvocationState | None = None,
     ) -> CapabilityResult:
+        started = perf_counter()
         try:
             spec = self._registry.get(name)
         except UnknownCapabilityError as exc:
-            return self._failure(name, "UNKNOWN_CAPABILITY", str(exc), "registry")
+            return self._observed(
+                name, self._failure(name, "UNKNOWN_CAPABILITY", str(exc), "registry"), started
+            )
         name = spec.name
         try:
             request = spec.input_type.model_validate(payload)
         except ValidationError as exc:
-            return self._failure(
+            return self._observed(
                 name,
-                "INVALID_CAPABILITY_INPUT",
-                "Capability input validation failed.",
-                "validation",
-                self._safe_validation_details(exc),
+                self._failure(
+                    name,
+                    "INVALID_CAPABILITY_INPUT",
+                    "Capability input validation failed.",
+                    "validation",
+                    self._safe_validation_details(exc),
+                ),
+                started,
             )
         bounded = self._with_fingerprint(name, request, invocation)
         decision = self._policy.evaluate(spec, request, runtime, bounded)
         if decision.disposition != PolicyDisposition.ALLOW:
-            return self._policy_failure(name, decision)
+            return self._observed(name, self._policy_failure(name, decision), started)
         if (
             decision.approval_requirement == ApprovalRequirement.REQUIRED
             and not bounded.human_confirmed
         ):
-            return self._policy_failure(name, decision, code="HITL_CONFIRMATION_REQUIRED")
+            return self._observed(
+                name,
+                self._policy_failure(name, decision, code="HITL_CONFIRMATION_REQUIRED"),
+                started,
+            )
         adapter = self._adapters.get(name)
         if adapter is None:
-            return self._failure(name, "CAPABILITY_ADAPTER_MISSING", name, "configuration")
+            return self._observed(
+                name,
+                self._failure(name, "CAPABILITY_ADAPTER_MISSING", name, "configuration"),
+                started,
+            )
         self._observe_safely("capability_started", {"capability": name})
         try:
             raw_output = adapter(request, runtime)
         except Exception as exc:  # normalized public boundary; never retries or invokes twice
             result = self._adapter_failure(name, decision, bounded.fingerprint, exc)
-            self._observe_safely(
-                "capability_failed", {"capability": name, "code": result.error.code}
-            )
-            return result
+            return self._observed(name, result, started)
         try:
             output = spec.output_type.model_validate(raw_output)
         except ValidationError as exc:
             result = self._output_failure(name, decision, bounded.fingerprint, exc)
-            self._observe_safely(
-                "capability_failed", {"capability": name, "code": result.error.code}
-            )
-            return result
+            return self._observed(name, result, started)
         except Exception as exc:
             result = self._adapter_failure(name, decision, bounded.fingerprint, exc)
-            self._observe_safely(
-                "capability_failed", {"capability": name, "code": result.error.code}
-            )
-            return result
-        self._observe_safely("capability_finished", {"capability": name, "ok": True})
-        return CapabilityResult(name, decision, output=output, fingerprint=bounded.fingerprint)
+            return self._observed(name, result, started)
+        return self._observed(
+            name,
+            CapabilityResult(name, decision, output=output, fingerprint=bounded.fingerprint),
+            started,
+        )
+
+    def _observed(self, name: str, result: CapabilityResult, started: float) -> CapabilityResult:
+        error = result.error
+        outcome = "success"
+        reason = None
+        if error is not None:
+            reason = error.code
+            outcome = {
+                "policy": "policy_denied",
+                "business": "business_rejected",
+                "validation": "schema_failure",
+            }.get(error.kind, "infrastructure_failure")
+        self._observe_safely(
+            "capability_failed" if error is not None else "capability_finished",
+            {
+                "capability": name,
+                "outcome": outcome,
+                "reason": reason,
+                "duration_seconds": perf_counter() - started,
+            },
+        )
+        return result
 
     def _observe_safely(self, event: str, fields: dict[str, Any]) -> None:
         try:

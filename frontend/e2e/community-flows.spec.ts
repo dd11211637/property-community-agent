@@ -39,8 +39,17 @@ test("住户登录后可查看真实账单并通过 Agent 查询", async ({ page
 
   await page.getByRole("link", { name: "首页 / 智能体" }).click();
   await page.getByLabel("发送给社区智能体").fill("查一下我的账单");
+  const streamResponsePromise = page.waitForResponse((response) =>
+    response.url().includes("/api/agent/conversations/") &&
+    response.url().endsWith("/messages/stream"),
+  );
   await page.getByRole("button", { name: "发送" }).click();
   await waitForAgent(page);
+  const streamResponse = await streamResponsePromise;
+  expect(streamResponse.headers()["content-type"]).toContain("text/event-stream");
+  const streamBody = await streamResponse.text();
+  expect(streamBody).toContain("event: turn");
+  expect(streamBody).toContain("event: done");
   await expect(page.locator(".message.assistant").last()).toContainText(/账单|查询/);
   const firstAgentBill = page.locator(".agent-facts").first();
   await expect(firstAgentBill).toContainText("账单号");

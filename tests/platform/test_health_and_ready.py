@@ -31,7 +31,12 @@ def _reset_container_state():
     container_module._services_configured = False
     container_module._async_engine = None
     container_module._async_session_factory = None
-    yield
+    with patch(
+        "property_agent.platform.adapters.api.health_routes.check_accepted_head_store",
+        new_callable=AsyncMock,
+        return_value=True,
+    ):
+        yield
     container_module._services_configured = False
     container_module._async_engine = None
     container_module._async_session_factory = None
@@ -105,6 +110,16 @@ class TestReadyReadinessSuccess:
         assert data["status"] == "READY"
         assert data["components"]["database"] == "UP"
         assert data["components"]["services"] == "UP"
+        assert data["components"]["stream_execution"]["state"] == "ACCEPTING"
+        assert data["components"]["stream_execution"]["active"] == 0
+        assert data["components"]["memory_embedding"]["state"] in {
+            "DISABLED",
+            "CONFIGURED_UNKNOWN",
+        }
+        assert data["components"]["memory_writer"]["state"] in {
+            "DISABLED",
+            "CONFIGURED_UNKNOWN",
+        }
 
     def test_ready_response_structure(self, app: FastAPI):
         """GET /ready response should have the correct structure."""
@@ -171,6 +186,25 @@ class TestReadyReadinessFailure:
         assert data["detail"]["status"] == "NOT_READY"
         assert data["detail"]["components"]["database"] == "UP"
         assert data["detail"]["components"]["services"] == "UNCONFIGURED"
+
+    def test_ready_returns_503_when_accepted_head_schema_is_unavailable(self, app: FastAPI):
+        build_production_container(app)
+        with (
+            patch(
+                "property_agent.platform.adapters.api.health_routes.check_database_health",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "property_agent.platform.adapters.api.health_routes.check_accepted_head_store",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+        ):
+            response = TestClient(app).get("/ready")
+
+        assert response.status_code == 503
+        assert response.json()["detail"]["components"]["accepted_head_store"] == "DOWN"
 
     def test_ready_returns_503_when_both_down(self, app: FastAPI):
         """GET /ready should return 503 when both database and services are down."""

@@ -34,6 +34,9 @@ class ExecutionPolicy:
 class RuntimeObservation:
     trace_id: str | None = None
     span_id: str | None = None
+    request_id: str | None = None
+    runtime_version: str | None = None
+    release_sha: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

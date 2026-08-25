@@ -14,8 +14,8 @@ from property_agent.agent.application.memory_writer import (
 
 @dataclass(frozen=True, slots=True)
 class MemoryRuntime:
-    reader: GovernedMemoryReader
-    writer: AcceptedEvidenceMemoryWriter
+    reader: Any
+    writer: Any
     embedding_provider: OpenAICompatibleEmbeddingProvider | None
 
 

@@ -2600,7 +2600,7 @@
     },
     "/api/agent/conversations/{conversation_id}/messages/stream": {
       "post": {
-        "description": "真流式消息接口（P1 观测与流式）。\n\n``runner.stream_start`` 生成器先 yield ``run_started``（graph 完成前即发出），\n再按图节点生命周期 yield ``tool_started`` / ``tool_finished``，最后 yield\n``(\"__turn__\", AgentTurn)``；此处把 ``__turn__`` 展开为\nintent / message / confirmation / facts / handover / done 事件序列。",
+        "description": "真流式消息接口（P1 观测与流式）。\n\nRunner yields a bounded internal event contract. This adapter projects it onto the\ncompatible run/progress/intent/message/confirmation/facts/turn/done SSE family without\nexposing graph node names or checkpointed state.",
         "operationId": "send_message_stream_api_agent_conversations__conversation_id__messages_stream_post",
         "parameters": [
           {

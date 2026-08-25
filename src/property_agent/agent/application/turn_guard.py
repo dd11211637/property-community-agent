@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from logging import getLogger
+from time import perf_counter
 from typing import TYPE_CHECKING, Any
 
 from property_agent.agent.application.errors import (
@@ -156,38 +157,80 @@ class TurnLeaseController:
         *,
         enforce: Callable[[], bool],
         heartbeat_interval_seconds: int,
+        observability: Any | None = None,
     ) -> None:
         self._run_lease = run_lease
         self._checkpointer = checkpointer
         self._enforce = enforce
         self._heartbeat_interval = heartbeat_interval_seconds
+        self._telemetry = observability
 
     def _service(self) -> RunLeaseService | None:
         return self._run_lease()
 
     def acquire(self, thread_id: str, run_id: UUID) -> Lease | None:
-        return acquire_turn_lease(
-            self._service(),
-            enforce_concurrency=self._enforce(),
-            thread_id=thread_id,
-            run_id=run_id,
-        )
+        started = perf_counter()
+        try:
+            lease = acquire_turn_lease(
+                self._service(),
+                enforce_concurrency=self._enforce(),
+                thread_id=thread_id,
+                run_id=run_id,
+            )
+        except AgentSessionError:
+            self._record("acquire", "contention", started)
+            raise
+        except Exception:
+            self._record("acquire", "failed", started)
+            raise
+        self._record("acquire", "success" if lease is not None else "disabled", started)
+        return lease
 
     def renew(self, lease: Lease | None) -> Lease | None:
-        return heartbeat_turn_lease(self._service(), lease=lease)
+        started = perf_counter()
+        try:
+            renewed = heartbeat_turn_lease(self._service(), lease=lease)
+        except StaleAgentRunError:
+            self._record("renew", "lost", started)
+            raise
+        except Exception:
+            self._record("renew", "failed", started)
+            raise
+        self._record("renew", "success" if lease is not None else "disabled", started)
+        return renewed
 
     def release(self, thread_id: str, lease: Lease | None) -> None:
         if lease is not None:
+            started = perf_counter()
             release_turn_lease(self._service(), thread_id=thread_id, run_id=lease.run_id)
+            self._record("release", "completed", started)
 
     def activate(self, context: Any, lease: Lease | None) -> Any:
         return activate_lease_context(context, lease)
 
     def version(self, thread_id: str) -> int | None:
-        return read_turn_start_version(
-            self._checkpointer,
-            enforce_concurrency=self._enforce(),
-            thread_id=thread_id,
+        started = perf_counter()
+        try:
+            version = read_turn_start_version(
+                self._checkpointer,
+                enforce_concurrency=self._enforce(),
+                thread_id=thread_id,
+            )
+        except Exception:
+            self._record("checkpoint_read", "failed", started)
+            raise
+        self._record("checkpoint_read", "success" if version is not None else "absent", started)
+        return version
+
+    def _record(self, operation: str, outcome: str, started: float) -> None:
+        if self._telemetry is None:
+            return
+        attributes = {"operation": operation, "outcome": outcome}
+        self._telemetry.count("agent_lease_operation_total", attributes=attributes)
+        self._telemetry.duration(
+            "agent_lease_operation_duration_seconds",
+            perf_counter() - started,
+            attributes=attributes,
         )
 
     def start_heartbeat(self, lease: Lease | None) -> LeaseHeartbeat | None:

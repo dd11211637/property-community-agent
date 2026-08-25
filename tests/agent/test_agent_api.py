@@ -35,6 +35,7 @@ from property_agent.agent.application import (
     ConversationStatus,
 )
 from property_agent.agent.application.errors import AgentSessionErrorCode
+from property_agent.agent.application.stream_execution import BoundedStreamExecutionRegistry
 from property_agent.agent.graph import build_agent_graph
 from property_agent.agent.infrastructure.checkpointer import SqlAlchemyCheckpointer
 from property_agent.agent.infrastructure.models import (
@@ -184,6 +185,7 @@ def make_client(runner, context):
         )
 
     app.include_router(agent_router)
+    app.state.agent_stream_executions = BoundedStreamExecutionRegistry(2)
     if runner is not None:
         app.state.agent_runner = runner
     app.dependency_overrides[platform_get_request_context] = lambda: context

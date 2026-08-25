@@ -1,6 +1,6 @@
 import { ArrowUp, Bot, Headphones, Sparkles } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
-import { apiRequest } from "../api/client";
+import { apiRequest, streamAgentTurn } from "../api/client";
 import type { AgentConversation, AgentMessage } from "../api/contracts";
 import { AgentContextPanel } from "../components/AgentContextPanel";
 import { AgentConversationRail } from "../components/AgentConversationRail";
@@ -209,10 +209,10 @@ export function HomePage() {
     setPending(true);
     sessionStorage.setItem("property_agent_conversation_id", activeConversationId);
     try {
-      const reply = await apiRequest<AgentReply>(`/api/agent/conversations/${activeConversationId}/messages`, {
-        method: "POST",
-        body: { text, house_id: currentHouseId(), slots },
-      });
+      const reply = await streamAgentTurn<AgentReply>(
+        `/api/agent/conversations/${activeConversationId}/messages/stream`,
+        { text, house_id: currentHouseId(), slots },
+      );
       if (!reply.slot_prompt && !reply.pending_confirmation && (reply.reply.trim() || reply.facts)) {
         setMessages((items) => [...items, { role: "assistant", text: reply.reply, facts: reply.facts }]);
       }

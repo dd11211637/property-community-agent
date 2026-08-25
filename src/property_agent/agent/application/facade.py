@@ -176,6 +176,7 @@ class AgentRuntimeFacadeImpl:
             confirmation_token=confirmation_token,
             action_hash=action_hash,
             engine=engine,
+            runtime_version=snapshot.runtime_version,
         )
 
     def stream_resume(
@@ -196,6 +197,7 @@ class AgentRuntimeFacadeImpl:
             confirmation_token=confirmation_token,
             action_hash=action_hash,
             engine=engine,
+            runtime_version=snapshot.runtime_version,
         )
 
     def status(

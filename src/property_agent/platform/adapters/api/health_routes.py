@@ -18,6 +18,7 @@ from property_agent.platform.container import (
     are_services_configured,
     check_database_health,
 )
+from property_agent.platform.readiness import check_accepted_head_store
 
 router = APIRouter(tags=["health"])
 
@@ -55,14 +56,20 @@ async def ready(request: Request) -> dict:
         503 {"status": "NOT_READY", "components": {"database": "DOWN", "services": "UNCONFIGURED"}}
     """
     db_up = await check_database_health()
+    accepted_head_up = await check_accepted_head_store()
     svc_up = are_services_configured()
 
     components = {
         "database": "UP" if db_up else "DOWN",
         "services": "UP" if svc_up else "UNCONFIGURED",
+        "accepted_head_store": "UP" if accepted_head_up else "DOWN",
+        "telemetry": _telemetry_status(request),
+        "stream_execution": _stream_execution_status(request),
+        "memory_embedding": _optional_component(request, "agent_memory_embedding_provider"),
+        "memory_writer": _optional_component(request, "agent_memory_writer"),
     }
 
-    all_ready = db_up and svc_up
+    all_ready = db_up and accepted_head_up and svc_up
 
     if all_ready:
         return {"status": "READY", "components": components}
@@ -71,3 +78,28 @@ async def ready(request: Request) -> dict:
         status_code=503,
         detail={"status": "NOT_READY", "components": components},
     )
+
+
+def _telemetry_status(request: Request) -> dict[str, object]:
+    observability = getattr(request.app.state, "agent_observability", None)
+    if observability is None:
+        return {
+            "state": "UNAVAILABLE",
+            "configured": False,
+            "provider_created": False,
+            "exporter_configured": False,
+            "last_export_failure_category": "agent_runtime_unconfigured",
+        }
+    return observability.status()
+
+
+def _optional_component(request: Request, state_name: str) -> dict[str, str]:
+    configured = getattr(request.app.state, state_name, None) is not None
+    return {"state": "CONFIGURED_UNKNOWN" if configured else "DISABLED"}
+
+
+def _stream_execution_status(request: Request) -> dict[str, object]:
+    registry = getattr(request.app.state, "agent_stream_executions", None)
+    if registry is None:
+        return {"state": "UNAVAILABLE", "active": 0, "capacity": 0}
+    return registry.snapshot()

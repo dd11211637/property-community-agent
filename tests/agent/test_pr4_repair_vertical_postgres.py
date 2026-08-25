@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from threading import Event
 from typing import Any
 from uuid import uuid4
 
@@ -12,16 +13,22 @@ from fastapi import FastAPI
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
-from property_agent.agent.adapters.api.presentation import turn_data
+from property_agent.agent.adapters.api.presentation import turn_data, wire_events
+from property_agent.agent.adapters.api.stream_delivery import BoundedStreamBridge
 from property_agent.agent.application.composition import build_supervisor, close_runtime_resources
 from property_agent.agent.application.conversation_service import ConversationService
 from property_agent.agent.application.errors import AgentSessionError, AgentSessionErrorCode
 from property_agent.agent.application.facade import AgentRuntimeFacadeImpl
-from property_agent.agent.application.langgraph_runtime import LangGraphEngine, build_saver_resource
+from property_agent.agent.application.langgraph_runtime import (
+    LangGraphEngine,
+    build_saver_resource,
+)
+from property_agent.agent.application.stream_execution import BoundedStreamExecutionRegistry
 from property_agent.agent.infrastructure.checkpointer import SqlAlchemyCheckpointer
 from property_agent.agent.infrastructure.models import AgentActionApprovalModel
 from property_agent.agent.infrastructure.run_lease import RunLeaseService
 from property_agent.agent.runtime_version import RuntimeSelectionPolicy
+from property_agent.agent.stream_events import StreamEventKind
 from property_agent.platform.application.approval_service import ApprovalService
 from property_agent.platform.container import build_agent_runner, build_production_container
 from property_agent.platform.context import RequestContext
@@ -34,6 +41,7 @@ from property_agent.platform.infrastructure.orm_models import (
     UserRoleModel,
 )
 from property_agent.repair.infrastructure.models import WorkOrderModel
+from property_agent.repair.infrastructure.uow import SqlAlchemyRepairUnitOfWork
 from tests.agent.pr5_semantic_fakes import proposal, step
 
 POSTGRES_URL = os.getenv("TEST_POSTGRES_URL")
@@ -111,6 +119,7 @@ def vertical_runtime() -> VerticalRuntime:
         v2_engine=production._v2_engine,
     )
     yield VerticalRuntime(app, sessions, facade, context, house_id)
+    app.state.agent_stream_executions.shutdown(2)
     close_runtime_resources(app)
     Base.metadata.drop_all(engine)
     engine.dispose()
@@ -257,3 +266,245 @@ def test_v2_repair_vertical_restart_confirm_and_cancel_real_postgres(
     assert turn_data(cancelled)["done"] is True
     with runtime.sessions() as session:
         assert len(session.execute(select(WorkOrderModel)).scalars().all()) == 1
+
+
+class _RejectAcceptedPublication:
+    def __init__(self, delegate: Any) -> None:
+        self._delegate = delegate
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._delegate, name)
+
+    def publish_accepted(self, *args, **kwargs):
+        raise RuntimeError("forced accepted-head publication failure")
+
+
+class _RecordAcceptedPublication:
+    def __init__(self, delegate: Any, order: list[str]) -> None:
+        self._delegate = delegate
+        self._order = order
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._delegate, name)
+
+    def publish_accepted(self, *args, **kwargs):
+        result = self._delegate.publish_accepted(*args, **kwargs)
+        self._order.append("accepted_head")
+        return result
+
+
+@pytest.mark.postgres
+def test_v2_stream_checkpoint_success_then_accepted_failure_has_no_public_success(
+    vertical_runtime: VerticalRuntime,
+) -> None:
+    runtime = vertical_runtime
+    lifecycle = runtime.app.state.agent_lifecycle
+    original = lifecycle._checkpointer
+    lifecycle._checkpointer = _RejectAcceptedPublication(original)
+    observation = runtime.app.state.agent_observability
+    registry = BoundedStreamExecutionRegistry(1, observation)
+    conversation_id = f"pr7a-orphan-{uuid4()}"
+    try:
+        bridge = BoundedStreamBridge(
+            lambda: runtime.facade.stream_start(
+                conversation_id=conversation_id,
+                context=runtime.context,
+                user_text="我要报修厨房水管漏水",
+                house_id=runtime.house_id,
+                slots={
+                    "action": "create",
+                    "category": "WATER_PLUMBING",
+                    "description": "厨房水管漏水",
+                    "location": "厨房",
+                    "urgency": "NORMAL",
+                },
+            ),
+            registry=registry,
+            observability=observation,
+        )
+        events = list(bridge.events())
+    finally:
+        lifecycle._checkpointer = original
+        registry.shutdown(2)
+
+    public_names = [name for event in events for name, _payload in wire_events(event)]
+    assert events[-1].kind is StreamEventKind.FAILED
+    assert "turn" not in public_names
+    assert "done" not in public_names
+    assert original.load_accepted(conversation_id) is None
+    checkpoint_outcomes = [
+        point.attributes.get("outcome")
+        for point in observation.points
+        if point.name == "agent_checkpoint_persist_total"
+        and point.attributes.get("runtime") == "v2"
+    ]
+    accepted_outcomes = [
+        point.attributes.get("outcome")
+        for point in observation.points
+        if point.name == "agent_accepted_head_publish_total"
+    ]
+    assert "COMPLETED" in checkpoint_outcomes
+    assert accepted_outcomes[-1] == "FAILED_INFRASTRUCTURE"
+    assert any(point.name == "agent_accepted_head_orphan_total" for point in observation.points)
+
+
+@pytest.mark.postgres
+def test_v2_disconnect_after_confirmed_commit_recovers_one_canonical_mutation(
+    vertical_runtime: VerticalRuntime,
+    monkeypatch,
+) -> None:
+    runtime = vertical_runtime
+    conversation_id = f"pr7a-disconnect-{uuid4()}"
+    _, pending = _start(runtime.facade, runtime.context, runtime.house_id, conversation_id)
+    committed = Event()
+    release_delivery = Event()
+    producer_finished = Event()
+    publication_order = []
+    lifecycle = runtime.app.state.agent_lifecycle
+    original_checkpointer = lifecycle._checkpointer
+    lifecycle._checkpointer = _RecordAcceptedPublication(
+        original_checkpointer,
+        publication_order,
+    )
+
+    original_commit = SqlAlchemyRepairUnitOfWork.commit
+
+    def record_business_commit(unit_of_work) -> None:
+        original_commit(unit_of_work)
+        publication_order.append("business_commit")
+
+    monkeypatch.setattr(SqlAlchemyRepairUnitOfWork, "commit", record_business_commit)
+
+    def source():
+        try:
+            for event in runtime.facade.stream_resume(
+                conversation_id=conversation_id,
+                context=runtime.context,
+                confirmed=True,
+                action_hash=pending["pending_confirmation"]["action_hash"],
+            ):
+                if event.kind is StreamEventKind.FINAL:
+                    with runtime.sessions() as session:
+                        assert len(session.execute(select(WorkOrderModel)).scalars().all()) == 1
+                    accepted = SqlAlchemyCheckpointer(runtime.sessions).load_accepted(
+                        conversation_id
+                    )
+                    assert accepted is not None and accepted.runtime_cursor is not None
+                    publication_order.append("final_event")
+                    committed.set()
+                    release_delivery.wait(timeout=3)
+                yield event
+        finally:
+            producer_finished.set()
+
+    registry = BoundedStreamExecutionRegistry(1)
+    try:
+        delivery = BoundedStreamBridge(source, registry=registry).events()
+        assert next(delivery).kind is StreamEventKind.TURN_STARTED
+        assert committed.wait(timeout=5)
+        delivery.close()
+        release_delivery.set()
+        assert producer_finished.wait(timeout=5)
+        assert registry.shutdown(2)
+    finally:
+        lifecycle._checkpointer = original_checkpointer
+        release_delivery.set()
+        registry.shutdown(2)
+    assert publication_order == [
+        "business_commit",
+        "accepted_head",
+        "final_event",
+    ]
+
+    conversation, still_pending = runtime.facade.status(
+        conversation_id=conversation_id, context=runtime.context
+    )
+    accepted = SqlAlchemyCheckpointer(runtime.sessions).load_accepted(conversation_id)
+    assert conversation.runtime_version == "v2"
+    assert still_pending is None
+    assert accepted is not None and accepted.runtime_cursor is not None
+    exact = runtime.app.state.langgraph_saver_resource.saver.get_tuple(
+        {"configurable": accepted.runtime_cursor.to_dict()}
+    )
+    assert exact is not None
+    with runtime.sessions() as session:
+        orders = session.execute(select(WorkOrderModel)).scalars().all()
+        assert len(orders) == 1
+    with pytest.raises(AgentSessionError) as replay:
+        runtime.facade.resume(
+            conversation_id=conversation_id,
+            context=runtime.context,
+            confirmed=True,
+            action_hash=pending["pending_confirmation"]["action_hash"],
+        )
+    assert replay.value.code == AgentSessionErrorCode.NOTHING_PENDING
+
+
+@pytest.mark.postgres
+def test_v2_sync_and_stream_paths_converge_on_canonical_state(
+    vertical_runtime: VerticalRuntime,
+) -> None:
+    runtime = vertical_runtime
+    sync_id = f"pr7a-parity-sync-{uuid4()}"
+    stream_id = f"pr7a-parity-stream-{uuid4()}"
+    sync_pending, sync_data = _start(runtime.facade, runtime.context, runtime.house_id, sync_id)
+    stream_events = list(
+        runtime.facade.stream_start(
+            conversation_id=stream_id,
+            context=runtime.context,
+            user_text="我要报修厨房水管漏水",
+            house_id=runtime.house_id,
+            slots={
+                "action": "create",
+                "category": "WATER_PLUMBING",
+                "description": "厨房水管漏水",
+                "location": "厨房",
+                "urgency": "NORMAL",
+            },
+        )
+    )
+    stream_pending = stream_events[-1].turn
+    stream_data = turn_data(stream_pending)
+
+    assert sync_pending.conversation.runtime_version == "v2"
+    assert stream_pending.conversation.runtime_version == "v2"
+    assert sync_data["status"] == stream_data["status"]
+    assert sync_data["operation_level"] == stream_data["operation_level"]
+    assert sync_data["pending_confirmation"]["tool"] == stream_data["pending_confirmation"]["tool"]
+    accepted_sync = SqlAlchemyCheckpointer(runtime.sessions).load_accepted(sync_id)
+    accepted_stream = SqlAlchemyCheckpointer(runtime.sessions).load_accepted(stream_id)
+    assert accepted_sync.version == accepted_stream.version == 1
+    assert accepted_sync.runtime_cursor is not None
+    assert accepted_stream.runtime_cursor is not None
+
+    sync_done = runtime.facade.resume(
+        conversation_id=sync_id,
+        context=runtime.context,
+        confirmed=True,
+        action_hash=sync_data["pending_confirmation"]["action_hash"],
+    )
+    streamed_done = list(
+        runtime.facade.stream_resume(
+            conversation_id=stream_id,
+            context=runtime.context,
+            confirmed=True,
+            action_hash=stream_data["pending_confirmation"]["action_hash"],
+        )
+    )[-1].turn
+    sync_result = turn_data(sync_done)
+    stream_result = turn_data(streamed_done)
+    assert sync_result["status"] == stream_result["status"]
+    assert sync_result["done"] == stream_result["done"] is True
+    assert (
+        sync_result["facts"]["work_order"]["status"]
+        == stream_result["facts"]["work_order"]["status"]
+    )
+    assert SqlAlchemyCheckpointer(runtime.sessions).version_of(sync_id) == 2
+    assert SqlAlchemyCheckpointer(runtime.sessions).version_of(stream_id) == 2
+    sync_after = SqlAlchemyCheckpointer(runtime.sessions).load_accepted(sync_id)
+    stream_after = SqlAlchemyCheckpointer(runtime.sessions).load_accepted(stream_id)
+    assert sync_after.runtime_cursor is not None
+    assert stream_after.runtime_cursor is not None
+    saver = runtime.app.state.langgraph_saver_resource.saver
+    assert saver.get_tuple({"configurable": sync_after.runtime_cursor.to_dict()}) is not None
+    assert saver.get_tuple({"configurable": stream_after.runtime_cursor.to_dict()}) is not None

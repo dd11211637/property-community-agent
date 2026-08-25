@@ -203,13 +203,17 @@ def test_create_work_order_through_the_assembled_app(seeded, client) -> None:
     response = client.post(
         "/api/work-orders",
         json=create_body(token=token),
-        headers=auth_headers(resident_token(), idempotency_key="e2e-create", request_id="req_e2e"),
+        headers=auth_headers(
+            resident_token(),
+            idempotency_key="e2e-create",
+            request_id="req_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        ),
     )
 
     assert response.status_code == 201, response.text
     body = response.json()
     assert body["success"] is True
-    assert body["request_id"] == "req_e2e"
+    assert body["request_id"] == "req_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
     data = body["data"]
     assert data["status"] == "PENDING_ASSIGNMENT"
     assert data["house_id"] == str(HOUSE)
@@ -223,7 +227,11 @@ def test_create_work_order_through_the_assembled_app(seeded, client) -> None:
 
 def test_retry_with_the_same_key_replays_the_first_response(seeded, client) -> None:
     token = mint_token(seeded, action="CREATE_WORK_ORDER", body=create_body())
-    headers = auth_headers(resident_token(), idempotency_key="e2e-retry", request_id="req_retry")
+    headers = auth_headers(
+        resident_token(),
+        idempotency_key="e2e-retry",
+        request_id="req_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
 
     first = client.post("/api/work-orders", json=create_body(token=token), headers=headers)
     second = client.post("/api/work-orders", json=create_body(token=token), headers=headers)
@@ -244,7 +252,9 @@ def test_high_risk_returns_handover_ticket_instead_of_a_work_order(seeded, clien
         "/api/work-orders",
         json=create_body(token=token, urgency="HIGH_RISK"),
         headers=auth_headers(
-            resident_token(), idempotency_key="e2e-high-risk", request_id="req_hr"
+            resident_token(),
+            idempotency_key="e2e-high-risk",
+            request_id="req_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         ),
     )
 
@@ -258,7 +268,7 @@ def test_high_risk_returns_handover_ticket_instead_of_a_work_order(seeded, clien
         ticket = session.get(HandoverTicketModel, ticket_id)
         assert ticket is not None
         assert ticket.reason == "HIGH_RISK"
-        assert ticket.request_id == "req_hr"
+        assert ticket.request_id == "req_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         assert session.execute(select(WorkOrderModel)).scalars().all() == []
 
         message = session.execute(select(MessageRecordModel)).scalar_one()

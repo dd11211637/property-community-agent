@@ -9,9 +9,16 @@ from typing import Any, Protocol, runtime_checkable
 class ModelGatewayError(RuntimeError):
     """A controlled provider or model-output failure eligible for safe fallback."""
 
-    def __init__(self, message: str, *, retryable: bool = True) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool = True,
+        category: str = "provider_failure",
+    ) -> None:
         super().__init__(message)
         self.retryable = retryable
+        self.category = category
 
 
 @dataclass(frozen=True, slots=True)

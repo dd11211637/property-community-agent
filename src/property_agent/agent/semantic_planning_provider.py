@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
 
 from property_agent.agent.model_contracts import ModelGatewayError
+from property_agent.agent.telemetry_contracts import (
+    model_schema_failure,
+    observe_model_provider_attempt,
+)
 
 
 class SemanticPlanningClient:
@@ -24,6 +29,7 @@ class SemanticPlanningClient:
         read_timeout_seconds: float,
         total_timeout_seconds: float,
         transport: httpx.BaseTransport | None,
+        observe: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> None:
         self._api_key = api_key
         self._url = url
@@ -32,6 +38,7 @@ class SemanticPlanningClient:
         self._read_timeout = read_timeout_seconds
         self._total_timeout = total_timeout_seconds
         self._transport = transport
+        self._observe = observe or (lambda _event, _fields: None)
 
     def request_json(
         self,
@@ -39,23 +46,33 @@ class SemanticPlanningClient:
         inputs: dict[str, Any],
         *,
         max_tokens: int,
+        operation: str,
     ) -> dict[str, Any]:
         if not self._api_key:
             raise ModelGatewayError("DeepSeek API key is not configured")
         last_error: Exception | None = None
         deadline = time.monotonic() + self._total_timeout
-        for _attempt in range(2):
+        for attempt in range(2):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
             try:
-                return self._post(
-                    system_prompt, inputs, max_tokens=max_tokens, remaining_seconds=remaining
+                return observe_model_provider_attempt(
+                    self._observe,
+                    operation,
+                    lambda remaining=remaining: self._post(
+                        system_prompt,
+                        inputs,
+                        max_tokens=max_tokens,
+                        remaining_seconds=remaining,
+                    ),
                 )
             except ModelGatewayError as exc:
                 last_error = exc
                 if not exc.retryable:
                     raise
+                if attempt == 0:
+                    self._observe("model_retry", {"provider": "DeepSeek", "operation": operation})
         raise ModelGatewayError("DeepSeek semantic planning failed after one retry") from last_error
 
     def _post(
@@ -103,7 +120,7 @@ class SemanticPlanningClient:
             content = response.json()["choices"][0]["message"]["content"]
             value = json.loads(content)
         except (ValueError, KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-            raise ModelGatewayError("DeepSeek returned invalid semantic planning JSON") from exc
+            raise model_schema_failure("DeepSeek returned invalid semantic planning JSON") from exc
         if not isinstance(value, dict):
-            raise ModelGatewayError("DeepSeek semantic planning output must be an object")
+            raise model_schema_failure("DeepSeek semantic planning output must be an object")
         return value
