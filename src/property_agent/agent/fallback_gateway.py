@@ -209,12 +209,24 @@ class FallbackModelGateway:
         *,
         history: list[dict[str, Any]],
         trusted_context: dict[str, Any],
+        memory_context: dict[str, Any] | None = None,
     ) -> PlanProposal:
         """Use only the semantic provider; never emulate complex planning lexically."""
         method = getattr(self._primary, "propose_plan", None)
         if method is None:
             raise ModelGatewayError("Primary model does not support semantic planning")
-        return method(text, history=history, trusted_context=trusted_context)
+        return method(
+            text,
+            history=history,
+            trusted_context=trusted_context,
+            memory_context=memory_context or {},
+        )
+
+    def extract_candidates(self, **kwargs: Any) -> tuple[Any, ...]:
+        method = getattr(self._primary, "extract_candidates", None)
+        if method is None:
+            raise ModelGatewayError("Primary model does not support memory extraction")
+        return method(**kwargs)
 
     def judge_relevance(
         self,

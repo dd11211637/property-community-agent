@@ -107,7 +107,7 @@ class SqlAlchemyCheckpointer:
         *,
         expected_version: int | None = None,
         runtime_cursor: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> int:
         """持久化快照。
 
         ``expected_version`` 传入时走 CAS：
@@ -130,7 +130,7 @@ class SqlAlchemyCheckpointer:
         session = self._session_factory()
         try:
             if expected_version is not None:
-                self._save_cas(
+                version = self._save_cas(
                     session,
                     thread_id,
                     payload,
@@ -140,10 +140,11 @@ class SqlAlchemyCheckpointer:
                     runtime_cursor,
                 )
             else:
-                self._save_legacy(
+                version = self._save_legacy(
                     session, thread_id, payload, pending, state._interrupt_node, runtime_cursor
                 )
             session.commit()
+            return version
         finally:
             session.close()
 
@@ -156,7 +157,7 @@ class SqlAlchemyCheckpointer:
         interrupt_node: str | None,
         expected: int,
         runtime_cursor: dict[str, Any] | None,
-    ) -> None:
+    ) -> int:
         if expected == 0:
             values = {
                 "thread_id": thread_id,
@@ -182,14 +183,14 @@ class SqlAlchemyCheckpointer:
                 ).scalar_one_or_none()
                 if row is None:
                     raise CheckpointVersionConflict(thread_id, expected)
-                return
+                return int(row)
             try:
                 session.execute(insert(AgentCheckpointModel).values(**values))
                 session.flush()
             except IntegrityError:
                 session.rollback()
                 raise CheckpointVersionConflict(thread_id, expected) from None
-            return
+            return 1
         stmt = (
             update(AgentCheckpointModel)
             .where(
@@ -208,6 +209,7 @@ class SqlAlchemyCheckpointer:
         row = session.execute(stmt).scalar_one_or_none()
         if row is None:
             raise CheckpointVersionConflict(thread_id, expected)
+        return int(row)
 
     @staticmethod
     def _save_legacy(
@@ -217,7 +219,7 @@ class SqlAlchemyCheckpointer:
         pending: bool,
         interrupt_node: str | None,
         runtime_cursor: dict[str, Any] | None,
-    ) -> None:
+    ) -> int:
         record = session.execute(
             select(AgentCheckpointModel).where(AgentCheckpointModel.thread_id == thread_id)
         ).scalar_one_or_none()
@@ -232,12 +234,14 @@ class SqlAlchemyCheckpointer:
                     runtime_cursor=runtime_cursor,
                 )
             )
+            return 1
         else:
             record.version = record.version + 1
             record.state = payload
             record.interrupt_node = interrupt_node
             record.pending_confirm = pending
             record.runtime_cursor = runtime_cursor
+            return int(record.version)
 
     def load(self, thread_id: str) -> GraphState | None:
         session = self._session_factory()
@@ -315,7 +319,7 @@ class SqlAlchemyCheckpointer:
         *,
         expected_version: int,
         runtime_cursor: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> int:
         """原子发布应用接受头：state + runtime_cursor + pending_confirm + interrupt 元数据
         + version 一起随 CAS 提交。``expected_version`` 必须来自 turn 开始时的读取，且
         不得为 ``None``（生产共享 lifecycle 强制）。
@@ -325,7 +329,7 @@ class SqlAlchemyCheckpointer:
                 "publish_accepted requires a concrete expected_version (0 for first publish)"
             )
         cursor = LangGraphCheckpointCursor.from_dict(runtime_cursor)
-        self.save(
+        return self.save(
             thread_id,
             state,
             expected_version=expected_version,

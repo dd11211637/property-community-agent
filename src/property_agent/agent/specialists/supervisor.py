@@ -60,9 +60,16 @@ class Supervisor:
                 },
             )
         elif state.orchestration_budget is not None:
+            self._planner.revalidate_memories(state, runtime)
             state.orchestration_budget = state.orchestration_budget.resume(
                 now=now, server_ceiling=duration
             )
+            if state.retrieved_memories.basis_invalidated:
+                state.plan = replace(
+                    state.plan,
+                    status=PlanStatus.NEEDS_CLARIFICATION,
+                    replan_reason="MEMORY_BASIS_INVALIDATED",
+                )
         if self._budget_expired(state, now):
             return self._fail_plan(state, "EXECUTION_DEADLINE_EXCEEDED")
         if self._limit_reached(state, runtime, "supervisor_steps", "max_supervisor_steps"):

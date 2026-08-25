@@ -36,6 +36,7 @@ from property_agent.agent.application.graph_engine import (
     GraphExecutionResult,
     LegacyGraphEngine,
 )
+from property_agent.agent.application.memory_outcome import accepted_turn_outcome
 from property_agent.agent.application.pending_confirmation import (
     confirmation_envelope,
 )
@@ -104,6 +105,7 @@ class AgentSessionRunner:
         recovery: AgentRecoveryService,
         confirmation_token_provider: ConfirmationTokenProvider | None = None,
         turn_recorder: TurnRecorder | None = None,
+        memory_writer: Any | None = None,
         checkpointer: Any | None = None,
         run_lease: Any | None = None,
         approval_service: Any | None = None,
@@ -116,6 +118,7 @@ class AgentSessionRunner:
         self._recovery = recovery
         self._confirmation_token_provider = confirmation_token_provider
         self._turn_recorder = turn_recorder
+        self._memory_writer = memory_writer
         self._checkpointer = checkpointer
         self._run_lease = run_lease
         self._approval_service = approval_service
@@ -169,9 +172,11 @@ class AgentSessionRunner:
                     plan.state, thread_id=conversation_id, runtime=runtime_for(plan)
                 )
                 self._turn_guard.assert_alive(plan.lease, plan.heartbeat)
-                publish_accepted(self._checkpointer, conversation_id, plan, result)
+                accepted_version = publish_accepted(
+                    self._checkpointer, conversation_id, plan, result
+                )
                 turn = self._finalize(result)
-                self._persist_turn(plan.ctx, turn, user_text)
+                self._persist_accepted(plan, turn, user_text, accepted_version)
                 span.set_attribute("agent.intent", turn.state.intent)
                 span.set_attribute("agent.degraded", self._observability.degraded)
                 return turn
@@ -251,13 +256,14 @@ class AgentSessionRunner:
                     elif kind == "__final__":
                         result = result_from_payload(payload)
                         self._turn_guard.assert_alive(plan.lease, plan.heartbeat)
-                        publish_accepted(self._checkpointer, conversation_id, plan, result)
+                        accepted_version = publish_accepted(
+                            self._checkpointer, conversation_id, plan, result
+                        )
                         turn = self._finalize(result)
-                        self._persist_turn(plan.ctx, turn, user_text)
+                        self._persist_accepted(plan, turn, user_text, accepted_version)
                         span.set_attribute("agent.intent", turn.state.intent)
                         span.set_attribute("agent.degraded", self._observability.degraded)
                         yield ("__turn__", turn)
-                return
         except AgentSessionError as exc:
             if exc.code == AgentSessionErrorCode.CONVERSATION_BUSY:
                 self._observability.metrics.conversation_busy.inc()
@@ -404,10 +410,14 @@ class AgentSessionRunner:
                     runtime_cursor=cursor_for(self._checkpointer, conversation_id),
                 )
                 self._turn_guard.assert_alive(plan.lease, plan.heartbeat)
-                publish_accepted(self._checkpointer, conversation_id, plan, result)
+                accepted_version = publish_accepted(
+                    self._checkpointer, conversation_id, plan, result
+                )
                 turn = self._finalize(result)
                 action_text = "确认执行操作" if confirmed else "取消待确认操作"
-                self._persist_turn(plan.ctx, turn, action_text)
+                self._persist_accepted(
+                    plan, turn, action_text, accepted_version, cancelled=not confirmed
+                )
                 span.set_attribute("agent.intent", turn.state.intent)
                 span.set_attribute("agent.degraded", self._observability.degraded)
                 return turn
@@ -478,10 +488,14 @@ class AgentSessionRunner:
                     elif kind == "__final__":
                         result = result_from_payload(payload)
                         self._turn_guard.assert_alive(plan.lease, plan.heartbeat)
-                        publish_accepted(self._checkpointer, conversation_id, plan, result)
+                        accepted_version = publish_accepted(
+                            self._checkpointer, conversation_id, plan, result
+                        )
                         turn = self._finalize(result)
                         action_text = "确认执行操作" if confirmed else "取消待确认操作"
-                        self._persist_turn(plan.ctx, turn, action_text)
+                        self._persist_accepted(
+                            plan, turn, action_text, accepted_version, cancelled=not confirmed
+                        )
                         span.set_attribute("agent.intent", turn.state.intent)
                         span.set_attribute("agent.degraded", self._observability.degraded)
                         yield ("__turn__", turn)
@@ -585,7 +599,47 @@ class AgentSessionRunner:
             done=done,
         )
 
-    def _persist_turn(self, context: AgentContext, turn: AgentTurn, user_text: str) -> None:
+    def _persist_turn(
+        self,
+        context: AgentContext,
+        turn: AgentTurn,
+        user_text: str,
+        *,
+        accepted_version: int | None = None,
+        outcome: Any | None = None,
+    ) -> None:
         from property_agent.agent.application.transcript import record_turn
 
         record_turn(self._turn_recorder, context, turn, user_text)
+        if self._memory_writer is not None and accepted_version is not None:
+            try:
+                self._memory_writer.write_accepted_turn(
+                    context=context,
+                    state=turn.state,
+                    user_text=user_text,
+                    assistant_text=turn.reply,
+                    accepted_version=accepted_version,
+                    outcome=outcome,
+                )
+            except Exception:
+                logger.exception(
+                    "memory_writer_degraded",
+                    extra={"conversation_id": turn.state.conversation_id},
+                )
+
+    def _persist_accepted(
+        self,
+        plan: _TurnPlan,
+        turn: AgentTurn,
+        user_text: str,
+        accepted_version: int | None,
+        *,
+        cancelled: bool = False,
+    ) -> None:
+        self._persist_turn(
+            plan.ctx,
+            turn,
+            user_text,
+            accepted_version=accepted_version,
+            outcome=accepted_turn_outcome(turn.state, done=turn.done, cancelled=cancelled),
+        )

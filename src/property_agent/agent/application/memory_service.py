@@ -1,4 +1,4 @@
-"""User-visible conversation history and explicitly confirmed long-term memories."""
+"""Unified application owner for transcripts and governed long-term memory."""
 
 from collections.abc import Collection
 from datetime import datetime, timedelta, timezone
@@ -8,15 +8,29 @@ from uuid import UUID
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from property_agent.agent.application.memory_store import MemoryRecordStore, memory_data
 from property_agent.agent.infrastructure.models import (
     AgentMemoryModel,
     AgentMessageModel,
     ConversationModel,
 )
+from property_agent.agent.memory_contracts import (
+    EmbeddingProvider,
+    MemoryCandidate,
+    MemoryKind,
+    MemoryLifecycle,
+    MemoryQuery,
+    MemorySource,
+    ReindexResult,
+)
+from property_agent.agent.memory_contracts import (
+    MemoryContext as RetrievedMemoryContext,
+)
 from property_agent.platform.errors import BusinessError
 
 MEMORY_TYPES = frozenset({"PREFERENCE", "COMMUNICATION", "ACCESSIBILITY", "SERVICE_NOTE"})
 MESSAGE_ROLES = frozenset({"user", "assistant", "system"})
+_memory_data = memory_data
 
 
 class MemoryContext(Protocol):
@@ -29,26 +43,14 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _memory_data(row: AgentMemoryModel) -> dict:
-    return {
-        "id": str(row.id),
-        "memory_type": row.memory_type,
-        "content": row.content,
-        "house_id": str(row.house_id) if row.house_id else None,
-        "source_conversation_id": row.source_conversation_id,
-        "confirmed_by_user": row.confirmed_by_user,
-        "version": row.version,
-        "created_at": row.created_at.isoformat(),
-        "updated_at": row.updated_at.isoformat(),
-        "expires_at": row.expires_at.isoformat() if row.expires_at else None,
-    }
-
-
 class AgentMemoryService:
-    """Persist transcripts and memories without treating either as trusted business state."""
+    """One governed API for CRUD, retrieval, and accepted-evidence writes."""
 
-    def __init__(self, session: Session) -> None:
+    def __init__(
+        self, session: Session, *, embedding_provider: EmbeddingProvider | None = None
+    ) -> None:
         self._session = session
+        self._store = MemoryRecordStore(session, embedding_provider)
 
     def record_turn(
         self,
@@ -144,10 +146,11 @@ class AgentMemoryService:
                 AgentMemoryModel.actor_id == context.actor_id,
                 AgentMemoryModel.community_id == context.community_id,
                 AgentMemoryModel.deleted_at.is_(None),
+                AgentMemoryModel.lifecycle_status == MemoryLifecycle.ACTIVE.value,
             )
             .order_by(AgentMemoryModel.updated_at.desc())
         ).scalars()
-        return [_memory_data(row) for row in rows if not row.expires_at or row.expires_at > _now()]
+        return [memory_data(row) for row in rows if not row.expires_at or row.expires_at > _now()]
 
     def create_memory(
         self,
@@ -167,15 +170,23 @@ class AgentMemoryService:
             community_id=context.community_id,
             house_id=house_id,
             memory_type=memory_type,
+            memory_kind=MemoryKind.SEMANTIC.value,
             content=content.strip(),
+            canonical_key=("communication-preference" if memory_type == "COMMUNICATION" else None),
             source_conversation_id=source_conversation_id,
             confirmed_by_user=True,
+            source_type=MemorySource.MEMORY_API.value,
+            provenance={"source": "authenticated_memory_api"},
+            confirmation_status="USER_CONFIRMED",
+            conflict_key=("communication-preference" if memory_type == "COMMUNICATION" else None),
             expires_at=expires_at,
         )
+        self._store.prepare_explicit_create(context, row)
+        self._store.index(row)
         self._session.add(row)
         self._session.commit()
         self._session.refresh(row)
-        return _memory_data(row)
+        return memory_data(row)
 
     def update_memory(
         self,
@@ -188,25 +199,70 @@ class AgentMemoryService:
         row = self._owned_memory(memory_id, context)
         self._validate_memory(row.memory_type, content, row.house_id, context)
         new_version = self._apply_versioned_update(
-            memory_id, context, expected_version, content=content.strip()
+            memory_id,
+            context,
+            expected_version,
+            content=content.strip(),
+            embedding=None,
+            embedding_status="PENDING",
         )
         if new_version is None:
             raise BusinessError("VERSION_CONFLICT", "Memory was modified by another request.", 409)
         self._session.commit()
         self._session.refresh(row)
-        return _memory_data(row)
+        self._store.index(row)
+        self._session.commit()
+        self._session.refresh(row)
+        return memory_data(row)
 
     def delete_memory(
         self, memory_id: UUID, context: MemoryContext, *, expected_version: int
     ) -> dict:
         row = self._owned_memory(memory_id, context)
         new_version = self._apply_versioned_update(
-            memory_id, context, expected_version, deleted_at=_now()
+            memory_id,
+            context,
+            expected_version,
+            deleted_at=_now(),
+            lifecycle_status=MemoryLifecycle.DELETED.value,
+            embedding=None,
+            embedding_status="DELETED",
+            cleanup_status="COMPLETED",
         )
         if new_version is None:
             raise BusinessError("VERSION_CONFLICT", "Memory was modified by another request.", 409)
         self._session.commit()
         return {"id": str(row.id), "deleted": True, "version": new_version}
+
+    def retrieve(self, query: MemoryQuery) -> RetrievedMemoryContext:
+        return self._store.retrieve(query)
+
+    def revalidate(
+        self, query: MemoryQuery, previous: RetrievedMemoryContext
+    ) -> RetrievedMemoryContext:
+        return self._store.revalidate(query, previous)
+
+    def reindex_memories(self, *, limit: int = 100) -> ReindexResult:
+        """Bounded internal maintenance; it never changes canonical Memory content/version."""
+        return self._store.reindex(limit=limit)
+
+    def persist_candidate(
+        self,
+        context: MemoryContext,
+        *,
+        candidate: MemoryCandidate,
+        source_evidence_id: str,
+        provenance: dict[str, object],
+        house_id: UUID | None,
+    ) -> dict:
+        self._validate_memory(candidate.memory_type, candidate.content, house_id, context)
+        return self._store.persist_candidate(
+            context,
+            candidate=candidate,
+            source_evidence_id=source_evidence_id,
+            provenance=provenance,
+            house_id=house_id,
+        )
 
     def _apply_versioned_update(
         self,
@@ -215,13 +271,6 @@ class AgentMemoryService:
         expected_version: int,
         **values: object,
     ) -> int | None:
-        """原子乐观锁 UPDATE：ownership + 未删除 + version 全在一条语句内守卫。
-
-        与 checkpoint CAS 同一思路：version 自增发生在同一条 UPDATE 内部，
-        两个并发事务不可能同时命中 ``version=:expected``，因此不会产生 lost
-        update。命中返回新 version；未命中（被别的请求先改）返回 ``None``，
-        由调用方抛 ``VERSION_CONFLICT``。
-        """
         result = self._session.execute(
             update(AgentMemoryModel)
             .where(

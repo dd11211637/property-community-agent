@@ -7,6 +7,7 @@ from typing import Any, TypedDict
 from uuid import UUID
 
 from property_agent.agent.capabilities.contracts import CapabilityInvocationState
+from property_agent.agent.memory_contracts import MemoryContext
 from property_agent.agent.orchestration import (
     GoalOutcome,
     OrchestrationBudget,
@@ -65,6 +66,7 @@ class AgentState:
     orchestration_budget: OrchestrationBudget | None = None
     specialist_results: tuple[SpecialistResult, ...] = ()
     goal_outcomes: dict[str, GoalOutcome] = field(default_factory=dict)
+    retrieved_memories: MemoryContext = field(default_factory=MemoryContext)
     actor_id: UUID | None = None
     community_id: UUID | None = None
     current_house_id: UUID | None = None

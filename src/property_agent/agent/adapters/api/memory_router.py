@@ -3,7 +3,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from property_agent.agent.adapters.api.dependencies import AgentRequestContext, get_agent_context
@@ -21,6 +21,14 @@ ContextDep = Annotated[AgentRequestContext, Depends(get_agent_context)]
 DbDep = Annotated[Session, Depends(get_db)]
 
 
+def get_memory_service(request: Request, db: DbDep) -> AgentMemoryService:
+    provider = getattr(request.app.state, "agent_memory_embedding_provider", None)
+    return AgentMemoryService(db, embedding_provider=provider)
+
+
+MemoryServiceDep = Annotated[AgentMemoryService, Depends(get_memory_service)]
+
+
 def _envelope(data: object, context: AgentRequestContext) -> Envelope:
     return Envelope(success=True, data=data, error=None, request_id=context.request_id)
 
@@ -28,29 +36,29 @@ def _envelope(data: object, context: AgentRequestContext) -> Envelope:
 @router.get("/conversations", response_model=Envelope)
 def list_conversations(
     context: ContextDep,
-    db: DbDep,
+    service: MemoryServiceDep,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
 ) -> Envelope:
-    return _envelope(AgentMemoryService(db).list_conversations(context, limit=limit), context)
+    return _envelope(service.list_conversations(context, limit=limit), context)
 
 
 @router.get("/conversations/{conversation_id}/messages", response_model=Envelope)
-def list_messages(conversation_id: str, context: ContextDep, db: DbDep) -> Envelope:
-    return _envelope(AgentMemoryService(db).list_messages(conversation_id, context), context)
+def list_messages(conversation_id: str, context: ContextDep, service: MemoryServiceDep) -> Envelope:
+    return _envelope(service.list_messages(conversation_id, context), context)
 
 
 @router.get("/memories", response_model=Envelope)
-def list_memories(context: ContextDep, db: DbDep) -> Envelope:
-    return _envelope(AgentMemoryService(db).list_memories(context), context)
+def list_memories(context: ContextDep, service: MemoryServiceDep) -> Envelope:
+    return _envelope(service.list_memories(context), context)
 
 
 @router.post("/memories", response_model=Envelope)
 def create_memory(
     payload: CreateMemoryRequest,
     context: ContextDep,
-    db: DbDep,
+    service: MemoryServiceDep,
 ) -> Envelope:
-    data = AgentMemoryService(db).create_memory(
+    data = service.create_memory(
         context,
         memory_type=payload.memory_type,
         content=payload.content,
@@ -66,9 +74,9 @@ def update_memory(
     memory_id: UUID,
     payload: UpdateMemoryRequest,
     context: ContextDep,
-    db: DbDep,
+    service: MemoryServiceDep,
 ) -> Envelope:
-    data = AgentMemoryService(db).update_memory(
+    data = service.update_memory(
         memory_id,
         context,
         content=payload.content,
@@ -82,9 +90,9 @@ def delete_memory(
     memory_id: UUID,
     payload: DeleteMemoryRequest,
     context: ContextDep,
-    db: DbDep,
+    service: MemoryServiceDep,
 ) -> Envelope:
-    data = AgentMemoryService(db).delete_memory(
+    data = service.delete_memory(
         memory_id,
         context,
         expected_version=payload.expected_version,

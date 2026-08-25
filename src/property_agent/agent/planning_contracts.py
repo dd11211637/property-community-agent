@@ -97,6 +97,7 @@ class PlanningGateway(Protocol):
         *,
         history: list[dict[str, Any]],
         trusted_context: dict[str, Any],
+        memory_context: dict[str, Any],
     ) -> PlanProposal: ...
 
     def judge_relevance(

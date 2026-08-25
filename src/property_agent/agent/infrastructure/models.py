@@ -14,6 +14,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -276,6 +277,33 @@ class AgentMemoryModel(Base):
     __table_args__ = (
         Index("ix_agent_memories_owner_active", "actor_id", "community_id", "deleted_at"),
         Index("ix_agent_memories_house_active", "house_id", "deleted_at"),
+        Index(
+            "ux_agent_memory_automatic_candidate",
+            "actor_id",
+            "community_id",
+            "source_evidence_id",
+            "candidate_id",
+            unique=True,
+            sqlite_where=sa_text("source_evidence_id IS NOT NULL AND candidate_id IS NOT NULL"),
+            postgresql_where=sa_text("source_evidence_id IS NOT NULL AND candidate_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_agent_memories_effective_scope",
+            "actor_id",
+            "community_id",
+            "house_id",
+            "lifecycle_status",
+            "expires_at",
+        ),
+        Index(
+            "ix_agent_memories_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+            postgresql_where=sa_text(
+                "embedding IS NOT NULL AND deleted_at IS NULL AND lifecycle_status = 'ACTIVE'"
+            ),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
@@ -283,9 +311,33 @@ class AgentMemoryModel(Base):
     community_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     house_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     memory_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    memory_kind: Mapped[str] = mapped_column(String(24), nullable=False, default="SEMANTIC")
     content: Mapped[str] = mapped_column(String(500), nullable=False)
+    canonical_key: Mapped[str | None] = mapped_column(String(128))
     source_conversation_id: Mapped[str | None] = mapped_column(String(64))
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False, default="MEMORY_API")
+    source_evidence_id: Mapped[str | None] = mapped_column(String(160))
+    candidate_id: Mapped[str | None] = mapped_column(String(64))
+    provenance: Mapped[dict] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=dict
+    )
     confirmed_by_user: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    confirmation_status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="USER_CONFIRMED"
+    )
+    confidence: Mapped[float | None]
+    confidence_method: Mapped[str | None] = mapped_column(String(64))
+    lifecycle_status: Mapped[str] = mapped_column(String(24), nullable=False, default="ACTIVE")
+    conflict_key: Mapped[str | None] = mapped_column(String(128))
+    supersedes_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("agent_memories.id", ondelete="SET NULL")
+    )
+    retention_class: Mapped[str] = mapped_column(String(24), nullable=False, default="LONG_LIVED")
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(1536))
+    embedding_model: Mapped[str | None] = mapped_column(String(128))
+    embedding_version: Mapped[str | None] = mapped_column(String(64))
+    embedding_status: Mapped[str] = mapped_column(String(24), nullable=False, default="PENDING")
+    cleanup_status: Mapped[str] = mapped_column(String(24), nullable=False, default="NOT_REQUIRED")
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=func.now()
