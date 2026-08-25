@@ -1,0 +1,11 @@
+[
+  {"id":"communication","memory_type":"COMMUNICATION","kind":"SEMANTIC","content":"维修上门前请提前半小时用站内消息提醒我","query":"厨房渗水，需要安排师傅处理","expected_visible":true,"clarification_without":1,"clarification_with":0,"personalization":true},
+  {"id":"style","memory_type":"PREFERENCE","kind":"SEMANTIC","content":"给邻里的通知请写得短一些","query":"起草本周停水公告","expected_visible":true,"clarification_without":0,"clarification_with":0,"personalization":true},
+  {"id":"correction","memory_type":"COMMUNICATION","kind":"SEMANTIC","content":"别再来电，只需要在应用内留言","query":"报修时怎么联系我","expected_visible":true,"correction":true,"clarification_without":1,"clarification_with":0},
+  {"id":"stale-business","memory_type":"SERVICE_NOTE","kind":"SEMANTIC","content":"我印象中本期费用已经结清","query":"查询当前账单状态","expected_visible":true,"live_business_status":"UNPAID","clarification_without":0,"clarification_with":0},
+  {"id":"house-isolation","memory_type":"PREFERENCE","kind":"SEMANTIC","content":"A住所只在周末上门","query":"B住所安排维修","expected_visible":false,"query_other_house":true,"clarification_without":0,"clarification_with":0},
+  {"id":"deleted","memory_type":"PREFERENCE","kind":"SEMANTIC","content":"旧的上门时间偏好","query":"新会话安排上门","expected_visible":false,"delete_before_query":true,"clarification_without":0,"clarification_with":0},
+  {"id":"episode","memory_type":"SERVICE_NOTE","kind":"EPISODIC","content":"上次晚间上门顺利完成且用户表示时间合适","query":"再次协调上门时间","expected_visible":true,"clarification_without":1,"clarification_with":0},
+  {"id":"procedure","memory_type":"SERVICE_NOTE","kind":"PROCEDURAL_CANDIDATE","content":"晚间时段可能更容易协调成功","query":"规划下一次上门协调","expected_visible":true,"clarification_without":1,"clarification_with":0},
+  {"id":"explicit-claim","memory_type":"SERVICE_NOTE","kind":"SEMANTIC","content":"我记得物业费可能付过了","query":"核实物业费是否欠缴","expected_visible":true,"live_business_status":"UNPAID","clarification_without":0,"clarification_with":0}
+]

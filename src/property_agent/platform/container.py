@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import (
 from property_agent.agent.application.composition import bind_runtime, close_runtime_resources
 from property_agent.agent.application.confirmation_provider import prepare_confirmation
 from property_agent.agent.application.conversation_service import ConversationService
+from property_agent.agent.application.memory_composition import build_memory_runtime
 from property_agent.agent.application.memory_runtime import (
     _display_part as _display_part,
 )
@@ -452,6 +453,9 @@ def build_agent_runner(
     checkpointer = SqlAlchemyCheckpointer(session_factory)
     gateway = build_model_gateway()
     app.state.agent_model_gateway = gateway
+    memory_runtime = build_memory_runtime(settings, session_factory, gateway)
+    app.state.agent_memory_embedding_provider = memory_runtime.embedding_provider
+    app.state.agent_memory_reader = memory_runtime.reader
 
     context_loader = build_agent_context_loader(session_factory)
     graph, *_ = _build_agent_tooling(
@@ -479,6 +483,7 @@ def build_agent_runner(
         recovery=recovery,
         confirmation_token_provider=confirmation_token_provider,
         turn_recorder=build_turn_recorder(session_factory),
+        memory_writer=memory_runtime.writer,
         checkpointer=checkpointer,
         run_lease=run_lease_service,
         approval_service=approval_service,

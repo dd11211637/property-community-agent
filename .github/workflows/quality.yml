@@ -28,13 +28,15 @@ jobs:
       - run: python -m pytest -rs
       - name: Deterministic agent eval gate (P1)
         run: python testing/agent_harness.py tests/agent/data/controlled_read_cases.json
+      - name: Governed Memory paired value gate (PR6)
+        run: python testing/memory_value_eval.py tests/agent/data/pr6_memory_value_cases.json
 
   postgres:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:16-alpine
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_DB: property_agent_test
           POSTGRES_USER: property_agent

@@ -19,10 +19,15 @@ x-backend-environment: &backend-environment
   DEEPSEEK_CONNECT_TIMEOUT_SECONDS: "3"
   DEEPSEEK_READ_TIMEOUT_SECONDS: "12"
   DEEPSEEK_TOTAL_TIMEOUT_SECONDS: "6"
+  MEMORY_EMBEDDING_BASE_URL: ${MEMORY_EMBEDDING_BASE_URL:-https://api.openai.com/v1}
+  MEMORY_EMBEDDING_API_KEY: ${MEMORY_EMBEDDING_API_KEY:-}
+  MEMORY_EMBEDDING_MODEL: ${MEMORY_EMBEDDING_MODEL:-text-embedding-3-small}
+  MEMORY_EMBEDDING_VERSION: ${MEMORY_EMBEDDING_VERSION:-1}
+  MEMORY_EMBEDDING_DIMENSIONS: "1536"
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_DB: property_agent_demo
       POSTGRES_USER: property_agent
@@ -118,7 +123,7 @@ services:
 
   postgres-test:
     profiles: ["testing"]
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_DB: property_agent_test
       POSTGRES_USER: property_agent
@@ -139,6 +144,7 @@ services:
       target: test
     environment:
       TEST_POSTGRES_URL: postgresql+psycopg://property_agent:test-password@postgres-test:5432/property_agent_test
+      DATABASE_URL: postgresql+psycopg://property_agent:test-password@postgres-test:5432/property_agent_test
     command: ["python", "-m", "pytest", "-rs"]
     depends_on:
       postgres-test:

@@ -8,6 +8,7 @@ from typing import Any
 from uuid import UUID
 
 from property_agent.agent.capabilities.contracts import CapabilityInvocationState
+from property_agent.agent.memory_contracts import MemoryContext
 from property_agent.agent.orchestration import (
     GoalOutcome,
     OrchestrationBudget,
@@ -80,6 +81,7 @@ class CheckpointStateCodec:
             "goal_outcomes": {
                 step_id: outcome.value for step_id, outcome in state.goal_outcomes.items()
             },
+            "retrieved_memories": state.retrieved_memories.to_dict(),
             "actor_id": self._uuid(state.actor_id),
             "community_id": self._uuid(state.community_id),
             "current_house_id": self._uuid(state.current_house_id),
@@ -192,6 +194,7 @@ class CheckpointStateCodec:
                 step_id: GoalOutcome(outcome)
                 for step_id, outcome in dict(payload.get("goal_outcomes") or {}).items()
             },
+            retrieved_memories=MemoryContext.from_dict(payload.get("retrieved_memories")),
             actor_id=self._decode_uuid(payload.get("actor_id")),
             community_id=self._decode_uuid(payload.get("community_id")),
             current_house_id=self._decode_uuid(payload.get("current_house_id")),

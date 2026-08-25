@@ -34,7 +34,7 @@ def build_supervisor(app: FastAPI) -> Supervisor:
         InspectionSpecialist(executor),
     )
     return Supervisor(
-        SupervisorPlanner(gateway),
+        SupervisorPlanner(gateway, memory_reader=getattr(app.state, "agent_memory_reader", None)),
         {specialist.name: specialist for specialist in specialists},
     )
 

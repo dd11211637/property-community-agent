@@ -60,6 +60,7 @@ class Supervisor:
                 },
             )
         elif state.orchestration_budget is not None:
+            self._planner.revalidate_memories(state, runtime)
             state.orchestration_budget = state.orchestration_budget.resume(
                 now=now, server_ceiling=duration
             )

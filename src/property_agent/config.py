@@ -61,6 +61,14 @@ class Settings(BaseSettings):
     deepseek_read_timeout_seconds: float = 12.0
     deepseek_total_timeout_seconds: float = 6.0
 
+    # ── Provider-neutral long-term-memory embeddings ────────────
+    memory_embedding_base_url: str = "https://api.openai.com/v1"
+    memory_embedding_api_key: str = ""
+    memory_embedding_model: str = "text-embedding-3-small"
+    memory_embedding_version: str = "1"
+    memory_embedding_dimensions: int = 1536
+    memory_embedding_timeout_seconds: float = 6.0
+
     # ── Agent concurrency guards (P0 正确性底座) ──────────────────
     # 关闭后回退到「单凭 confirmation token」旧行为，便于回滚/排错；
     # 默认开启。生产环境必须保持开启，避免同会话并发 lost-update。
@@ -97,6 +105,10 @@ class Settings(BaseSettings):
             problems.append("DEEPSEEK_READ_TIMEOUT_SECONDS must be positive")
         if self.deepseek_total_timeout_seconds <= 0:
             problems.append("DEEPSEEK_TOTAL_TIMEOUT_SECONDS must be positive")
+        if self.memory_embedding_dimensions != 1536:
+            problems.append("MEMORY_EMBEDDING_DIMENSIONS must match the pgvector schema (1536)")
+        if self.memory_embedding_timeout_seconds <= 0:
+            problems.append("MEMORY_EMBEDDING_TIMEOUT_SECONDS must be positive")
 
         if self.login_failure_limit <= 0:
             problems.append("LOGIN_FAILURE_LIMIT must be positive")

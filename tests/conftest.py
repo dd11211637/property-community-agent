@@ -1,12 +1,28 @@
+import os
 from dataclasses import dataclass
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import create_engine, text
 
 from property_agent.repair.application.ports import RequestContext
 from property_agent.repair.application.service import WorkOrderService
 from property_agent.repair.domain.enums import Role
 from tests.support import Harness
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _enable_postgres_test_extensions() -> None:
+    """Prepare extensions required by ORM-based PostgreSQL test schemas."""
+    database_url = os.getenv("TEST_POSTGRES_URL")
+    if not database_url:
+        return
+    engine = create_engine(database_url, pool_pre_ping=True)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+    finally:
+        engine.dispose()
 
 
 @dataclass(frozen=True)

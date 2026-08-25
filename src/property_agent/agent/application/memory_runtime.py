@@ -1,15 +1,24 @@
 """Production adapters that connect persisted memories to the Agent runtime."""
 
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from property_agent.agent.application.memory_service import AgentMemoryService, MemoryContext
-from property_agent.agent.infrastructure.models import AgentMemoryModel
+from property_agent.agent.application.memory_service import (
+    AgentMemoryService,
+)
+from property_agent.agent.application.memory_service import (
+    MemoryContext as ActorMemoryContext,
+)
+from property_agent.agent.memory_contracts import (
+    EmbeddingProvider,
+    MemoryContext,
+    MemoryQuery,
+)
+from property_agent.agent.runtime import RuntimeContext
 from property_agent.agent.state import GraphState
 from property_agent.platform.infrastructure.orm_models import CommunityModel, HouseModel
 
@@ -33,6 +42,7 @@ def build_agent_context_loader(session_factory: SessionFactory):
             memories = _load_memories(session, state)
             if memories:
                 trusted["user_confirmed_memories"] = memories
+                trusted["memory_context_authority"] = "UNTRUSTED_REVISABLE_MEMORY"
         state.trusted_context = trusted
         return state
 
@@ -62,31 +72,65 @@ def _load_place_context(session: Session, state: GraphState, trusted: dict[str, 
 
 
 def _load_memories(session: Session, state: GraphState) -> list[dict[str, str]]:
-    now = datetime.now(UTC)
-    rows = (
-        session.query(AgentMemoryModel)
-        .filter(
-            AgentMemoryModel.actor_id == state.actor_id,
-            AgentMemoryModel.community_id == state.community_id,
-            AgentMemoryModel.deleted_at.is_(None),
-            or_(AgentMemoryModel.expires_at.is_(None), AgentMemoryModel.expires_at > now),
-            (
-                AgentMemoryModel.house_id.is_(None)
-                | (AgentMemoryModel.house_id == state.current_house_id)
-            ),
+    if state.actor_id is None or state.community_id is None:
+        return []
+    bound = frozenset({state.current_house_id}) if state.current_house_id else frozenset()
+    result = AgentMemoryService(session).retrieve(
+        MemoryQuery(
+            text=str(state.slots.get("user_text") or ""),
+            actor_id=state.actor_id,
+            community_id=state.community_id,
+            current_house_id=state.current_house_id,
+            bound_house_ids=bound,
+            limit=10,
         )
-        .order_by(AgentMemoryModel.updated_at.desc())
-        .limit(10)
-        .all()
     )
-    return [{"type": item.memory_type, "content": item.content} for item in rows]
+    return [{"type": item.memory_type, "content": item.content} for item in result.items]
+
+
+class GovernedMemoryReader:
+    """Open one scoped repository transaction for each v2 planning retrieval."""
+
+    def __init__(
+        self, session_factory: SessionFactory, embedding_provider: EmbeddingProvider | None = None
+    ) -> None:
+        self._sessions = session_factory
+        self._embedding = embedding_provider
+
+    def __call__(self, text: str, runtime: RuntimeContext):
+        with self._sessions() as session:
+            return AgentMemoryService(session, embedding_provider=self._embedding).retrieve(
+                MemoryQuery(
+                    text=text,
+                    actor_id=runtime.actor_id,
+                    community_id=runtime.community_id,
+                    current_house_id=runtime.current_house_id,
+                    bound_house_ids=runtime.bound_house_ids,
+                )
+            )
+
+    def revalidate(
+        self, text: str, runtime: RuntimeContext, previous: MemoryContext
+    ) -> MemoryContext:
+        query = MemoryQuery(
+            text=text,
+            actor_id=runtime.actor_id,
+            community_id=runtime.community_id,
+            current_house_id=runtime.current_house_id,
+            bound_house_ids=runtime.bound_house_ids,
+            limit=min(20, len(previous.items)),
+        )
+        with self._sessions() as session:
+            return AgentMemoryService(session, embedding_provider=self._embedding).revalidate(
+                query, {item.memory_id for item in previous.items}
+            )
 
 
 def build_turn_recorder(session_factory: SessionFactory):
     """Build an append-only transcript recorder with request identity supplied by the runner."""
 
     def record(
-        context: MemoryContext,
+        context: ActorMemoryContext,
         state: GraphState,
         user_text: str,
         assistant_text: str,
