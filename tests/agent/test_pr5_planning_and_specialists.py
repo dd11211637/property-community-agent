@@ -1,5 +1,8 @@
+import json
 from types import SimpleNamespace
 from uuid import uuid4
+
+import httpx
 
 from property_agent.agent.capabilities.catalog import default_capability_registry
 from property_agent.agent.capabilities.contracts import (
@@ -7,6 +10,7 @@ from property_agent.agent.capabilities.contracts import (
 )
 from property_agent.agent.capabilities.executor import CapabilityExecutor
 from property_agent.agent.capabilities.policy import default_capability_policy
+from property_agent.agent.deepseek_gateway import DeepSeekModelGateway
 from property_agent.agent.orchestration import (
     ObjectiveClassification,
     PlanStep,
@@ -213,6 +217,45 @@ def test_explicit_inspection_and_announcement_actions_map_to_canonical_capabilit
     assert announcement_plan.steps[0].capability == "announce_publish"
 
 
+def test_deepseek_knowledge_search_proposal_survives_normalization_and_validation():
+    def handler(_request):
+        content = json.dumps(
+            {
+                "objective_classification": "single-domain",
+                "steps": [
+                    {
+                        "step_id": "knowledge-search",
+                        "goal": "查询社区物业服务电话",
+                        "domain": "announcement",
+                        "specialist": "AnnouncementSpecialist",
+                        "capability": "community_knowledge_search",
+                        "parameters": {"query": "物业服务电话", "limit": 5},
+                        "dependencies": [],
+                        "condition": None,
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        )
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    gateway = DeepSeekModelGateway(
+        api_key="test-key",
+        base_url="https://api.deepseek.com",
+        model="deepseek-test",
+        connect_timeout_seconds=1,
+        read_timeout_seconds=1,
+        transport=httpx.MockTransport(handler),
+    )
+
+    plan = SupervisorPlanner(gateway).create_plan(_state("物业电话是多少？"), _runtime())
+
+    assert plan.objective_classification is ObjectiveClassification.SINGLE_DOMAIN
+    assert plan.steps[0].domain == "announcement"
+    assert plan.steps[0].specialist is SpecialistName.ANNOUNCEMENT
+    assert plan.steps[0].capability == "community_knowledge_search"
+
+
 def test_specialist_allowlists_are_exact_registry_domain_views():
     executor = _executor({})
     specialists = (
@@ -254,6 +297,32 @@ def test_billing_specialist_executes_only_billing_query_and_interprets_result():
     assert result.outcome is SpecialistOutcome.SUCCESS
     assert result.capability == "billing_query"
     assert result.data["count"] == 0
+
+
+def test_announcement_specialist_executes_knowledge_search_through_executor_allowlist():
+    calls = []
+
+    def search(request, _runtime_context):
+        calls.append((request.query, request.limit))
+        return {"data": {"count": 1, "items": [{"title": "物业服务电话"}]}}
+
+    step_value = PlanStep(
+        "knowledge-1",
+        "announcement",
+        SpecialistName.ANNOUNCEMENT,
+        "search community knowledge",
+        capability="community_knowledge_search",
+        parameters={"query": "物业服务电话", "limit": 5},
+    )
+    specialist = AnnouncementSpecialist(_executor({"community_knowledge_search": search}))
+
+    result = specialist.invoke(step_value, _state("物业电话是多少？"), _runtime(), ())
+
+    assert "community_knowledge_search" in specialist.allowlist
+    assert calls == [("物业服务电话", 5)]
+    assert result.outcome is SpecialistOutcome.SUCCESS
+    assert result.capability == "community_knowledge_search"
+    assert result.data["data"]["count"] == 1
 
 
 def test_inspection_not_found_requests_materially_different_replan():

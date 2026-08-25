@@ -10,6 +10,8 @@ from uuid import uuid4
 import httpx
 import pytest
 
+from property_agent.agent.capabilities.catalog import default_capability_registry
+from property_agent.agent.deepseek_gateway import semantic_planner_capability_inventory
 from property_agent.agent.model_gateway import (
     DeepSeekModelGateway,
     DeterministicModelGateway,
@@ -122,6 +124,17 @@ def test_deepseek_semantic_planning_contract_preserves_dependencies_and_conditio
     assert "at most 8 steps" in captured["body"]["messages"][0]["content"]
     provider_input = json.loads(captured["body"]["messages"][1]["content"])
     assert provider_input["history"][0]["content"] == "此前讨论的是电梯"
+    assert provider_input["capability_inventory"] == list(semantic_planner_capability_inventory())
+
+
+def test_semantic_planner_advertises_exact_canonical_registry_inventory():
+    registry = default_capability_registry()
+    advertised = semantic_planner_capability_inventory()
+
+    assert {item["name"] for item in advertised} == set(registry.names())
+    assert len(advertised) == len(registry.names()) == 24
+    assert {"name": "community_knowledge_search", "domain": "announcement"} in advertised
+    assert set(registry.aliases()).isdisjoint(item["name"] for item in advertised)
 
 
 def test_deepseek_relevance_judgment_returns_only_structured_evidence_refs():

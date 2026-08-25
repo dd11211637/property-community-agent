@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 
+from property_agent.agent.capabilities.catalog import default_capability_registry
 from property_agent.agent.model_contracts import ModelAnalysis, ModelGatewayError
 from property_agent.agent.planning_contracts import PlanProposal, RelevanceJudgment
 from property_agent.agent.policies import Intent
@@ -64,15 +65,11 @@ property-management assistant. Return JSON only:
  "condition":null|{"kind":"no-equivalent-active-repair|relevant-inspection-issue",
  "semantic_goal":"what live evidence must establish"}}]}
 Use at most 8 steps. Represent every requested goal, dependencies, negation, irrelevance,
-and conditions semantically; omit explicitly excluded or irrelevant goals. Capability names:
-repair_list, repair_get, repair_create; billing_query, billing_consult; announcement_list,
-announcement_get, announcement_draft, announcement_revise, announcement_create_draft,
-announce_publish, announcement_schedule_publish; inspection_list, inspection_get_task,
-inspection_get_event, inspection_create, inspection_start_task, inspection_add_record,
-inspection_submit_records, inspection_ai_suggest, security_event_create,
-security_event_submit_disposal, close_high_risk_event. Never invent identity, roles, scope,
-risk, approval, runtime, lease/fence, confirmation, business state, or commit authority.
-Unknown or ambiguous requests must be uncertain with no executable steps.
+and conditions semantically; omit explicitly excluded or irrelevant goals. Choose capability
+only from the supplied capability_inventory canonical name/domain entries. Never emit an
+alias as a capability. Never invent identity, roles, scope, risk, approval, runtime,
+lease/fence, confirmation, business state, or commit authority. Unknown or ambiguous
+requests must be uncertain with no executable steps.
 """
 
 _RELEVANCE_PROMPT = """Judge whether supplied live evidence establishes the semantic goal.
@@ -81,6 +78,14 @@ Facts exist only at the supplied evidence reference keys. A match requires one o
 reference keys. Never infer an unreported finding, and use ambiguous when relevance is not
 established. This judgment controls orchestration only and grants no business authority.
 """
+
+
+def semantic_planner_capability_inventory() -> tuple[dict[str, str], ...]:
+    """Project canonical, non-sensitive capability metadata for semantic planning."""
+    return tuple(
+        {"name": spec.name, "domain": spec.domain}
+        for spec in default_capability_registry().inventory()
+    )
 
 
 class DeepSeekModelGateway:
@@ -160,6 +165,7 @@ class DeepSeekModelGateway:
             "objective": text,
             "history": self._safe_history(history),
             "trusted_context": trusted_context,
+            "capability_inventory": semantic_planner_capability_inventory(),
         }
         value = self._semantic_planning.request_json(
             _SEMANTIC_PLANNER_PROMPT, context, max_tokens=1400
