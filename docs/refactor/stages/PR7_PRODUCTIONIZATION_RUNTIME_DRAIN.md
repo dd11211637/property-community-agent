@@ -298,17 +298,92 @@ messages, raw Memory content, capability payload/results, addresses, phone numbe
 credentials, confirmation tokens, approval material, idempotency keys, leases, or secret
 rollout salt. Safe identifiers should be opaque or hashed where operationally sufficient.
 
-## 9. Metrics and SLO contract
+## 9. Production Agent streaming contract
+
+Streaming is presentation and delivery infrastructure. It MUST NOT become execution,
+lifecycle, checkpoint, accepted-head, business-transaction, approval, or runtime-selection
+authority. One request still has one pinned runtime, one authoritative execution, and one
+business mutation path. HTTP, SSE, or WebSocket connection state is not execution truth,
+and PR7 MUST NOT create a separate `StreamingRunner` or durable stream lifecycle.
+
+### 9.1 Typed events and canonical lifecycle
+
+The implementation defines one bounded typed stream-event union. Its exact wire names are
+implementation scope, but it SHOULD represent equivalents of `TURN_STARTED`, `PROGRESS`,
+`CLARIFICATION_REQUIRED`, `CONFIRMATION_REQUIRED`, `HANDOVER`, `COMPLETED`, and `FAILED`.
+Lifecycle events derive only from canonical typed Agent/lifecycle state. Free-form model
+text cannot establish `WAITING_CONFIRM`, completion, failure, approval, or handover.
+
+Progress is explicitly provisional. For an operation that may mutate business state, an
+authoritative final success/`COMPLETED` event MUST occur only after both:
+
+1. the Application Service business outcome is durably committed; and
+2. the application accepted turn/head is successfully published under PR1–PR6 contracts.
+
+Internal LangGraph persistence is insufficient. If accepted-head publication fails, the
+orphan state cannot emit success. A client must never be told a mutation succeeded and then
+discover that either authoritative boundary failed.
+
+### 9.2 Model text and privacy
+
+Model token/text streaming, if supported, is untrusted provisional presentation. It MUST
+NOT expose chain-of-thought, hidden reasoning, system/developer prompts, unintended raw
+Memory, approval/confirmation material, credentials/secrets, or capability payloads/results
+by default. High-risk/write text cannot claim authoritative completion before the durable
+boundary. Event-level streaming is valid and may replace raw-token streaming when safer;
+raw tokens are not a PR7 requirement.
+
+### 9.3 Disconnect, cancellation, reconnect, and retry
+
+A transport disconnect alone MUST NOT roll back a committed mutation, change a runtime pin,
+invalidate accepted business state, or trigger a second execution on reconnect. Typed
+cancellation may stop work only while cancellation remains legally and transactionally
+possible; after irreversible commit it cannot pretend the mutation did not occur.
+
+Reconnect/retry recovers canonical persisted conversation and accepted state using existing
+conversation identity, accepted head, idempotency, approval binding, lease, and fence. It
+MUST NOT restart a mutation merely because events were missed or add a streaming-specific
+correctness store. Returning a current canonical snapshot/outcome is sufficient; replay of
+every token is not required.
+
+### 9.4 Backpressure and observability
+
+Buffers and producer/consumer waits are bounded. A slow client cannot create unbounded
+in-memory Agent state or indefinitely block authoritative transaction completion. An
+implementation may coalesce/drop provisional progress or close a slow stream, provided the
+canonical outcome remains recoverable. Exact limits and transport protocol are slice scope.
+
+At minimum, telemetry records stream start, first event/first visible latency, completion,
+client disconnect, reconnect/resume, buffer/backpressure failure, and final outcome. Traces
+correlate safe `request_id`, `conversation_id`, `run_id`, pinned `runtime_version`, and
+accepted version. High-cardinality IDs remain trace/log attributes, not metric labels.
+
+### 9.5 Streaming implementation evidence
+
+Future implementation tests MUST prove:
+
+1. a read/simple turn streams successfully;
+2. `WAITING_CONFIRM` emits a typed confirmation-required event;
+3. a business write emits no final success before authoritative durability;
+4. accepted-head publication failure emits no success from orphan state;
+5. disconnect before completion permits safe canonical recovery;
+6. disconnect after commit plus retry/reconnect does not duplicate the mutation;
+7. reconnect restores canonical state without a runtime switch;
+8. slow-client backpressure remains bounded; and
+9. no chain-of-thought, unintended raw Memory, secret, or approval material leaks.
+
+## 10. Metrics and SLO contract
 
 All SLOs are measured separately by pinned runtime and operation class. Expected
 `NEEDS_CLARIFICATION`, `PENDING_CONFIRMATION`, policy denial, and `HUMAN_ONLY` handover are
 not infrastructure failures.
 
-### 9.1 Availability indicators
+### 10.1 Availability indicators
 
 At minimum export:
 
 - Agent request and start/resume totals by structured outcome;
+- new-conversation runtime assignment totals by v1/v2 and bounded selection reason;
 - model request, timeout, retry, transport, schema, and provider failure totals;
 - capability infrastructure failure totals separate from domain/policy outcomes;
 - lease acquisition/contention/loss and stale-fence rejection totals;
@@ -330,7 +405,7 @@ Initial promotion objectives, to be frozen with the R0 baseline, are:
 Thresholds MAY be tightened after baseline evidence. Weakening them requires an explicit
 release decision and MUST NOT affect zero-tolerance correctness gates.
 
-### 9.2 Latency indicators
+### 10.2 Latency indicators
 
 Report p50, p95, and p99 for:
 
@@ -349,7 +424,7 @@ v2 p99 no more than 30% slower, unless an explicitly approved absolute product S
 stricter and met. Timeout failures remain availability failures and cannot be hidden by
 discarding slow samples.
 
-### 9.3 Correctness and safety hard gates
+### 10.3 Correctness and safety hard gates
 
 The following are exact zero gates, not error-budget SLOs:
 
@@ -367,7 +442,7 @@ The following are exact zero gates, not error-budget SLOs:
 No availability, latency, task-completion, or rollout target may trade away these gates.
 Any confirmed violation freezes promotion and new v2 assignment until incident closure.
 
-## 10. Agent quality and real-model release gate
+## 11. Agent quality and real-model release gate
 
 Graph completion is not quality. Establish a frozen pre-rollout baseline and compare v1/v2
 where behavior is meaningfully comparable:
@@ -402,7 +477,7 @@ A model, provider, prompt contract, or material provider configuration change is
 production change. It does not automatically require runtime `v3`, but it requires new
 traceable release metadata and re-execution of the protected gate.
 
-## 11. Memory production gate
+## 12. Memory production gate
 
 Before R1 and at every broad promotion, verify:
 
@@ -423,7 +498,7 @@ Ordinary embedding/vector/Writer failure falls back to bounded structured or no-
 reasoning when scope-safe. A scope, canonical-integrity, privacy, deletion, or leakage
 failure fails Memory closed and alerts. Memory never replaces a live Application Service.
 
-## 12. Production-shaped load and contention validation
+## 13. Production-shaped load and contention validation
 
 PR7-B MUST provide a repeatable preproduction load profile using production-equivalent
 PostgreSQL/pgvector, LangGraph saver, application configuration, and representative model
@@ -451,7 +526,7 @@ accepted-head CAS conflict, checkpoint/database-pool wait, Memory advisory lock 
 approval consume contention, and business idempotency conflict. Correctness retries remain
 visible; they are not relabeled as success-only traffic.
 
-## 13. Chaos and crash-window drills
+## 14. Chaos and crash-window drills
 
 Each drill records injection point, expected user behavior, durable state, recovery path,
 forbidden behavior, and observed evidence.
@@ -474,7 +549,7 @@ forbidden behavior, and observed evidence.
 These drills are bounded and run in isolated non-production environments unless a separately
 approved production game day defines blast radius and recovery.
 
-## 14. Adversarial release suite
+## 15. Adversarial release suite
 
 The release suite MUST cover prompt injection, role/identity claims, community/house scope
 override, approval claims, Memory-based authority claims, model-proposed trusted arguments,
@@ -486,7 +561,7 @@ Correct behavior may be clarification, safe read, handover, policy denial, or a 
 public failure. It need not reject every request, but it must preserve trusted scope,
 authority, accepted-head, approval, and exactly-once mutation boundaries.
 
-## 15. Production configuration and feature controls
+## 16. Production configuration and feature controls
 
 Configuration is server-owned, observable, and versioned/auditable. At minimum record:
 
@@ -511,8 +586,10 @@ Avoid flag explosion. The initial operational control set SHOULD be limited to:
 
 Do not create per-specialist rollout flags. Correctness guards such as fencing,
 accepted-head CAS, approval atomicity, and idempotency are not optional feature flags.
+The validated retirement configuration MUST be rejected if any default, eligibility,
+fallback, degraded, emergency, tenant/community, or API-surface path can still select v1.
 
-## 16. Liveness, readiness, and alerting
+## 17. Liveness, readiness, and alerting
 
 Liveness means only that the process can respond. Readiness means the deployment can serve
 the traffic its current rollout/config advertises.
@@ -536,7 +613,7 @@ Actionable alerts include:
 Individual expected retries do not page. Alerts aggregate by bounded reason and link to a
 runbook with rollback/fail-closed actions.
 
-## 17. Canary comparison and no-shadow-write rule
+## 18. Canary comparison and no-shadow-write rule
 
 At R1–R3 compare v1 and v2 cohorts separately for success/task completion, clarification,
 handover, replan, latency, infrastructure error, approval outcome, user-visible failure,
@@ -552,7 +629,7 @@ one user request -> one pinned runtime -> one capability/Application Service mut
 Offline/replay comparison may use immutable snapshots or non-mutating read/evaluation
 adapters that cannot consume approvals, idempotency, audit/outbox, or business writes.
 
-## 18. v1 drain inventory and classification
+## 19. v1 drain inventory and classification
 
 PR7-E MUST add a protected production inventory using trusted database state. At minimum it
 reports, grouped without routine user-identifying data:
@@ -574,7 +651,7 @@ Inventory queries are read-only until a separately reviewed expiry/cleanup actio
 approved. The count must be reproducible at an exact release/database snapshot and expose
 query/config version.
 
-## 19. Drain state machine
+## 20. Drain state machine
 
 Pinned v1 conversations are classified as:
 
@@ -605,7 +682,7 @@ Prefer allowing pinned v1 to reach terminal state. A live migration is not requi
 finish PR7 unless a real business deadline makes natural drain impossible and an explicit
 protocol is separately approved.
 
-## 20. Rollback-target transition and legacy retirement gate
+## 21. Rollback-target transition and legacy retirement gate
 
 The project must explicitly distinguish:
 
@@ -613,41 +690,61 @@ The project must explicitly distinguish:
 phase A: v1 remains executable and is the new-traffic rollback target
 phase B: v1 no longer receives new traffic but remains for live pins
 phase C: an approved non-v1 recovery strategy replaces v1 rollback
-phase D: zero live v1 dependency permits retirement review
+phase D: static assignment interlock and stable dynamic zero are proven
+phase E: zero resumable database dependency permits retirement review
 ```
 
 Legacy executable code may be retired only when all are true:
 
-1. 100% of eligible new conversations have used v2 through the R5 observation window;
-2. runtime-switch hard gate remains zero;
-3. the approved rollback strategy no longer requires v1 for new traffic;
-4. zero `LIVE_ACTIVE`, `LIVE_WAITING_CONFIRM`, `LIVE_HANDOVER`, `UNKNOWN`, or otherwise
-   resumable v1 pins remain;
-5. old checkpoint/history retention or archival policy is approved;
-6. production v2 SLOs, real-model, Memory, load, adversarial, and chaos gates pass;
-7. rollback has been exercised successfully;
-8. no unresolved severity blocker exists; and
-9. explicit human approval authorizes retirement.
+1. 100% of eligible new conversations have used v2 through the approved R5 or explicit
+   retirement observation window while representative new traffic remains admitted;
+2. **static interlock:** production selectors, defaults, eligibility failures,
+   tenant/community policy, unsupported API surfaces, dependency-degraded fallbacks, and
+   emergency configuration are structurally/configurationally incapable of returning v1;
+3. **dynamic interlock:** `new_v1_assignment_count == 0` throughout that observation window,
+   not merely at one database snapshot;
+4. **database interlock:** zero `LIVE_ACTIVE`, `LIVE_WAITING_CONFIRM`, `LIVE_HANDOVER`,
+   `UNKNOWN`, or otherwise resumable v1 pin remains;
+5. runtime-switch hard gate remains zero;
+6. the approved rollback strategy no longer requires or configures v1 for new traffic;
+7. old checkpoint/history retention or archival policy is approved;
+8. production v2 SLOs, real-model, Memory, load, adversarial, and chaos gates pass;
+9. rollback has been exercised successfully;
+10. no unresolved severity blocker exists; and
+11. explicit human approval authorizes retirement.
+
+Static, dynamic, and database evidence are all mandatory. Snapshot
+`live_v1_count == 0` alone is never sufficient because an assignment path could create a
+new v1 pin on the next request. At retirement, v1 MUST NOT remain any configured fallback.
+If a new request cannot safely use v2, it follows the separately reviewed non-v1 strategy:
+explicit safe failure, handover, temporary admission stop, or another approved v2 recovery
+path. It MUST NOT silently dispatch retired v1.
+
+After retirement, no request may recreate `runtime_version='v1'`, import/dispatch
+`LegacyGraphEngine`, revive legacy code, or switch an existing runtime. Archived historical
+code/data is not an executable production runtime and cannot be on any import/dispatch path.
 
 CI green is necessary but never sufficient approval.
 
-## 21. Code retirement and data cleanup
+## 22. Code retirement and data cleanup
 
-Legacy code deletion is a separate bounded review after the gate above. It removes the
-custom runtime and v1-only orchestration/compatibility paths only after static and dynamic
-inventory proves no production import or dispatch dependency.
+Legacy code deletion is a separate bounded review after the gate above. “Removed or formally
+retired” means zero executable production import/dispatch dependency and zero possibility
+of assigning a new conversation to v1. Static selector/fallback scans, stable dynamic-zero
+evidence, and database inventory must all pass before custom runtime and v1-only paths go.
 
 Do not combine executable retirement with telemetry, canary control, load harness, or
 large data cleanup. Do not drop `runtime_version`, legacy columns, checkpoints, or history
 merely because code became unused. Data retention/archival/deletion is a later separately
 approved, auditable operation that preserves the rollback and compliance window.
 
-## 22. Implementation slices
+## 23. Implementation slices
 
 PR7 SHOULD proceed as multiple bounded PRs or equivalently reviewable commits:
 
-- **PR7-A — Observability and SLO instrumentation:** exporters, correlation, spans,
-  bounded metrics, readiness components, dashboards/alerts, baseline evidence.
+- **PR7-A — Observability, streaming, and SLO instrumentation:** exporters, correlation,
+  spans, typed presentation events, durability-gated final outcomes, bounded backpressure,
+  reconnect/disconnect semantics, metrics, readiness, dashboards/alerts, baseline evidence.
 - **PR7-B — Production evaluation and resilience gates:** protected real-model holdout,
   Memory gate, production-shaped load, chaos/crash-window drills, adversarial suite.
 - **PR7-C — Canary controls:** server-owned eligibility, deterministic sticky percentage,
@@ -656,13 +753,15 @@ PR7 SHOULD proceed as multiple bounded PRs or equivalently reviewable commits:
   no code deletion.
 - **PR7-E — v1 drain tooling/reporting:** read-only inventory first, then separately
   approved bounded expiry/drain actions.
-- **PR7-F — Legacy retirement:** rollback-target transition approval, zero-live-pin gate,
-  bounded code removal, post-retirement regression. Data cleanup remains separate.
+- **PR7-F — Legacy retirement:** rollback-target transition approval; static no-v1
+  assignment/fallback proof; stable `new_v1_assignment_count == 0`; zero resumable database
+  pins; bounded code removal; non-v1 degraded/admission behavior; post-retirement regression.
+  Data cleanup remains separate.
 
 No slice may create a second lifecycle, business mutation, telemetry identity, or runtime
 pin owner.
 
-## 23. Durable release evidence
+## 24. Durable release evidence
 
 Every promotion, rollback, drain action, and retirement decision records:
 
@@ -672,14 +771,15 @@ Every promotion, rollback, drain action, and retirement decision records:
 - evaluation dataset/result identifiers;
 - SLO observation window, sample size, dashboards, and incidents;
 - hard-gate results;
-- exact v1 drain inventory snapshot where relevant;
+- exact v1 drain inventory plus static no-v1 assignment proof and dynamic
+  `new_v1_assignment_count` observation where relevant;
 - decision, reason, time, and approver; and
 - rollback/recovery result.
 
 CI artifacts and deployment metadata may satisfy this without a new release database if
 they are immutable, discoverable, and tied to the exact release.
 
-## 24. PR7 implementation test/evidence matrix
+## 25. PR7 implementation test/evidence matrix
 
 | Area | Required implementation evidence |
 | --- | --- |
@@ -687,46 +787,54 @@ they are immutable, discoverable, and tied to the exact release.
 | Rollout | Stable cross-process buckets pass 0/5/25/50/100 boundary tests; salt/config and ineligibility behavior affect only new conversations; promotion requires evidence and approval. |
 | Rollback | Zero rollout changes only new eligible traffic; pinned v1/v2 continue from the exact accepted cursor; no pin/checkpoint rewrite or correctness bypass occurs. |
 | Observability/privacy | Correlation spans the required execution chain with bounded labels; exporter degradation is visible; expected outcomes are classified correctly; prohibited raw or secret data is absent. |
+| Streaming | Typed canonical events cover simple read and `WAITING_CONFIRM`; writes cannot complete before durable business plus accepted-head publication; orphan publication failure cannot emit success; disconnect/reconnect preserves canonical state and idempotency; slow-client resources are bounded; privacy gates pass. |
 | SLO/quality/model | Availability and p50/p95/p99 calculations, hard-gate freezes, persisted-runtime cohort comparison, protected configured-model holdout, and explicit `NOT RUN` behavior are tested. |
 | Memory | Degradation and fail-closed behavior, zero leakage gates, Writer/index/reindex metrics, and authority-neutral kill switches are verified. |
 | Load/contention | The production-shaped mix meets frozen sustained/spike targets; same-conversation correctness holds; pool, lease, CAS, lock, approval, and idempotency contention is explained. |
 | Chaos/adversarial | Every drill and critical crash window proves durable/recovery/forbidden outcomes; attacks fail safely; duplicate writes, orphan canonicality, and shadow mutation remain zero. |
-| Drain/retirement | Inventory classifications and counts are reproducible; pending v1 is never inactivity-expired; any live/unknown/waiting pin or rollback dependency blocks retirement; post-retirement scans find no legacy dispatch/import. |
+| Drain/retirement | Inventory classifications and counts are reproducible; pending v1 is never inactivity-expired; static selectors/fallbacks cannot yield v1, dynamic new-v1 assignment remains zero under representative traffic, and database resumable pins are zero; post-retirement behavior cannot assign, import, or dispatch v1. |
 | Full regression | Each slice runs proportional focused tests plus Ruff lint/format, structure, compile/import, `pip check`, OpenAPI drift, full backend, Agent/value gates, real PostgreSQL/pgvector zero-skip, frontend lint/test/build, Compose Playwright, and remote Quality Gates. Retirement reruns the full matrix after deletion. |
 
-## 25. Final exit criteria
+## 26. Final exit criteria
 
 PR7 and the Agent refactor are complete only when:
 
 1. v2 is the persisted default for 100% of eligible new conversations;
 2. no conversation switched runtime mid-lifecycle;
 3. production telemetry covers critical execution paths with safe correlation;
-4. production availability, latency, quality, and safety evidence passes;
-5. the configured real-model holdout and Memory production gates pass;
-6. production-shaped load, contention, adversarial, chaos, and crash-window gates pass;
-7. rollback has been exercised without correctness loss;
-8. no duplicate business write or authority regression is observed;
-9. zero live, waiting, handover, unknown, or otherwise resumable v1 pin remains;
-10. v1 is no longer required by the approved rollback strategy;
-11. legacy retirement has explicit human approval;
-12. legacy executable code is removed or formally retired in a bounded review;
-13. post-retirement local, PostgreSQL, frontend, browser, and remote gates pass; and
-14. the Roadmap records PR1–PR7 as **DONE / MERGED / VERIFIED**.
+4. typed production streaming obeys durability, recovery, backpressure, and privacy gates;
+5. production availability, latency, quality, and safety evidence passes;
+6. the configured real-model holdout and Memory production gates pass;
+7. production-shaped load, contention, adversarial, chaos, and crash-window gates pass;
+8. rollback has been exercised without correctness loss;
+9. no duplicate business write or authority regression is observed;
+10. static assignment/fallback paths cannot return v1 and dynamic new-v1 assignment stays
+    zero through the approved representative-traffic observation window;
+11. zero live, waiting, handover, unknown, or otherwise resumable v1 pin remains;
+12. v1 is neither required nor configured by the approved rollback strategy;
+13. legacy retirement has explicit human approval;
+14. legacy executable code has zero production dispatch/import and zero new-assignment
+    possibility after bounded removal or formal retirement;
+15. post-retirement requests that cannot use v2 follow the approved non-v1 strategy;
+16. post-retirement local, PostgreSQL, frontend, browser, and remote gates pass; and
+17. the Roadmap records PR1–PR7 as **DONE / MERGED / VERIFIED**.
 
 Only then may project status become `REFACTOR_DONE_MERGED_VERIFIED`.
 
-## 26. Stage Contract self-review
+## 27. Stage Contract self-review
 
 Before accepting this contract, reviewers confirm: rollout targets only eligible new
 conversations; all existing and `WAITING_CONFIRM` pins remain immutable; assignment is
 server-owned, deterministic, sticky, and persisted before execution; no untrusted runtime
-authority or shadow mutation exists; promotion requires evidence plus approval; safety
-cannot be traded for availability; telemetry excludes prohibited data; real-model evidence
-cannot be faked; unknown and pending v1 remain live; v1 remains while needed for live pins
-or rollback; code retirement is separate from data cleanup; CI is not retirement approval;
-and this Stage Contract changes documentation only.
+authority, duplicate streaming lifecycle, or shadow mutation exists; promotion requires
+evidence plus approval; safety cannot be traded for availability; telemetry excludes
+prohibited data; real-model evidence cannot be faked; final streamed success follows durable
+business and accepted publication;
+unknown and pending v1 remain live; static, dynamic, and database interlocks all pass before
+v1 retirement; code retirement is separate from data cleanup; CI is not retirement
+approval; and this Stage Contract changes documentation only.
 
-## 27. Document authority and conflict handling
+## 28. Document authority and conflict handling
 
 Architecture guidance is interpreted in this order:
 
