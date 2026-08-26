@@ -30,6 +30,20 @@ jobs:
         run: python testing/agent_harness.py tests/agent/data/controlled_read_cases.json
       - name: Governed Memory paired value gate (PR6)
         run: python testing/memory_value_eval.py tests/agent/data/pr6_memory_value_cases.json
+      - name: PR7-B evidence schema and bounded load harness smoke
+        run: python -m pytest tests/testing/test_pr7b_gates.py tests/platform/test_pr7b_pool_observability.py -q
+      - name: PR7-B safe chaos fault-injection smoke
+        run: python -m testing.pr7b.chaos_gate --campaign safe --output pr7b-chaos-smoke.json
+      - name: PR7-B deterministic adversarial release gate
+        run: python -m testing.pr7b.adversarial_gate --output pr7b-adversarial.json
+      - name: Upload PR7-B deterministic evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr7b-deterministic-${{ github.sha }}
+          path: |
+            pr7b-chaos-smoke.json
+            pr7b-adversarial.json
+          retention-days: 30
 
   postgres:
     runs-on: ubuntu-latest

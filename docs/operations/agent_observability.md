@@ -65,9 +65,12 @@ addresses, phone numbers, graph state, and planner reasoning are not emitted.
 | SSE | `agent_stream_total` (`final`, `failed`, `client_disconnect`, `progress_coalesced`) | `agent_stream_first_event_duration_seconds`, `agent_stream_duration_seconds` |
 | Stream execution | `agent_stream_execution_total`, `agent_stream_active_producers` | `agent_stream_execution_drain_duration_seconds` |
 
-`agent_boundary_duration_seconds` is an additional low-level boundary histogram. Existing
-database-pool instrumentation is reused when supplied by the deployment; PR7-A adds no second
-pool or metrics exporter.
+`agent_boundary_duration_seconds` is an additional low-level boundary histogram. PR7-B
+observes the existing SQLAlchemy pool without configuring or owning it: checkout/checkin,
+current in-use/idle/base-capacity/overflow levels, connection-use duration, invalidation, and
+checkout timeout. SQLAlchemy framework defaults remain defaults rather than a repository
+capacity promise. See `docs/operations/pr7b_certification.md` for the versioned R0 target and
+required client/OTel reconciliation.
 
 DeepSeek physical attempts, retryable outcomes, deterministic fallback use, and the overall
 logical model operation are separate facts. A successful fallback therefore records the primary

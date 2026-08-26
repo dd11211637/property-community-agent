@@ -65,6 +65,7 @@ async def ready(request: Request) -> dict:
         "accepted_head_store": "UP" if accepted_head_up else "DOWN",
         "telemetry": _telemetry_status(request),
         "stream_execution": _stream_execution_status(request),
+        "database_pool": _database_pool_status(request),
         "memory_embedding": _optional_component(request, "agent_memory_embedding_provider"),
         "memory_writer": _optional_component(request, "agent_memory_writer"),
     }
@@ -103,3 +104,10 @@ def _stream_execution_status(request: Request) -> dict[str, object]:
     if registry is None:
         return {"state": "UNAVAILABLE", "active": 0, "capacity": 0}
     return registry.snapshot()
+
+
+def _database_pool_status(request: Request) -> dict[str, object]:
+    observer = getattr(request.app.state, "database_pool_observer", None)
+    if observer is None:
+        return {"state": "UNAVAILABLE"}
+    return observer.snapshot()

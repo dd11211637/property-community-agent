@@ -1,0 +1,126 @@
+name: PR7-B protected certification
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Full commit SHA to certify
+        required: true
+        type: string
+      gate:
+        description: Protected gate to execute
+        required: true
+        default: all
+        type: choice
+        options: [all, real-model, memory, load, chaos]
+      expected_concurrency:
+        description: Versioned R0 preproduction concurrency target
+        required: true
+        default: "8"
+        type: string
+      approved_real_model_baseline:
+        description: Repository path to the frozen approved aggregate baseline JSON
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  certify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: pr7b-certification
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: property_agent_test
+          POSTGRES_USER: property_agent
+          POSTGRES_PASSWORD: test-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U property_agent -d property_agent_test"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      TEST_POSTGRES_URL: postgresql+psycopg://property_agent:test-password@127.0.0.1:5432/property_agent_test
+      DATABASE_URL: postgresql+psycopg://property_agent:test-password@127.0.0.1:5432/property_agent_test
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      MEMORY_EMBEDDING_API_KEY: ${{ secrets.MEMORY_EMBEDDING_API_KEY }}
+      PR7B_BEARER_TOKEN: ${{ secrets.PR7B_BEARER_TOKEN }}
+      PR7B_HOUSE_ID: ${{ vars.PR7B_HOUSE_ID }}
+      PR7B_BASE_URL: ${{ vars.PR7B_BASE_URL }}
+      PR7B_OTEL_SUMMARY_URL: ${{ vars.PR7B_OTEL_SUMMARY_URL }}
+      PR7B_OTEL_SUMMARY_TOKEN: ${{ secrets.PR7B_OTEL_SUMMARY_TOKEN }}
+      PR7B_ENVIRONMENT: protected-preproduction
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+      - name: Reject unresolved, moved, or dirty certification checkout
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$(git rev-parse '${{ inputs.release_sha }}^{commit}')"
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+          git rev-parse HEAD | tee certified-sha.txt
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install ".[dev]"
+      - name: Prepare dedicated PostgreSQL and official LangGraph saver
+        run: |
+          alembic upgrade head
+          python scripts/setup_langgraph_checkpointer.py
+      - name: Protected real-model holdout
+        if: inputs.gate == 'all' || inputs.gate == 'real-model'
+        run: |
+          python -m testing.pr7b.real_model_gate --sha "${{ inputs.release_sha }}" --approved-baseline "${{ inputs.approved_real_model_baseline }}" --output artifacts/real-model.json
+          python -c "import json; assert json.load(open('artifacts/real-model.json'))['status'] == 'PASS'"
+      - name: Protected Memory gate
+        if: inputs.gate == 'all' || inputs.gate == 'memory'
+        run: |
+          python -m testing.pr7b.memory_gate --sha "${{ inputs.release_sha }}" --server-observability-url "$PR7B_OTEL_SUMMARY_URL" --output artifacts/memory.json
+          python -c "import json; assert json.load(open('artifacts/memory.json'))['status'] == 'PASS'"
+      - name: Full 30m plus 10m R0 load profile
+        if: inputs.gate == 'all' || inputs.gate == 'load'
+        run: |
+          python -m testing.pr7b.load_gate --base-url "$PR7B_BASE_URL" --environment preproduction --expected-concurrency "${{ inputs.expected_concurrency }}" --sustained-seconds 1800 --spike-seconds 600 --allow-writes --sha "${{ inputs.release_sha }}" --server-observability-url "$PR7B_OTEL_SUMMARY_URL" --output artifacts/load.json
+          python -c "import json; assert json.load(open('artifacts/load.json'))['status'] == 'PASS'"
+      - name: Full C1-C12 chaos and process-death campaign
+        if: inputs.gate == 'all' || inputs.gate == 'chaos'
+        run: >-
+          python -m testing.pr7b.chaos_gate
+          --campaign full
+          --sha "${{ inputs.release_sha }}"
+          --server-observability-url "$PR7B_OTEL_SUMMARY_URL"
+          --output artifacts/chaos.json
+      - name: Deterministic adversarial release gate
+        if: inputs.gate == 'all'
+        run: >-
+          python -m testing.pr7b.adversarial_gate
+          --sha "${{ inputs.release_sha }}"
+          --output artifacts/adversarial.json
+      - name: Build bounded R0 exact-SHA baseline artifact
+        if: always()
+        run: |
+          args=()
+          for path in artifacts/real-model.json artifacts/memory.json artifacts/load.json artifacts/chaos.json artifacts/adversarial.json; do
+            if test -f "$path"; then args+=(--evidence "$path"); fi
+          done
+          python -m testing.pr7b.baseline --sha "${{ inputs.release_sha }}" "${args[@]}" --output artifacts/r0-baseline.json
+      - name: Upload immutable exact-SHA evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr7b-${{ inputs.gate }}-${{ inputs.release_sha }}
+          path: |
+            artifacts/*.json
+            certified-sha.txt
+          if-no-files-found: error
+          retention-days: 90
