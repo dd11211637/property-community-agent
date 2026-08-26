@@ -34,6 +34,11 @@ def test_existing_queue_pool_emits_checkout_checkin_usage_and_capacity_without_r
     assert snapshot["timeout_total"] == 1
     assert snapshot["base_capacity"] == 2
     assert snapshot["overflow_allowance"] == 1
+    assert snapshot["timeout_observation_scope"] == "fastapi_sync_dependency_only"
+    assert (
+        snapshot["timeout_observation_limitation"]
+        == "direct_session_factory_and_async_pool_timeouts_not_counted"
+    )
     assert engine.pool.size() == 2
     assert engine.pool._max_overflow == 1
     engine.dispose()

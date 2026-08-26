@@ -21,7 +21,7 @@ baseline, and only then fails the workflow unless every selected gate is `PASS`.
 Operator entry points:
 
 ```text
-python -m testing.pr7b.real_model_gate --sha <full-sha> --approved-baseline <approved-aggregate.json> --output artifacts/real-model.json
+python -m testing.pr7b.real_model_gate --sha <full-sha> --approved-baseline config/pr7b_real_model_approved_baseline_v1.json --output artifacts/real-model.json
 python -m testing.pr7b.memory_gate --sha <full-sha> --server-observability-url <collector-summary-url> --output artifacts/memory.json
 python -m testing.pr7b.load_gate --base-url <url> --environment preproduction --expected-concurrency 8 --sustained-seconds 1800 --spike-seconds 600 --allow-writes --sha <full-sha> --server-observability-url <collector-summary-url> --output artifacts/load.json
 python -m testing.pr7b.chaos_gate --campaign full --sha <full-sha> --server-observability-url <collector-summary-url> --output artifacts/chaos.json
@@ -49,7 +49,13 @@ The bounded target is derived from current Compose and runtime facts:
 
 The target is an explicit CLI input. The harness bounds concurrency, conversations,
 requests, writes, duration, per-request timeout, and global infrastructure-failure abort.
-Write-capable traffic requires the explicit `isolated-test` or `preproduction` marker.
+Before its first write-capable request, the runner calls the authenticated server-owned
+`GET /api/certification/identity` endpoint. The endpoint must report an
+`isolated-test` or `preproduction` deployment, the exact requested release SHA, and
+`certification_write_enabled=true`. Missing/unauthorized identity, an unknown or production
+environment, a SHA mismatch, or the production-default disabled flag fails closed before
+conversation setup or any business write. The CLI environment marker is descriptive only and
+is not trusted as proof of the remote target.
 The full gate is at least 30 minutes at R0 followed by at least 10 minutes at 2x R0. A
 short test is only `HARNESS_SMOKE=PASS` and can never yield `LOAD_GATE=PASS`.
 The full gate also requires an exact-SHA server observability summary. The summary endpoint
@@ -79,26 +85,38 @@ creating another pool:
 
 SQLAlchemy does not expose a portable checkout-start event, so the repository does not
 mislabel connection-hold duration as checkout wait. Pool timeout is measured at the FastAPI
-session boundary; client latency and OTel totals must be reconciled in load evidence.
+sync-session dependency boundary; client latency and OTel totals must be reconciled in load
+evidence. Production Agent/Application Service UoWs can acquire sessions directly from the
+shared factory, and readiness uses a separate async engine, so their checkout timeouts are not
+included in `timeout_total`. `/ready` exposes this limitation explicitly; no all-path timeout
+coverage is claimed and pool sizing is unchanged.
 
 ## Gate boundaries
 
 - The real-model holdout expands to exactly 100 versioned cases and goes through the
   production DeepSeek/Fallback/Observed gateway plus `SupervisorPlanner`. Aggregates retain
-  primary-provider attempts separately from logical fallback outcomes. PASS also requires a
-  frozen, human-approved aggregate baseline, and reports absolute deltas for task completion,
-  clarification, handover, and unsafe selection without storing prompts or case text.
+  primary-provider attempts separately from logical fallback outcomes. Every case declares its
+  allowed capabilities, forbidden capabilities, and read/write risk posture; any unexpected
+  dangerous write is unsafe. PASS also requires the exact path and SHA-256 in the committed
+  baseline approval manifest to be `APPROVED`; arbitrary JSON paths cannot become a comparison
+  baseline. The committed manifest remains `PENDING` until human approval. Planner hard gates
+  cover only configured-provider/SupervisorPlanner evidence and never claim mutation-level
+  idempotency, approval atomicity, fence, or accepted-head evidence.
 - The Memory gate extends the PR6 paired evaluator, raises precision to 0.80, measures
   retrieval p50/p95/p99, probes the configured external embedding in a dedicated `*_test`
   PostgreSQL database, and measures configured model/version coverage and backlog age. Its
   exact-window server summary records Writer extraction/persistence, embedding, index, reindex,
   degradation-reason, and fallback-mode signals; missing server evidence is `NOT_RUN`.
-- The chaos campaign has C1-C12 evidence. C7 and C8 cross a real subprocess boundary;
-  exception-only tests are not presented as process-death evidence. Full PASS also requires
-  an exact-window server telemetry signal for every injected case.
-- The versioned adversarial manifest reuses production validators, authority seams, approval/fence,
-  accepted-head, Memory, privacy, and idempotency tests. A confirmed hard-zero violation
-  fails the gate rather than being averaged into a score.
+- The chaos campaign has an explicit C1-C12 manifest. Each drill independently binds exact
+  pytest nodes, execution status, durable DB, accepted-head, checkpoint, Memory assertions,
+  and required telemetry. C8 requires both the lower-layer subprocess commit/replay case and
+  the Agent confirmed-write delivery-loss recovery case. Full PASS requires every drill and
+  its exact-window telemetry signal to pass.
+- The versioned adversarial manifest maps every case to exact pytest nodes, hard gates, and an
+  expected safe invariant. Each case is executed and classified independently as PASS, FAIL,
+  or NOT_RUN; a hard gate passes only when all mapped cases pass, and missing/unmapped required
+  threats prevent full PASS. Duplicate HTTP and business-idempotency threats use their actual
+  duplicate/replay tests rather than stale-fence coverage.
 
 Long or credentialed gates are manual. Normal pull-request CI verifies schemas/CLIs, a
 bounded load smoke, safe fault injection, deterministic adversarial cases, and the existing

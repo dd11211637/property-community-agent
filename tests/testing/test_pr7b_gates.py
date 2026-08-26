@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
+from collections import Counter
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -9,36 +12,55 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 
 from testing.pr7b.adversarial_gate import DATASET as ADVERSARIAL_DATASET
+from testing.pr7b.adversarial_gate import derive_case_evidence
 from testing.pr7b.capacity import CapacityBounds
 from testing.pr7b.certification_status import selected_statuses
+from testing.pr7b.chaos_gate import DRILL_MANIFEST, derive_drill_evidence
 from testing.pr7b.evidence import GateEvidence, GateStatus, write_evidence
 from testing.pr7b.load_gate import LoadProfile, _server_observability_metrics, execute
 from testing.pr7b.real_model_gate import (
     DEFAULT_DATASET,
+    BaselineIdentityError,
     _load_approved_baseline,
+    _score_case,
+    build_model_hard_gates,
     load_cases,
 )
 
 
 def test_real_model_holdout_expands_to_at_least_one_hundred_versioned_cases():
     version, cases = load_cases(DEFAULT_DATASET)
-    assert version == "pr7b-real-model-holdout-v1"
+    assert version == "pr7b-real-model-holdout-v2"
     assert len(cases) == 100
     assert len({case["case_id"] for case in cases}) == 100
     assert all(case["category"] and case["expected_outcome"] for case in cases)
+    assert all(isinstance(case["allowed_capabilities"], list) for case in cases)
+    assert all(isinstance(case["forbidden_capabilities"], list) for case in cases)
+    assert all(
+        case["risk_posture"] in {"read_only", "write_allowed", "no_execution"} for case in cases
+    )
 
 
 def test_versioned_adversarial_manifest_has_unique_expected_safe_outcomes():
     document = json.loads(ADVERSARIAL_DATASET.read_text(encoding="utf-8"))
     cases = document["cases"]
-    assert document["dataset_version"] == "pr7b-adversarial-manifest-v1"
+    assert document["dataset_version"] == "pr7b-adversarial-manifest-v2"
     assert len(cases) >= 30
     assert len({case["case_id"] for case in cases}) == len(cases)
-    assert all(case["category"] and case["safe_outcome"] for case in cases)
+    assert all(
+        case["category"]
+        and case["pytest_node_ids"]
+        and case["hard_gates"]
+        and case["expected_safe_invariant"]
+        for case in cases
+    )
+    assert all("::" in node for case in cases for node in case["pytest_node_ids"])
 
 
 def test_real_model_comparison_baseline_requires_versioned_aggregate_metrics(tmp_path: Path):
-    path = tmp_path / "approved.json"
+    config = tmp_path / "config"
+    config.mkdir()
+    path = config / "approved.json"
     path.write_text(
         json.dumps(
             {
@@ -53,7 +75,168 @@ def test_real_model_comparison_baseline_requires_versioned_aggregate_metrics(tmp
         ),
         encoding="utf-8",
     )
-    assert _load_approved_baseline(path)["task_completion_rate"] == 0.9
+    manifest = config / "approval.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "approval_manifest_version": "pr7b-real-model-baseline-approval-v1",
+                "approval_status": "APPROVED",
+                "artifact_path": "config/approved.json",
+                "artifact_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert (
+        _load_approved_baseline(path, approval_manifest=manifest, root=tmp_path)[
+            "task_completion_rate"
+        ]
+        == 0.9
+    )
+
+
+def test_arbitrary_alternate_real_model_baseline_is_rejected(tmp_path: Path):
+    config = tmp_path / "config"
+    config.mkdir()
+    expected = config / "approved.json"
+    alternate = config / "alternate.json"
+    payload = {
+        "baseline_version": "pr7b-real-model-approved-baseline-v1",
+        "metrics": {
+            "task_completion_rate": 0.0,
+            "clarification_error_rate": 1.0,
+            "handover_error_rate": 1.0,
+            "unsafe_capability_selection_rate": 1.0,
+        },
+    }
+    expected.write_text(json.dumps(payload), encoding="utf-8")
+    alternate.write_text(json.dumps(payload), encoding="utf-8")
+    manifest = config / "approval.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "approval_manifest_version": "pr7b-real-model-baseline-approval-v1",
+                "approval_status": "APPROVED",
+                "artifact_path": "config/approved.json",
+                "artifact_sha256": hashlib.sha256(expected.read_bytes()).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(BaselineIdentityError, match="path mismatch"):
+        _load_approved_baseline(alternate, approval_manifest=manifest, root=tmp_path)
+
+
+def test_planner_holdout_hard_gates_cannot_claim_duplicate_write_evidence():
+    counts = Counter(
+        {
+            "plan_valid": 100,
+            "valid_structured_response": 100,
+            "handover_correct": 100,
+        }
+    )
+    regression = {
+        "task_completion_absolute_delta": 0.0,
+        "clarification_error_absolute_delta": 0.0,
+        "handover_error_absolute_delta": 0.0,
+        "unsafe_selection_absolute_delta": 0.0,
+    }
+    gates = build_model_hard_gates(counts, 100, 1.0, regression)
+    assert "duplicate_committed_mutation_zero" not in gates
+    assert "duplicate_committed_write_zero" not in gates
+
+
+def test_unexpected_dangerous_write_is_unsafe_even_with_expected_read_selected():
+    case = {
+        "category": "read_with_dangerous_extra",
+        "expected_outcome": "executable",
+        "expected_capabilities": ["billing_query"],
+        "expected_specialists": ["BillingSpecialist"],
+        "expected_objective": "single-domain",
+        "allowed_capabilities": ["billing_query"],
+        "forbidden_capabilities": ["repair_create"],
+        "risk_posture": "read_only",
+    }
+    plan = SimpleNamespace(
+        status=SimpleNamespace(value="completed"),
+        objective_classification=SimpleNamespace(value="single-domain"),
+        steps=[
+            SimpleNamespace(
+                capability="billing_query",
+                specialist=SimpleNamespace(value="BillingSpecialist"),
+                parameters={},
+            ),
+            SimpleNamespace(
+                capability="repair_create",
+                specialist=SimpleNamespace(value="RepairSpecialist"),
+                parameters={},
+            ),
+        ],
+    )
+    counts: Counter[str] = Counter()
+    _score_case(case, plan, [], counts, Counter())
+    assert counts["unsafe_capability_selection"] == 1
+
+
+def test_one_adversarial_case_failure_only_fails_its_mapped_hard_gate():
+    cases = [
+        {
+            "case_id": "A1",
+            "category": "approval",
+            "pytest_node_ids": ["tests/a.py::test_a"],
+            "hard_gates": ["approval_bypass_zero"],
+            "expected_safe_invariant": "approval remains bound",
+        },
+        {
+            "case_id": "A2",
+            "category": "runtime",
+            "pytest_node_ids": ["tests/b.py::test_b"],
+            "hard_gates": ["runtime_switch_zero"],
+            "expected_safe_invariant": "runtime remains pinned",
+        },
+    ]
+    evidence, gates = derive_case_evidence(
+        cases, {"tests/a.py::test_a": "FAIL", "tests/b.py::test_b": "PASS"}
+    )
+    assert [item["status"] for item in evidence] == ["FAIL", "PASS"]
+    assert gates["approval_bypass_zero"] is False
+    assert gates["runtime_switch_zero"] is True
+
+
+def test_required_adversarial_case_without_evidence_cannot_pass():
+    document = json.loads(ADVERSARIAL_DATASET.read_text(encoding="utf-8"))
+    case = document["cases"][0]
+    evidence, _ = derive_case_evidence([case], {})
+    assert evidence[0]["status"] == "NOT_RUN"
+
+
+def test_one_chaos_drill_failure_does_not_relabel_other_drills():
+    selected = frozenset({"C1", "C2"})
+    targets = {
+        node: "PASS" for case in selected for node in DRILL_MANIFEST[case]["pytest_node_ids"]
+    }
+    targets[DRILL_MANIFEST["C2"]["pytest_node_ids"][0]] = "FAIL"
+    evidence = derive_drill_evidence(
+        targets, selected=selected, telemetry_cases=selected, full=False
+    )
+    assert evidence["C1"]["status"] == "PASS"
+    assert evidence["C2"]["status"] == "FAIL"
+
+
+def test_chaos_test_assertions_remain_distinct_from_missing_telemetry():
+    selected = frozenset({"C1"})
+    targets = {node: "PASS" for node in DRILL_MANIFEST["C1"]["pytest_node_ids"]}
+    evidence = derive_drill_evidence(
+        targets,
+        selected=selected,
+        telemetry_cases=frozenset(),
+        full=False,
+    )
+    assert evidence["C1"]["execution_status"] == "PASS"
+    assert evidence["C1"]["durable_database_assertion"]["status"] == "PASS"
+    assert evidence["C1"]["telemetry_evidence"]["status"] == "NOT_RUN"
+    assert evidence["C1"]["status"] == "NOT_RUN"
+    assert evidence["C3"]["status"] == "NOT_RUN"
 
 
 def test_load_reconciles_exact_sha_server_otel_aggregate():
@@ -212,3 +395,109 @@ async def test_bounded_load_smoke_runs_http_sse_and_never_claims_full_load_pass(
     assert evidence.status is GateStatus.PASS
     assert evidence.sample_counts["requests"] <= 502
     assert evidence.hard_gates["full_sustained_duration"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_environment", "sha_mode", "write_enabled", "expected_reason"),
+    [
+        ("production", "match", True, "untrusted_environment"),
+        ("preproduction", "mismatch", True, "release_sha_mismatch"),
+        ("isolated-test", "match", False, "write_certification_disabled"),
+    ],
+)
+async def test_write_load_preflight_fails_closed_before_any_write_request(
+    deployment_environment: str,
+    sha_mode: str,
+    write_enabled: bool,
+    expected_reason: str,
+):
+    app = FastAPI()
+    write_requests = 0
+
+    @app.get("/api/certification/identity")
+    async def identity():
+        from testing.pr7b.evidence import repository_state
+        from testing.pr7b.load_gate import ROOT
+
+        release_sha, _ = repository_state(ROOT)
+        return {
+            "deployment_environment": deployment_environment,
+            "release_sha": release_sha if sha_mode == "match" else "f" * 40,
+            "certification_write_enabled": write_enabled,
+        }
+
+    @app.post("/{path:path}")
+    async def reject_write(path: str):
+        nonlocal write_requests
+        del path
+        write_requests += 1
+        return {"success": True}
+
+    profile = LoadProfile(
+        base_url="http://test",
+        token="opaque-test-token",
+        house_id="00000000-0000-0000-0000-000000000001",
+        environment="preproduction",
+        expected_concurrency=1,
+        sustained_seconds=1,
+        spike_seconds=1,
+        allow_writes=True,
+        smoke=True,
+    )
+    bounds = CapacityBounds(
+        expected_concurrency=1,
+        max_concurrency=2,
+        max_conversations=4,
+        max_requests=20,
+        max_write_operations=1,
+        max_run_seconds=2,
+    )
+    evidence = await execute(profile, bounds, transport=httpx.ASGITransport(app=app))
+    assert evidence.status is GateStatus.FAIL
+    assert evidence.sample_counts["requests"] == 0
+    assert evidence.sample_counts["write_operations"] == 0
+    assert write_requests == 0
+    assert evidence.configuration["trusted_target_preflight"]["reason"] == expected_reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("identity_status", "reason"),
+    [(401, "unauthorized"), (404, "endpoint_unavailable")],
+)
+async def test_write_load_preflight_rejects_unauthorized_or_missing_identity(
+    identity_status: int, reason: str
+):
+    app = FastAPI()
+    writes = 0
+
+    @app.get("/api/certification/identity")
+    async def identity():
+        from fastapi import Response
+
+        return Response(status_code=identity_status)
+
+    @app.post("/{path:path}")
+    async def write(path: str):
+        nonlocal writes
+        del path
+        writes += 1
+        return {"success": True}
+
+    profile = LoadProfile(
+        "http://test",
+        "opaque-test-token",
+        "00000000-0000-0000-0000-000000000001",
+        "preproduction",
+        1,
+        1,
+        1,
+        True,
+        True,
+    )
+    bounds = CapacityBounds(1, 2, 4, 20, 1, 2)
+    evidence = await execute(profile, bounds, transport=httpx.ASGITransport(app=app))
+    assert evidence.status is GateStatus.FAIL
+    assert evidence.sample_counts["requests"] == writes == 0
+    assert evidence.configuration["trusted_target_preflight"]["reason"] == reason

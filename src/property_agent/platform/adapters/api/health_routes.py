@@ -12,8 +12,13 @@ Response format follows Kubernetes probe conventions:
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
+from property_agent.config import settings
+from property_agent.platform.adapters.api.dependencies import (
+    RequestContext,
+    get_current_user,
+)
 from property_agent.platform.container import (
     are_services_configured,
     check_database_health,
@@ -36,6 +41,18 @@ async def health() -> dict[str, str]:
     queries or external network calls are performed.
     """
     return {"status": "UP"}
+
+
+@router.get("/api/certification/identity")
+async def certification_identity(
+    _context: RequestContext = Depends(get_current_user),  # noqa: B008
+) -> dict[str, str | bool]:
+    """Return bounded server-owned deployment identity for write certification preflight."""
+    return {
+        "deployment_environment": settings.deployment_environment,
+        "release_sha": settings.release_sha,
+        "certification_write_enabled": settings.certification_write_enabled,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -1,0 +1,6 @@
+{
+  "approval_manifest_version": "pr7b-real-model-baseline-approval-v1",
+  "approval_status": "PENDING",
+  "artifact_path": "config/pr7b_real_model_approved_baseline_v1.json",
+  "artifact_sha256": ""
+}

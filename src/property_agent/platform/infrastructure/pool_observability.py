@@ -113,6 +113,10 @@ class DatabasePoolObserver:
             }
         snapshot = {
             "state": "OBSERVED",
+            "timeout_observation_scope": "fastapi_sync_dependency_only",
+            "timeout_observation_limitation": (
+                "direct_session_factory_and_async_pool_timeouts_not_counted"
+            ),
             **counters,
             "current_in_use": max(0, _pool_value(self._pool, "checkedout") or 0),
             "current_idle": max(0, _pool_value(self._pool, "checkedin") or 0),

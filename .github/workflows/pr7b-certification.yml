@@ -19,7 +19,7 @@ on:
         default: "8"
         type: string
       approved_real_model_baseline:
-        description: Repository path to the frozen approved aggregate baseline JSON
+        description: Must equal the path and SHA-256 frozen by the committed approval manifest
         required: false
         type: string
 

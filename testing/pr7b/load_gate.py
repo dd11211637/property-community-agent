@@ -31,6 +31,7 @@ from testing.pr7b.evidence import (
 ROOT = Path(__file__).resolve().parents[2]
 _WRITE_ENVIRONMENTS = frozenset({"isolated-test", "preproduction"})
 _EXPECTED_OUTCOMES = frozenset({200, 409, 422, 429, 503})
+_CERTIFICATION_IDENTITY_PATH = "/api/certification/identity"
 
 
 @dataclass(slots=True)
@@ -70,6 +71,8 @@ async def execute(
     release_sha, dirty = repository_state(ROOT, requested_sha)
     _validate_target(profile, bounds)
     stats = LoadStats()
+    preflight_reason = ""
+    target_identity: dict[str, str | bool] = {}
     headers = {"Authorization": f"Bearer {profile.token}"}
     timeout = httpx.Timeout(bounds.request_timeout_seconds)
     limits = httpx.Limits(
@@ -83,46 +86,56 @@ async def execute(
         limits=limits,
         transport=transport,
     ) as client:
-        pool_before = await _pool_snapshot(client)
-        run_id = uuid4().hex
-        shared_conversation = f"pr7b-{run_id}-shared"
-        await _request(
-            client,
-            "POST",
-            f"/api/agent/conversations/{shared_conversation}/messages",
-            "shared_conversation_start",
-            "setup",
-            stats,
-            _read_payload(profile),
-        )
-        await _phase(
-            client,
-            profile,
-            bounds,
-            stats,
-            duration=profile.sustained_seconds,
-            concurrency=profile.expected_concurrency,
-            phase="sustained",
-            run_id=run_id,
-            shared_conversation=shared_conversation,
-        )
-        if not stats.abort_reason:
+        if profile.allow_writes:
+            preflight_reason, target_identity = await _trusted_write_target_preflight(
+                client, release_sha
+            )
+        if preflight_reason:
+            stats.abort_reason = f"trusted write target preflight failed: {preflight_reason}"
+            pool_before: dict[str, Any] = {}
+            pool_after: dict[str, Any] = {}
+        else:
+            pool_before = await _pool_snapshot(client)
+            run_id = uuid4().hex
+            shared_conversation = f"pr7b-{run_id}-shared"
+            await _request(
+                client,
+                "POST",
+                f"/api/agent/conversations/{shared_conversation}/messages",
+                "shared_conversation_start",
+                "setup",
+                stats,
+                _read_payload(profile),
+            )
             await _phase(
                 client,
                 profile,
                 bounds,
                 stats,
-                duration=profile.spike_seconds,
-                concurrency=profile.expected_concurrency * 2,
-                phase="spike",
+                duration=profile.sustained_seconds,
+                concurrency=profile.expected_concurrency,
+                phase="sustained",
                 run_id=run_id,
                 shared_conversation=shared_conversation,
             )
-        pool_after = await _pool_snapshot(client)
+            if not stats.abort_reason:
+                await _phase(
+                    client,
+                    profile,
+                    bounds,
+                    stats,
+                    duration=profile.spike_seconds,
+                    concurrency=profile.expected_concurrency * 2,
+                    phase="spike",
+                    run_id=run_id,
+                    shared_conversation=shared_conversation,
+                )
+            pool_after = await _pool_snapshot(client)
     total = sum(value for key, value in stats.totals.items() if key.endswith(":request"))
     failure_rate = stats.infrastructure_failures / max(1, total)
     full_duration = profile.sustained_seconds >= 1_800 and profile.spike_seconds >= 600
     hard_gates = {
+        "trusted_write_target_preflight": not preflight_reason,
         "bounded_without_global_abort": not stats.abort_reason,
         "infrastructure_success_at_least_0_995": failure_rate <= 0.005,
         "full_sustained_duration": stats.phase_elapsed.get("sustained", 0.0) >= 1_799,
@@ -149,7 +162,9 @@ async def execute(
         status = GateStatus.PASS if not stats.abort_reason else GateStatus.FAIL
     else:
         gate = "LOAD_GATE"
-        if dirty or not server_evidence_ok:
+        if preflight_reason:
+            status = GateStatus.FAIL
+        elif dirty or not server_evidence_ok:
             status = GateStatus.NOT_RUN
         else:
             status = (
@@ -170,7 +185,16 @@ async def execute(
         environment=profile.environment,
         started_at=started,
         ended_at=utc_now(),
-        configuration={**r0_metadata(profile.expected_concurrency), "smoke": profile.smoke},
+        configuration={
+            **r0_metadata(profile.expected_concurrency),
+            "smoke": profile.smoke,
+            "trusted_target_preflight": {
+                "required": profile.allow_writes,
+                "status": "FAIL" if preflight_reason else "PASS",
+                "reason": preflight_reason,
+                **target_identity,
+            },
+        },
         sample_counts={
             "requests": total,
             "infrastructure_failures": stats.infrastructure_failures,
@@ -454,6 +478,37 @@ def _read_payload(profile: LoadProfile, *, multi: bool = False) -> dict[str, Any
         "house_id": profile.house_id,
         "slots": {},
     }
+
+
+async def _trusted_write_target_preflight(
+    client: httpx.AsyncClient, release_sha: str
+) -> tuple[str, dict[str, str | bool]]:
+    try:
+        response = await client.get(_CERTIFICATION_IDENTITY_PATH)
+    except httpx.HTTPError:
+        return "endpoint_unavailable", {}
+    if response.status_code in {401, 403}:
+        return "unauthorized", {}
+    if response.status_code != 200:
+        return "endpoint_unavailable", {}
+    try:
+        document = response.json()
+    except ValueError:
+        return "invalid_response", {}
+    if not isinstance(document, dict):
+        return "invalid_response", {}
+    identity = {
+        "deployment_environment": str(document.get("deployment_environment", "")),
+        "release_sha": str(document.get("release_sha", "")),
+        "certification_write_enabled": document.get("certification_write_enabled") is True,
+    }
+    if identity["deployment_environment"] not in _WRITE_ENVIRONMENTS:
+        return "untrusted_environment", {}
+    if identity["release_sha"] != release_sha:
+        return "release_sha_mismatch", {}
+    if not identity["certification_write_enabled"]:
+        return "write_certification_disabled", identity
+    return "", identity
 
 
 def _write_payload(profile: LoadProfile) -> dict[str, Any]:
