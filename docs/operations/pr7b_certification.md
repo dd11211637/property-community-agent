@@ -14,7 +14,9 @@ are distinct. Evidence from an older SHA is stale as soon as branch HEAD moves.
 The protected `PR7-B protected certification` workflow checks out the requested SHA,
 rejects a moved or dirty checkout, runs against the `pr7b-certification` GitHub Environment,
 and uploads immutable artifacts. Missing credentials produce `NOT_RUN`; they never select
-the deterministic provider as real-model evidence.
+the deterministic provider as real-model evidence. An `all` dispatch attempts every selected
+gate even when an earlier gate is `FAIL` or `NOT_RUN`, builds and uploads the complete bounded
+baseline, and only then fails the workflow unless every selected gate is `PASS`.
 
 Operator entry points:
 

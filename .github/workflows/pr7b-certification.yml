@@ -79,21 +79,25 @@ jobs:
           python scripts/setup_langgraph_checkpointer.py
       - name: Protected real-model holdout
         if: inputs.gate == 'all' || inputs.gate == 'real-model'
+        continue-on-error: true
         run: |
           python -m testing.pr7b.real_model_gate --sha "${{ inputs.release_sha }}" --approved-baseline "${{ inputs.approved_real_model_baseline }}" --output artifacts/real-model.json
           python -c "import json; assert json.load(open('artifacts/real-model.json'))['status'] == 'PASS'"
       - name: Protected Memory gate
         if: inputs.gate == 'all' || inputs.gate == 'memory'
+        continue-on-error: true
         run: |
           python -m testing.pr7b.memory_gate --sha "${{ inputs.release_sha }}" --server-observability-url "$PR7B_OTEL_SUMMARY_URL" --output artifacts/memory.json
           python -c "import json; assert json.load(open('artifacts/memory.json'))['status'] == 'PASS'"
       - name: Full 30m plus 10m R0 load profile
         if: inputs.gate == 'all' || inputs.gate == 'load'
+        continue-on-error: true
         run: |
           python -m testing.pr7b.load_gate --base-url "$PR7B_BASE_URL" --environment preproduction --expected-concurrency "${{ inputs.expected_concurrency }}" --sustained-seconds 1800 --spike-seconds 600 --allow-writes --sha "${{ inputs.release_sha }}" --server-observability-url "$PR7B_OTEL_SUMMARY_URL" --output artifacts/load.json
           python -c "import json; assert json.load(open('artifacts/load.json'))['status'] == 'PASS'"
       - name: Full C1-C12 chaos and process-death campaign
         if: inputs.gate == 'all' || inputs.gate == 'chaos'
+        continue-on-error: true
         run: >-
           python -m testing.pr7b.chaos_gate
           --campaign full
@@ -102,6 +106,7 @@ jobs:
           --output artifacts/chaos.json
       - name: Deterministic adversarial release gate
         if: inputs.gate == 'all'
+        continue-on-error: true
         run: >-
           python -m testing.pr7b.adversarial_gate
           --sha "${{ inputs.release_sha }}"
@@ -124,3 +129,9 @@ jobs:
             certified-sha.txt
           if-no-files-found: error
           retention-days: 90
+      - name: Enforce selected certification PASS after evidence upload
+        if: always()
+        run: >-
+          python -m testing.pr7b.certification_status
+          --baseline artifacts/r0-baseline.json
+          --gate "${{ inputs.gate }}"

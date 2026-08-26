@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 
 from testing.pr7b.adversarial_gate import DATASET as ADVERSARIAL_DATASET
 from testing.pr7b.capacity import CapacityBounds
+from testing.pr7b.certification_status import selected_statuses
 from testing.pr7b.evidence import GateEvidence, GateStatus, write_evidence
 from testing.pr7b.load_gate import LoadProfile, _server_observability_metrics, execute
 from testing.pr7b.real_model_gate import (
@@ -140,6 +141,30 @@ def test_evidence_output_is_machine_readable_and_status_is_explicit(tmp_path: Pa
     path = tmp_path / "evidence.json"
     write_evidence(path, evidence)
     assert json.loads(path.read_text(encoding="utf-8"))["status"] == "NOT_RUN"
+
+
+def test_protected_all_selection_reports_every_gate_without_short_circuiting():
+    document = {
+        "gates": {
+            "REAL_MODEL_GATE": {"status": "NOT_RUN"},
+            "MEMORY_GATE": {"status": "PASS"},
+            "LOAD_GATE": {"status": "NOT_RUN"},
+            "CHAOS_GATE": {"status": "PASS"},
+            "ADVERSARIAL_GATE": {"status": "PASS"},
+        }
+    }
+
+    assert selected_statuses(document, "all") == {
+        "REAL_MODEL_GATE": "NOT_RUN",
+        "MEMORY_GATE": "PASS",
+        "LOAD_GATE": "NOT_RUN",
+        "CHAOS_GATE": "PASS",
+        "ADVERSARIAL_GATE": "PASS",
+    }
+
+
+def test_protected_selection_treats_missing_evidence_as_not_run():
+    assert selected_statuses({"gates": {}}, "load") == {"LOAD_GATE": "NOT_RUN"}
 
 
 @pytest.mark.asyncio
