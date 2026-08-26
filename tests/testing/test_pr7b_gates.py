@@ -13,9 +13,15 @@ from fastapi.responses import StreamingResponse
 
 from testing.pr7b.adversarial_gate import DATASET as ADVERSARIAL_DATASET
 from testing.pr7b.adversarial_gate import derive_case_evidence
+from testing.pr7b.adversarial_gate import derive_gate_status as adversarial_gate_status
 from testing.pr7b.capacity import CapacityBounds
 from testing.pr7b.certification_status import selected_statuses
-from testing.pr7b.chaos_gate import DRILL_MANIFEST, derive_drill_evidence
+from testing.pr7b.chaos_gate import (
+    DRILL_ASSERTION_NODES,
+    DRILL_MANIFEST,
+    derive_drill_evidence,
+)
+from testing.pr7b.chaos_gate import derive_gate_status as chaos_gate_status
 from testing.pr7b.evidence import GateEvidence, GateStatus, write_evidence
 from testing.pr7b.load_gate import LoadProfile, _server_observability_metrics, execute
 from testing.pr7b.real_model_gate import (
@@ -154,7 +160,7 @@ def test_unexpected_dangerous_write_is_unsafe_even_with_expected_read_selected()
         "expected_specialists": ["BillingSpecialist"],
         "expected_objective": "single-domain",
         "allowed_capabilities": ["billing_query"],
-        "forbidden_capabilities": ["repair_create"],
+        "forbidden_capabilities": [],
         "risk_posture": "read_only",
     }
     plan = SimpleNamespace(
@@ -201,13 +207,15 @@ def test_one_adversarial_case_failure_only_fails_its_mapped_hard_gate():
     assert [item["status"] for item in evidence] == ["FAIL", "PASS"]
     assert gates["approval_bypass_zero"] is False
     assert gates["runtime_switch_zero"] is True
+    assert adversarial_gate_status(evidence, gates, dirty=False) is GateStatus.FAIL
 
 
 def test_required_adversarial_case_without_evidence_cannot_pass():
     document = json.loads(ADVERSARIAL_DATASET.read_text(encoding="utf-8"))
     case = document["cases"][0]
-    evidence, _ = derive_case_evidence([case], {})
+    evidence, gates = derive_case_evidence([case], {})
     assert evidence[0]["status"] == "NOT_RUN"
+    assert adversarial_gate_status(evidence, gates, dirty=False) is GateStatus.NOT_RUN
 
 
 def test_one_chaos_drill_failure_does_not_relabel_other_drills():
@@ -221,22 +229,50 @@ def test_one_chaos_drill_failure_does_not_relabel_other_drills():
     )
     assert evidence["C1"]["status"] == "PASS"
     assert evidence["C2"]["status"] == "FAIL"
+    assert evidence["C3"]["status"] == "NOT_RUN"
+    assert (
+        chaos_gate_status(evidence, selected=selected, full=False, dirty=False) is GateStatus.FAIL
+    )
 
 
 def test_chaos_test_assertions_remain_distinct_from_missing_telemetry():
-    selected = frozenset({"C1"})
-    targets = {node: "PASS" for node in DRILL_MANIFEST["C1"]["pytest_node_ids"]}
+    selected = frozenset({"C2"})
+    targets = {node: "PASS" for node in DRILL_MANIFEST["C2"]["pytest_node_ids"]}
     evidence = derive_drill_evidence(
         targets,
         selected=selected,
         telemetry_cases=frozenset(),
         full=False,
     )
-    assert evidence["C1"]["execution_status"] == "PASS"
-    assert evidence["C1"]["durable_database_assertion"]["status"] == "PASS"
-    assert evidence["C1"]["telemetry_evidence"]["status"] == "NOT_RUN"
+    assert evidence["C2"]["execution_status"] == "PASS"
+    assert evidence["C2"]["user_visible_assertion"]["status"] == "PASS"
+    assert evidence["C2"]["durable_database_assertion"]["status"] == "NOT_APPLICABLE"
+    assert evidence["C2"]["telemetry_evidence"]["status"] == "NOT_RUN"
+    assert evidence["C2"]["status"] == "NOT_RUN"
+
+
+def test_safe_chaos_missing_test_evidence_cannot_pass():
+    selected = frozenset({"C1"})
+    evidence = derive_drill_evidence({}, selected=selected, telemetry_cases=selected, full=False)
     assert evidence["C1"]["status"] == "NOT_RUN"
-    assert evidence["C3"]["status"] == "NOT_RUN"
+    assert (
+        chaos_gate_status(evidence, selected=selected, full=False, dirty=False) is GateStatus.FAIL
+    )
+
+
+def test_every_chaos_assertion_node_is_an_exact_drill_target():
+    assert set(DRILL_ASSERTION_NODES) == set(DRILL_MANIFEST)
+    for case, assertions in DRILL_ASSERTION_NODES.items():
+        assert set(assertions) == {
+            "user_visible_assertion",
+            "durable_database_assertion",
+            "accepted_head_assertion",
+            "checkpoint_assertion",
+            "memory_assertion",
+        }
+        targets = set(DRILL_MANIFEST[case]["pytest_node_ids"])
+        targets.update(DRILL_MANIFEST[case].get("full_pytest_node_ids", []))
+        assert all(set(nodes).issubset(targets) for nodes in assertions.values())
 
 
 def test_load_reconciles_exact_sha_server_otel_aggregate():
@@ -402,6 +438,7 @@ async def test_bounded_load_smoke_runs_http_sse_and_never_claims_full_load_pass(
     ("deployment_environment", "sha_mode", "write_enabled", "expected_reason"),
     [
         ("production", "match", True, "untrusted_environment"),
+        ("staging", "match", True, "untrusted_environment"),
         ("preproduction", "mismatch", True, "release_sha_mismatch"),
         ("isolated-test", "match", False, "write_certification_disabled"),
     ],

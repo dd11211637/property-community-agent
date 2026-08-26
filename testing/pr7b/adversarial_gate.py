@@ -48,15 +48,9 @@ def evaluate(*, requested_sha: str | None = None) -> GateEvidence:
     target_results, counts, limitations = run_pytest_targets(ROOT, targets)
     case_evidence, hard_gates = derive_case_evidence(cases, target_results)
     statuses = [item["status"] for item in case_evidence]
+    status = derive_gate_status(case_evidence, hard_gates, dirty=dirty)
     if dirty:
-        status = GateStatus.NOT_RUN
         limitations = (*limitations, "tracked checkout is dirty")
-    elif "FAIL" in statuses:
-        status = GateStatus.FAIL
-    elif "NOT_RUN" in statuses or not all(hard_gates.values()):
-        status = GateStatus.NOT_RUN
-    else:
-        status = GateStatus.PASS
     return GateEvidence(
         schema_version="pr7b-evidence-v1",
         gate="ADVERSARIAL_GATE",
@@ -136,6 +130,22 @@ def derive_case_evidence(
         for gate, statuses in mapped.items()
     }
     return evidence, hard_gates
+
+
+def derive_gate_status(
+    cases: list[dict[str, Any]], hard_gates: dict[str, bool], *, dirty: bool
+) -> GateStatus:
+    """Fail closed from case-specific evidence without rerunning pytest."""
+    statuses = [str(case.get("status", "NOT_RUN")) for case in cases]
+    if dirty:
+        return GateStatus.NOT_RUN
+    if "FAIL" in statuses:
+        return GateStatus.FAIL
+    if not statuses or any(status != "PASS" for status in statuses):
+        return GateStatus.NOT_RUN
+    if not hard_gates or not all(hard_gates.values()):
+        return GateStatus.NOT_RUN
+    return GateStatus.PASS
 
 
 def main() -> int:

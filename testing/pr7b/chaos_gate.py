@@ -193,6 +193,100 @@ DRILL_MANIFEST: dict[str, dict[str, Any]] = {
     },
 }
 
+_ASSERTION_KEYS = (
+    "user_visible_assertion",
+    "durable_database_assertion",
+    "accepted_head_assertion",
+    "checkpoint_assertion",
+    "memory_assertion",
+)
+DRILL_ASSERTION_NODES: dict[str, dict[str, tuple[str, ...]]] = {
+    "C1": {
+        "user_visible_assertion": tuple(DRILL_MANIFEST["C1"]["pytest_node_ids"]),
+        "durable_database_assertion": (),
+        "accepted_head_assertion": (),
+        "checkpoint_assertion": (),
+        "memory_assertion": (),
+    },
+    "C2": {
+        "user_visible_assertion": tuple(DRILL_MANIFEST["C2"]["pytest_node_ids"]),
+        "durable_database_assertion": (),
+        "accepted_head_assertion": (),
+        "checkpoint_assertion": (),
+        "memory_assertion": (),
+    },
+    "C3": {
+        "user_visible_assertion": tuple(DRILL_MANIFEST["C3"]["pytest_node_ids"]),
+        "durable_database_assertion": (),
+        "accepted_head_assertion": (),
+        "checkpoint_assertion": (),
+        "memory_assertion": tuple(DRILL_MANIFEST["C3"]["pytest_node_ids"]),
+    },
+    "C4": {
+        "user_visible_assertion": tuple(DRILL_MANIFEST["C4"]["pytest_node_ids"]),
+        "durable_database_assertion": tuple(DRILL_MANIFEST["C4"]["pytest_node_ids"]),
+        "accepted_head_assertion": (),
+        "checkpoint_assertion": tuple(DRILL_MANIFEST["C4"]["pytest_node_ids"]),
+        "memory_assertion": (),
+    },
+    "C5": {
+        "user_visible_assertion": tuple(DRILL_MANIFEST["C5"]["pytest_node_ids"]),
+        "durable_database_assertion": (),
+        "accepted_head_assertion": tuple(DRILL_MANIFEST["C5"]["pytest_node_ids"]),
+        "checkpoint_assertion": tuple(DRILL_MANIFEST["C5"]["pytest_node_ids"]),
+        "memory_assertion": (),
+    },
+    "C6": {
+        "user_visible_assertion": (DRILL_MANIFEST["C6"]["pytest_node_ids"][0],),
+        "durable_database_assertion": tuple(DRILL_MANIFEST["C6"]["full_pytest_node_ids"]),
+        "accepted_head_assertion": (DRILL_MANIFEST["C6"]["pytest_node_ids"][0],),
+        "checkpoint_assertion": tuple(DRILL_MANIFEST["C6"]["full_pytest_node_ids"]),
+        "memory_assertion": (DRILL_MANIFEST["C6"]["pytest_node_ids"][1],),
+    },
+    "C7": {
+        "user_visible_assertion": tuple(DRILL_MANIFEST["C7"]["pytest_node_ids"]),
+        "durable_database_assertion": tuple(DRILL_MANIFEST["C7"]["pytest_node_ids"]),
+        "accepted_head_assertion": tuple(DRILL_MANIFEST["C7"]["pytest_node_ids"]),
+        "checkpoint_assertion": tuple(DRILL_MANIFEST["C7"]["pytest_node_ids"]),
+        "memory_assertion": (),
+    },
+    "C8": {
+        "user_visible_assertion": (DRILL_MANIFEST["C8"]["pytest_node_ids"][1],),
+        "durable_database_assertion": tuple(DRILL_MANIFEST["C8"]["pytest_node_ids"]),
+        "accepted_head_assertion": (DRILL_MANIFEST["C8"]["pytest_node_ids"][1],),
+        "checkpoint_assertion": (),
+        "memory_assertion": (),
+    },
+    "C9": {
+        "user_visible_assertion": tuple(DRILL_MANIFEST["C9"]["pytest_node_ids"]),
+        "durable_database_assertion": tuple(DRILL_MANIFEST["C9"]["full_pytest_node_ids"]),
+        "accepted_head_assertion": (),
+        "checkpoint_assertion": (),
+        "memory_assertion": (),
+    },
+    "C10": {
+        "user_visible_assertion": tuple(DRILL_MANIFEST["C10"]["pytest_node_ids"]),
+        "durable_database_assertion": (),
+        "accepted_head_assertion": tuple(DRILL_MANIFEST["C10"]["pytest_node_ids"]),
+        "checkpoint_assertion": (),
+        "memory_assertion": tuple(DRILL_MANIFEST["C10"]["pytest_node_ids"]),
+    },
+    "C11": {
+        "user_visible_assertion": tuple(DRILL_MANIFEST["C11"]["pytest_node_ids"]),
+        "durable_database_assertion": tuple(DRILL_MANIFEST["C11"]["pytest_node_ids"]),
+        "accepted_head_assertion": (),
+        "checkpoint_assertion": (),
+        "memory_assertion": (),
+    },
+    "C12": {
+        "user_visible_assertion": tuple(DRILL_MANIFEST["C12"]["pytest_node_ids"]),
+        "durable_database_assertion": tuple(DRILL_MANIFEST["C12"]["full_pytest_node_ids"]),
+        "accepted_head_assertion": (),
+        "checkpoint_assertion": (),
+        "memory_assertion": (),
+    },
+}
+
 
 def evaluate(
     campaign: str,
@@ -216,19 +310,13 @@ def evaluate(
     drills = derive_drill_evidence(
         target_results, selected=selected, telemetry_cases=telemetry_cases, full=full
     )
-    statuses = [drills[case]["status"] for case in selected]
+    status = derive_gate_status(drills, selected=selected, full=full, dirty=dirty)
     if dirty:
-        status = GateStatus.NOT_RUN
         limitations = (*limitations, "tracked checkout is dirty")
-    elif "FAIL" in statuses:
-        status = GateStatus.FAIL
-    elif full and "NOT_RUN" in statuses:
-        status = GateStatus.NOT_RUN
+    elif full and status is GateStatus.NOT_RUN:
         limitations = (*limitations, "one or more drills lack exact test or telemetry evidence")
-    else:
-        status = GateStatus.PASS
-        if not full:
-            limitations = (*limitations, "C4, C7, C8, and C11 require the full PostgreSQL campaign")
+    elif not full:
+        limitations = (*limitations, "C4, C7, C8, and C11 require the full PostgreSQL campaign")
     return GateEvidence(
         schema_version="pr7b-evidence-v1",
         gate="CHAOS_GATE" if full else "CHAOS_HARNESS_SMOKE",
@@ -272,40 +360,35 @@ def derive_drill_evidence(
         if full:
             nodes.extend(definition.get("full_pytest_node_ids", []))
         node_statuses = [target_results.get(node, "NOT_RUN") for node in nodes]
+        assertion_evidence = {
+            key: _assertion_evidence(
+                definition[key],
+                DRILL_ASSERTION_NODES[case][key],
+                effective_nodes=frozenset(nodes),
+                target_results=target_results,
+                selected=case in selected,
+            )
+            for key in _ASSERTION_KEYS
+        }
+        assertion_statuses = [item["status"] for item in assertion_evidence.values()]
         if case not in selected:
             status = "NOT_RUN"
-        elif "FAIL" in node_statuses:
+        elif "FAIL" in node_statuses or "FAIL" in assertion_statuses:
             status = "FAIL"
-        elif "NOT_RUN" in node_statuses or case not in telemetry_cases:
+        elif (
+            "NOT_RUN" in node_statuses
+            or "NOT_RUN" in assertion_statuses
+            or case not in telemetry_cases
+        ):
             status = "NOT_RUN"
         else:
             status = "PASS"
         execution_status = _node_execution_status(node_statuses, case in selected)
-        assertion_status = execution_status
         evidence[case] = {
             "injection_point": definition["injection_point"],
             "pytest_node_ids": nodes,
             "execution_status": execution_status,
-            "user_visible_assertion": {
-                "scope": definition["user_visible_assertion"],
-                "status": assertion_status,
-            },
-            "durable_database_assertion": {
-                "scope": definition["durable_database_assertion"],
-                "status": assertion_status,
-            },
-            "accepted_head_assertion": {
-                "scope": definition["accepted_head_assertion"],
-                "status": assertion_status,
-            },
-            "checkpoint_assertion": {
-                "scope": definition["checkpoint_assertion"],
-                "status": assertion_status,
-            },
-            "memory_assertion": {
-                "scope": definition["memory_assertion"],
-                "status": assertion_status,
-            },
+            **assertion_evidence,
             "telemetry_evidence": {
                 "required_signal": definition["required_telemetry"],
                 "status": "PASS" if case in telemetry_cases and case in selected else "NOT_RUN",
@@ -313,6 +396,24 @@ def derive_drill_evidence(
             "status": status,
         }
     return evidence
+
+
+def derive_gate_status(
+    drills: dict[str, dict[str, Any]],
+    *,
+    selected: frozenset[str],
+    full: bool,
+    dirty: bool,
+) -> GateStatus:
+    """Fail closed from independently derived drill evidence."""
+    statuses = [str(drills[case].get("status", "NOT_RUN")) for case in selected]
+    if dirty:
+        return GateStatus.NOT_RUN
+    if "FAIL" in statuses:
+        return GateStatus.FAIL
+    if not statuses or any(status != "PASS" for status in statuses):
+        return GateStatus.NOT_RUN if full else GateStatus.FAIL
+    return GateStatus.PASS
 
 
 def _selected_targets(selected: frozenset[str], *, full: bool) -> list[str]:
@@ -329,6 +430,24 @@ def _node_execution_status(statuses: list[str], selected: bool) -> str:
     if not selected or "NOT_RUN" in statuses:
         return "NOT_RUN"
     return "FAIL" if "FAIL" in statuses else "PASS"
+
+
+def _assertion_evidence(
+    scope: str,
+    configured_nodes: tuple[str, ...],
+    *,
+    effective_nodes: frozenset[str],
+    target_results: dict[str, str],
+    selected: bool,
+) -> dict[str, Any]:
+    nodes = [node for node in configured_nodes if node in effective_nodes]
+    if not configured_nodes or (selected and not nodes):
+        status = "NOT_APPLICABLE"
+    else:
+        status = _node_execution_status(
+            [target_results.get(node, "NOT_RUN") for node in nodes], selected
+        )
+    return {"scope": scope, "pytest_node_ids": nodes, "status": status}
 
 
 def _chaos_observability_cases(
