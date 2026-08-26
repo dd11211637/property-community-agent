@@ -22,6 +22,9 @@ from __future__ import annotations
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from property_agent.agent.adapters.api.certification_router import (
+    router as agent_certification_router,
+)
 from property_agent.agent.adapters.api.memory_router import router as agent_memory_router
 from property_agent.agent.adapters.api.router import router as agent_router
 from property_agent.agent.application.errors import AgentSessionError
@@ -140,6 +143,11 @@ def create_app() -> FastAPI:
     # 统一智能体不可用不影响上面的结构化业务接口（PRD §6.5.11）。
     app.include_router(agent_memory_router)
     app.include_router(agent_router)
+    if settings.certification_write_enabled and settings.deployment_environment in {
+        "isolated-test",
+        "preproduction",
+    }:
+        app.include_router(agent_certification_router)
 
     # The announcement router depends on the auth *seam*
     # (``platform.dependencies.get_request_context``) so it can also run as a

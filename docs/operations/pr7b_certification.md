@@ -22,9 +22,9 @@ Operator entry points:
 
 ```text
 python -m testing.pr7b.real_model_gate --sha <full-sha> --approved-baseline config/pr7b_real_model_approved_baseline_v1.json --output artifacts/real-model.json
-python -m testing.pr7b.memory_gate --sha <full-sha> --server-observability-url <collector-summary-url> --output artifacts/memory.json
+python -m testing.pr7b.memory_gate --sha <full-sha> --server-observability-url <collector-summary-url> --maintenance-window-id <approved-id> --maintenance-window-version <approved-version> --output artifacts/memory.json
 python -m testing.pr7b.load_gate --base-url <url> --environment preproduction --expected-concurrency 8 --sustained-seconds 1800 --spike-seconds 600 --allow-writes --sha <full-sha> --server-observability-url <collector-summary-url> --output artifacts/load.json
-python -m testing.pr7b.chaos_gate --campaign full --sha <full-sha> --server-observability-url <collector-summary-url> --output artifacts/chaos.json
+python -m testing.pr7b.chaos_gate --campaign full --campaign-id <32-lowercase-hex> --sha <full-sha> --server-observability-url <collector-summary-url> --output artifacts/chaos.json
 python -m testing.pr7b.adversarial_gate --sha <full-sha> --output artifacts/adversarial.json
 ```
 
@@ -56,6 +56,17 @@ Before its first write-capable request, the runner calls the authenticated serve
 environment, a SHA mismatch, or the production-default disabled flag fails closed before
 conversation setup or any business write. The CLI environment marker is descriptive only and
 is not trusted as proof of the remote target.
+
+For the full campaign the same trusted preflight must advertise
+`v2_certification_available=true`. Only an application started with both
+`certification_write_enabled=true` and an `isolated-test|preproduction` deployment mounts
+`POST /api/certification/v2-conversations`. That endpoint generates the conversation ID on
+the server and persists runtime `v2`; it accepts no runtime selector. Normal production does
+not mount the endpoint, and ordinary public new conversations still select v1. Load workers
+read the persisted runtime from the certification response and public status response. PASS
+also requires collector totals for actual v2 multi-step, multi-domain,
+WAITING_CONFIRM/resume, official checkpoint persistence, and accepted-head publication;
+payload wording alone is not evidence.
 The full gate is at least 30 minutes at R0 followed by at least 10 minutes at 2x R0. A
 short test is only `HARNESS_SMOKE=PASS` and can never yield `LOAD_GATE=PASS`.
 The full gate also requires an exact-SHA server observability summary. The summary endpoint
@@ -104,14 +115,22 @@ coverage is claimed and pool sizing is unchanged.
   idempotency, approval atomicity, fence, or accepted-head evidence.
 - The Memory gate extends the PR6 paired evaluator, raises precision to 0.80, measures
   retrieval p50/p95/p99, probes the configured external embedding in a dedicated `*_test`
-  PostgreSQL database, and measures configured model/version coverage and backlog age. Its
-  exact-window server summary records Writer extraction/persistence, embedding, index, reindex,
-  degradation-reason, and fallback-mode signals; missing server evidence is `NOT_RUN`.
+  PostgreSQL database, and reports that result only as `EMBEDDING_PROVIDER_SMOKE` plus a
+  current coverage snapshot. A fresh one-record 100% snapshot cannot pass the gate. PASS
+  separately requires an approved maintenance-window ID/version whose exact-SHA summary
+  matches window start/end, embedding model/version, eligible and ready counts, end coverage,
+  backlog count/age, and reindex failures. Missing or mismatched window evidence is `NOT_RUN`.
 - The chaos campaign has an explicit C1-C12 manifest. Each drill independently binds exact
   pytest nodes, execution status, durable DB, accepted-head, checkpoint, Memory assertions,
   and required telemetry. C8 requires both the lower-layer subprocess commit/replay case and
   the Agent confirmed-write delivery-loss recovery case. Full PASS requires every drill and
-  its exact-window telemetry signal to pass.
+  its exact-window telemetry signal to pass. Every campaign uses a new bounded opaque
+  `chaos_campaign_id`; the same ID is injected into fault-test processes, attached to PR7-A
+  spans (never metric labels), stored in GateEvidence, and required by the collector query and
+  response. Same-SHA signals carrying another ID cannot satisfy a drill. C12 additionally runs
+  the authoritative Runner post-engine guard and proves a stale candidate cannot publish an
+  accepted head or become Memory Writer input; the existing PostgreSQL stale-fence test remains
+  the business-mutation assertion.
 - The versioned adversarial manifest maps every case to exact pytest nodes, hard gates, and an
   expected safe invariant. Each case is executed and classified independently as PASS, FAIL,
   or NOT_RUN; a hard gate passes only when all mapped cases pass, and missing/unmapped required

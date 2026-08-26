@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -55,6 +56,8 @@ def evaluate(
     *,
     requested_sha: str | None = None,
     server_observability_url: str | None = None,
+    maintenance_window_id: str | None = None,
+    maintenance_window_version: str | None = None,
 ) -> GateEvidence:
     import json
 
@@ -104,7 +107,7 @@ def evaluate(
     coverage, limitation = _external_reindex_probe()
     metrics.update(coverage)
     external_ready = not limitation
-    hard_gates["configured_model_version_coverage_at_least_0_99"] = (
+    hard_gates["embedding_provider_smoke"] = (
         external_ready and float(coverage["configured_model_version_coverage"]) >= 0.99
     )
     observed_metrics, observation_limitation = _memory_observability_summary(
@@ -115,6 +118,24 @@ def evaluate(
     metrics.update(observed_metrics)
     observation_ready = not observation_limitation
     hard_gates["production_memory_observability_available"] = observation_ready
+    window_metrics, window_limitation = _maintenance_window_certification(
+        server_observability_url,
+        release_sha=release_sha,
+        window_id=maintenance_window_id,
+        window_version=maintenance_window_version,
+    )
+    metrics.update(window_metrics)
+    window_ready = not window_limitation
+    hard_gates["maintenance_window_certification_available"] = window_ready
+    hard_gates["maintenance_window_coverage_at_least_0_99"] = (
+        window_ready and float(window_metrics.get("window_coverage", 0.0)) >= 0.99
+    )
+    hard_gates["maintenance_window_backlog_zero"] = (
+        window_ready and int(window_metrics.get("window_pending_or_failed_backlog", -1)) == 0
+    )
+    hard_gates["maintenance_window_reindex_failures_zero"] = (
+        window_ready and int(window_metrics.get("window_reindex_failure_total", -1)) == 0
+    )
     if not failure_contracts_passed:
         status = GateStatus.FAIL
         limitations = failure_limitations
@@ -127,6 +148,9 @@ def evaluate(
     elif not observation_ready:
         status = GateStatus.NOT_RUN
         limitations = (*failure_limitations, observation_limitation)
+    elif not window_ready:
+        status = GateStatus.NOT_RUN
+        limitations = (*failure_limitations, window_limitation)
     else:
         status = GateStatus.PASS if all(hard_gates.values()) else GateStatus.FAIL
         limitations = (
@@ -147,6 +171,8 @@ def evaluate(
             "embedding_model": settings.memory_embedding_model,
             "embedding_version": settings.memory_embedding_version,
             "fallback_mode": "structured-no-memory",
+            "maintenance_window_id": maintenance_window_id or "",
+            "maintenance_window_version": maintenance_window_version or "",
         },
         sample_counts={
             "paired_cases": len(cases),
@@ -258,6 +284,90 @@ def _memory_observability_summary(
     return {f"server_{name}": metrics[name] for name in sorted(required)}, ""
 
 
+def _maintenance_window_certification(
+    url: str | None,
+    *,
+    release_sha: str,
+    window_id: str | None,
+    window_version: str | None,
+) -> tuple[dict[str, float | int | str], str]:
+    if not url or not window_id or not window_version:
+        return {}, "approved maintenance-window evidence unavailable"
+    headers = {"Authorization": f"Bearer {os.getenv('PR7B_OTEL_SUMMARY_TOKEN', '')}"}
+    try:
+        response = httpx.get(
+            url,
+            headers=headers,
+            params={
+                "release_sha": release_sha,
+                "gate": "memory-maintenance",
+                "window_id": window_id,
+                "window_version": window_version,
+            },
+            timeout=20.0,
+        )
+        response.raise_for_status()
+        document = response.json()
+    except (httpx.HTTPError, ValueError):
+        return {}, "approved maintenance-window evidence unavailable"
+    required = {
+        "release_sha",
+        "maintenance_window_id",
+        "maintenance_window_version",
+        "window_started_at",
+        "window_ended_at",
+        "embedding_model",
+        "embedding_version",
+        "eligible_active_records",
+        "ready_at_configured_version",
+        "coverage_at_window_end",
+        "pending_or_failed_backlog_count",
+        "oldest_backlog_age_seconds",
+        "reindex_failure_count",
+    }
+    if not isinstance(document, dict) or not required.issubset(document):
+        return {}, "maintenance-window evidence mismatched or incomplete"
+    try:
+        started = datetime.fromisoformat(str(document["window_started_at"]))
+        ended = datetime.fromisoformat(str(document["window_ended_at"]))
+        eligible = int(document["eligible_active_records"])
+        ready = int(document["ready_at_configured_version"])
+        coverage = float(document["coverage_at_window_end"])
+        backlog = int(document["pending_or_failed_backlog_count"])
+        oldest = float(document["oldest_backlog_age_seconds"])
+        failures = int(document["reindex_failure_count"])
+    except (TypeError, ValueError):
+        return {}, "maintenance-window evidence mismatched or incomplete"
+    exact = (
+        document["release_sha"] == release_sha
+        and document["maintenance_window_id"] == window_id
+        and document["maintenance_window_version"] == window_version
+        and document["embedding_model"] == settings.memory_embedding_model
+        and document["embedding_version"] == settings.memory_embedding_version
+        and ended >= started
+        and started.tzinfo is not None
+        and ended.tzinfo is not None
+        and eligible > 0
+        and 0 <= ready <= eligible
+        and abs(coverage - ready / eligible) <= 1e-9
+        and backlog >= 0
+        and oldest >= 0
+        and failures >= 0
+    )
+    if not exact:
+        return {}, "maintenance-window evidence mismatched or incomplete"
+    return {
+        "window_eligible_active_records": eligible,
+        "window_ready_at_configured_version": ready,
+        "window_coverage": coverage,
+        "window_pending_or_failed_backlog": backlog,
+        "window_oldest_backlog_age_seconds": oldest,
+        "window_reindex_failure_total": failures,
+        "window_started_at": str(document["window_started_at"]),
+        "window_ended_at": str(document["window_ended_at"]),
+    }, ""
+
+
 def datetime_now():
     from datetime import datetime, timezone
 
@@ -303,12 +413,16 @@ def main() -> int:
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET)
     parser.add_argument("--sha")
     parser.add_argument("--server-observability-url")
+    parser.add_argument("--maintenance-window-id")
+    parser.add_argument("--maintenance-window-version")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     evidence = evaluate(
         args.dataset,
         requested_sha=args.sha,
         server_observability_url=args.server_observability_url,
+        maintenance_window_id=args.maintenance_window_id,
+        maintenance_window_version=args.maintenance_window_version,
     )
     write_evidence(args.output, evidence)
     print(f"MEMORY_GATE={evidence.status.value}")

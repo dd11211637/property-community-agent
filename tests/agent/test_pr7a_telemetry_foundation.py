@@ -23,6 +23,7 @@ from property_agent.agent.observed_boundaries import (
     ObservedMemoryService,
     ObservedModelGateway,
     model_provider_observer,
+    supervisor_observer,
 )
 from property_agent.config import Settings
 
@@ -84,6 +85,29 @@ def test_private_providers_export_span_and_metric_without_global_install():
         assert observation.status()["state"] == "ENABLED_HEALTHY"
     finally:
         observation.shutdown()
+
+
+def test_chaos_campaign_id_is_attached_only_as_bounded_span_attribute(monkeypatch):
+    observation = AgentObservability.in_memory()
+    monkeypatch.setenv("PR7B_CHAOS_CAMPAIGN_ID", "a" * 32)
+    with observation.span("chaos.fault"):
+        pass
+    assert observation.spans[-1].attributes["certification.campaign.id"] == "a" * 32
+    assert all("campaign" not in point.attributes for point in observation.points)
+
+
+def test_supervisor_plan_shape_records_actual_runtime_step_and_domain_shape():
+    observation = AgentObservability.in_memory()
+    supervisor_observer(observation)(
+        "supervisor_plan_created",
+        {"runtime": "v2", "step_count": 2, "classification": "multi-domain"},
+    )
+    point = next(item for item in observation.points if item.name == "agent_plan_shape_total")
+    assert point.attributes == {
+        "runtime": "v2",
+        "operation": "multi_step",
+        "reason": "multi-domain",
+    }
 
 
 def test_export_failure_is_degraded_and_does_not_raise_into_business_path():

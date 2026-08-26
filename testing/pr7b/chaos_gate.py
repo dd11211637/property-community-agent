@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import httpx
 
@@ -19,6 +21,7 @@ from testing.pr7b.evidence import (
 from testing.pr7b.pytest_gate import run_pytest_targets
 
 ROOT = Path(__file__).resolve().parents[2]
+_CAMPAIGN_ID = re.compile(r"[a-f0-9]{32}")
 SAFE_DRILLS = frozenset({"C1", "C2", "C3", "C5", "C6", "C9", "C10", "C12"})
 DRILL_MANIFEST: dict[str, dict[str, Any]] = {
     "C1": {
@@ -179,7 +182,8 @@ DRILL_MANIFEST: dict[str, dict[str, Any]] = {
     "C12": {
         "injection_point": "lease replacement and stale worker fence",
         "pytest_node_ids": [
-            "tests/test_p0_concurrency_atomicity.py::test_assert_run_fence_rejects_stale_fence"
+            "tests/test_p0_concurrency_atomicity.py::test_assert_run_fence_rejects_stale_fence",
+            "tests/agent/test_pr7b_chaos.py::test_c12_runner_rejects_stale_candidate_before_canonical_publication",
         ],
         "full_pytest_node_ids": [
             "tests/test_p0_postgres_concurrency.py::test_stale_fence_writer_rejected"
@@ -279,11 +283,11 @@ DRILL_ASSERTION_NODES: dict[str, dict[str, tuple[str, ...]]] = {
         "memory_assertion": (),
     },
     "C12": {
-        "user_visible_assertion": tuple(DRILL_MANIFEST["C12"]["pytest_node_ids"]),
+        "user_visible_assertion": (DRILL_MANIFEST["C12"]["pytest_node_ids"][1],),
         "durable_database_assertion": tuple(DRILL_MANIFEST["C12"]["full_pytest_node_ids"]),
-        "accepted_head_assertion": (),
-        "checkpoint_assertion": (),
-        "memory_assertion": (),
+        "accepted_head_assertion": (DRILL_MANIFEST["C12"]["pytest_node_ids"][1],),
+        "checkpoint_assertion": (DRILL_MANIFEST["C12"]["pytest_node_ids"][1],),
+        "memory_assertion": (DRILL_MANIFEST["C12"]["pytest_node_ids"][1],),
     },
 }
 
@@ -293,16 +297,31 @@ def evaluate(
     *,
     requested_sha: str | None = None,
     server_observability_url: str | None = None,
+    campaign_id: str | None = None,
 ) -> GateEvidence:
     started = utc_now()
     release_sha, dirty = repository_state(ROOT, requested_sha)
     full = campaign == "full"
+    campaign_id = campaign_id or os.getenv("PR7B_CHAOS_CAMPAIGN_ID") or uuid4().hex
+    if not _CAMPAIGN_ID.fullmatch(campaign_id):
+        raise ValueError("chaos campaign ID must be 32 lowercase hexadecimal characters")
     selected = frozenset(DRILL_MANIFEST) if full else SAFE_DRILLS
     targets = _selected_targets(selected, full=full)
-    target_results, counts, limitations = run_pytest_targets(ROOT, targets)
+    previous_campaign_id = os.environ.get("PR7B_CHAOS_CAMPAIGN_ID")
+    os.environ["PR7B_CHAOS_CAMPAIGN_ID"] = campaign_id
+    try:
+        target_results, counts, limitations = run_pytest_targets(ROOT, targets)
+    finally:
+        if previous_campaign_id is None:
+            os.environ.pop("PR7B_CHAOS_CAMPAIGN_ID", None)
+        else:
+            os.environ["PR7B_CHAOS_CAMPAIGN_ID"] = previous_campaign_id
     telemetry_cases = (
         _chaos_observability_cases(
-            server_observability_url, release_sha=release_sha, started_at=started
+            server_observability_url,
+            release_sha=release_sha,
+            started_at=started,
+            campaign_id=campaign_id,
         )
         if full
         else selected
@@ -329,6 +348,7 @@ def evaluate(
         dataset_version="pr7b-chaos-c1-c12-v2",
         configuration={
             "campaign": campaign,
+            "chaos_campaign_id": campaign_id,
             "fault_profile_version": "pr7b-chaos-v2",
             "drills": drills,
         },
@@ -451,7 +471,7 @@ def _assertion_evidence(
 
 
 def _chaos_observability_cases(
-    url: str | None, *, release_sha: str, started_at: str
+    url: str | None, *, release_sha: str, started_at: str, campaign_id: str
 ) -> frozenset[str]:
     if not url:
         return frozenset()
@@ -460,14 +480,23 @@ def _chaos_observability_cases(
         response = httpx.get(
             url,
             headers=headers,
-            params={"release_sha": release_sha, "started_at": started_at, "gate": "chaos"},
+            params={
+                "release_sha": release_sha,
+                "started_at": started_at,
+                "gate": "chaos",
+                "chaos_campaign_id": campaign_id,
+            },
             timeout=20.0,
         )
         response.raise_for_status()
         document = response.json()
     except (httpx.HTTPError, ValueError):
         return frozenset()
-    if not isinstance(document, dict) or document.get("release_sha") != release_sha:
+    if (
+        not isinstance(document, dict)
+        or document.get("release_sha") != release_sha
+        or document.get("chaos_campaign_id") != campaign_id
+    ):
         return frozenset()
     signals = document.get("case_signals", {})
     return frozenset(case for case in DRILL_MANIFEST if int(signals.get(case, 0)) > 0)
@@ -478,12 +507,14 @@ def main() -> int:
     parser.add_argument("--campaign", choices=("safe", "full"), default="safe")
     parser.add_argument("--sha")
     parser.add_argument("--server-observability-url")
+    parser.add_argument("--campaign-id")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     evidence = evaluate(
         args.campaign,
         requested_sha=args.sha,
         server_observability_url=args.server_observability_url,
+        campaign_id=args.campaign_id,
     )
     write_evidence(args.output, evidence)
     print(f"{evidence.gate}={evidence.status.value}")

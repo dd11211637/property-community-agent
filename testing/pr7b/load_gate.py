@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[2]
 _WRITE_ENVIRONMENTS = frozenset({"isolated-test", "preproduction"})
 _EXPECTED_OUTCOMES = frozenset({200, 409, 422, 429, 503})
 _CERTIFICATION_IDENTITY_PATH = "/api/certification/identity"
+_V2_PREPARE_PATH = "/api/certification/v2-conversations"
 
 
 @dataclass(slots=True)
@@ -90,6 +91,11 @@ async def execute(
             preflight_reason, target_identity = await _trusted_write_target_preflight(
                 client, release_sha
             )
+        v2_conversations: list[str] = []
+        if not preflight_reason and profile.allow_writes and not profile.smoke:
+            preflight_reason, v2_conversations = await _prepare_v2_conversations(
+                client, profile.expected_concurrency * 2 + 1, stats
+            )
         if preflight_reason:
             stats.abort_reason = f"trusted write target preflight failed: {preflight_reason}"
             pool_before: dict[str, Any] = {}
@@ -97,16 +103,19 @@ async def execute(
         else:
             pool_before = await _pool_snapshot(client)
             run_id = uuid4().hex
-            shared_conversation = f"pr7b-{run_id}-shared"
-            await _request(
-                client,
-                "POST",
-                f"/api/agent/conversations/{shared_conversation}/messages",
-                "shared_conversation_start",
-                "setup",
-                stats,
-                _read_payload(profile),
+            shared_conversation = (
+                v2_conversations[-1] if v2_conversations else f"pr7b-{run_id}-shared"
             )
+            if not v2_conversations:
+                await _request(
+                    client,
+                    "POST",
+                    f"/api/agent/conversations/{shared_conversation}/messages",
+                    "shared_conversation_start",
+                    "setup",
+                    stats,
+                    _read_payload(profile),
+                )
             await _phase(
                 client,
                 profile,
@@ -117,6 +126,7 @@ async def execute(
                 phase="sustained",
                 run_id=run_id,
                 shared_conversation=shared_conversation,
+                v2_conversations=v2_conversations,
             )
             if not stats.abort_reason:
                 await _phase(
@@ -129,6 +139,7 @@ async def execute(
                     phase="spike",
                     run_id=run_id,
                     shared_conversation=shared_conversation,
+                    v2_conversations=v2_conversations,
                 )
             pool_after = await _pool_snapshot(client)
     total = sum(value for key, value in stats.totals.items() if key.endswith(":request"))
@@ -142,6 +153,14 @@ async def execute(
         "full_spike_duration": stats.phase_elapsed.get("spike", 0.0) >= 599,
         "hard_correctness_violations_zero": profile.smoke,
         "database_pool_evidence_available": profile.smoke or bool(pool_after),
+        "persisted_v2_conversation_count_positive": (
+            profile.smoke or stats.totals["persisted_runtime:v2"] > 0
+        ),
+        "v2_multi_step_request_observed": profile.smoke or stats.totals["v2:multi_step"] > 0,
+        "v2_multi_domain_request_observed": profile.smoke or stats.totals["v2:multi_domain"] > 0,
+        "v2_waiting_confirm_resume_response_observed": (
+            profile.smoke or stats.totals["v2:waiting_confirm_resume"] > 0
+        ),
     }
     latencies = [sample for values in stats.latency.values() for sample in values]
     pool_metrics = _pool_metrics(pool_before, pool_after)
@@ -157,6 +176,21 @@ async def execute(
     hard_gates["server_otel_evidence_available"] = profile.smoke or server_evidence_ok
     if server_evidence_ok:
         hard_gates.update(_server_slo_gates(server_metrics))
+        hard_gates["v2_checkpoint_persistence_observed"] = (
+            profile.smoke or server_metrics["server_v2_checkpoint_persist_total"] > 0
+        )
+        hard_gates["v2_accepted_head_publication_observed"] = (
+            profile.smoke or server_metrics["server_v2_accepted_head_publish_total"] > 0
+        )
+        hard_gates["actual_v2_multi_step_turn_observed"] = (
+            profile.smoke or server_metrics["server_v2_multi_step_turn_total"] > 0
+        )
+        hard_gates["actual_v2_multi_domain_turn_observed"] = (
+            profile.smoke or server_metrics["server_v2_multi_domain_turn_total"] > 0
+        )
+        hard_gates["actual_v2_waiting_confirm_resume_observed"] = (
+            profile.smoke or server_metrics["server_v2_waiting_confirm_resume_total"] > 0
+        )
     if profile.smoke:
         gate = "HARNESS_SMOKE"
         status = GateStatus.PASS if not stats.abort_reason else GateStatus.FAIL
@@ -231,6 +265,7 @@ async def _phase(
     phase: str,
     run_id: str,
     shared_conversation: str,
+    v2_conversations: list[str],
 ) -> None:
     phase_started = asyncio.get_running_loop().time()
     deadline = phase_started + duration
@@ -246,6 +281,7 @@ async def _phase(
                 worker,
                 run_id,
                 shared_conversation,
+                v2_conversations,
             )
         )
         for worker in range(concurrency)
@@ -268,8 +304,13 @@ async def _worker(
     worker: int,
     run_id: str,
     shared_conversation: str,
+    v2_conversations: list[str],
 ) -> None:
-    conversation = f"pr7b-{run_id}-{worker}"
+    conversation = (
+        v2_conversations[worker % len(v2_conversations)]
+        if v2_conversations
+        else f"pr7b-{run_id}-{worker}"
+    )
     preparation = (
         "active_message"
         if phase == "spike" and worker < profile.expected_concurrency
@@ -293,13 +334,14 @@ async def _worker(
             return
         operation = (
             "active_message",
-            "multi",
+            "multi_step",
+            "multi_domain",
             "status",
             "sse",
             "memory",
             "same_conversation",
             "sse_disconnect",
-        )[iteration % 7]
+        )[iteration % 8]
         if operation == "same_conversation":
             conversation = shared_conversation
         if profile.allow_writes and iteration % 13 == 12:
@@ -335,6 +377,8 @@ async def _operation(
         await _request(client, "GET", "/api/agent/memories", operation, phase, stats)
         return
     payload = _read_payload(profile, multi=operation == "multi")
+    if operation in {"multi_step", "multi_domain"}:
+        payload = _read_payload(profile, multi=operation == "multi_domain")
     if operation == "sse":
         await _sse(client, f"{path}/messages/stream", payload, phase, stats)
         return
@@ -358,7 +402,7 @@ async def _operation(
             stats,
         )
         if card:
-            await _request(
+            response = await _request(
                 client,
                 "POST",
                 f"{path}/confirmations",
@@ -367,6 +411,12 @@ async def _operation(
                 stats,
                 {"confirmed": False, "action_hash": card["action_hash"]},
             )
+            if response is not None and response.status_code == 200:
+                status = await _request(
+                    client, "GET", path, "sse_confirmation_runtime", phase, stats
+                )
+                if _runtime_from_response(status) == "v2":
+                    stats.totals["v2:waiting_confirm_resume"] += 1
         return
     if operation.startswith("write_"):
         if stats.write_operations >= bounds.max_write_operations:
@@ -399,7 +449,11 @@ async def _operation(
                     {"confirmed": True, "action_hash": card["action_hash"]},
                 )
         return
-    await _request(client, "POST", f"{path}/messages", operation, phase, stats, payload)
+    response = await _request(client, "POST", f"{path}/messages", operation, phase, stats, payload)
+    if operation in {"multi_step", "multi_domain"} and response is not None:
+        status = await _request(client, "GET", path, f"{operation}_runtime", phase, stats)
+        if _runtime_from_response(status) == "v2":
+            stats.totals[f"v2:{operation}"] += 1
 
 
 async def _request(
@@ -474,7 +528,7 @@ async def _sse(
 
 def _read_payload(profile: LoadProfile, *, multi: bool = False) -> dict[str, Any]:
     return {
-        "text": "查询账单并查看已有报修记录" if multi else "查看当前账单",
+        "text": "查询账单并查看已有报修记录" if multi else "查看当前账单并解释费用",
         "house_id": profile.house_id,
         "slots": {},
     }
@@ -501,6 +555,7 @@ async def _trusted_write_target_preflight(
         "deployment_environment": str(document.get("deployment_environment", "")),
         "release_sha": str(document.get("release_sha", "")),
         "certification_write_enabled": document.get("certification_write_enabled") is True,
+        "v2_certification_available": document.get("v2_certification_available") is True,
     }
     if identity["deployment_environment"] not in _WRITE_ENVIRONMENTS:
         return "untrusted_environment", {}
@@ -508,7 +563,38 @@ async def _trusted_write_target_preflight(
         return "release_sha_mismatch", {}
     if not identity["certification_write_enabled"]:
         return "write_certification_disabled", identity
+    if not identity["v2_certification_available"]:
+        return "v2_certification_unavailable", identity
     return "", identity
+
+
+async def _prepare_v2_conversations(
+    client: httpx.AsyncClient, count: int, stats: LoadStats
+) -> tuple[str, list[str]]:
+    conversations: list[str] = []
+    for _ in range(count):
+        response = await _request(client, "POST", _V2_PREPARE_PATH, "prepare_v2", "setup", stats)
+        runtime = _runtime_from_response(response)
+        try:
+            conversation_id = str(response.json()["conversation_id"]) if response else ""
+        except (KeyError, TypeError, ValueError):
+            conversation_id = ""
+        if runtime != "v2" or not conversation_id:
+            return "v2_conversation_preparation_failed", []
+        stats.totals["persisted_runtime:v2"] += 1
+        conversations.append(conversation_id)
+    return "", conversations
+
+
+def _runtime_from_response(response: httpx.Response | None) -> str:
+    if response is None or response.status_code != 200:
+        return ""
+    try:
+        document = response.json()
+        data = document.get("data", document)
+        return str(data.get("runtime_version", "")) if isinstance(data, dict) else ""
+    except (TypeError, ValueError):
+        return ""
 
 
 def _write_payload(profile: LoadProfile) -> dict[str, Any]:
@@ -625,6 +711,11 @@ def _server_observability_metrics(
         "stream_peak_active",
         "stream_capacity",
         "queue_backlog_peak",
+        "v2_checkpoint_persist_total",
+        "v2_accepted_head_publish_total",
+        "v2_multi_step_turn_total",
+        "v2_multi_domain_turn_total",
+        "v2_waiting_confirm_resume_total",
     }
     signals = document.get("signal_totals", {})
     aggregate_metrics = document.get("metrics", {})

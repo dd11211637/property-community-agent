@@ -184,6 +184,7 @@ def status_data(
         "last_intent": conversation.last_intent,
         "handover_required": conversation.handover_required,
         "handover_ticket_id": conversation.handover_ticket_id,
+        "runtime_version": conversation.runtime_version,
         "pending_confirmation": _pending_card(pending),
     }
 

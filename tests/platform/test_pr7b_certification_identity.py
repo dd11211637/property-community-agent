@@ -23,6 +23,7 @@ def test_certification_identity_is_authenticated_server_owned_and_bounded(monkey
         "deployment_environment": "preproduction",
         "release_sha": "a" * 40,
         "certification_write_enabled": True,
+        "v2_certification_available": True,
     }
 
 

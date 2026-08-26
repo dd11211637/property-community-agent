@@ -52,6 +52,10 @@ async def certification_identity(
         "deployment_environment": settings.deployment_environment,
         "release_sha": settings.release_sha,
         "certification_write_enabled": settings.certification_write_enabled,
+        "v2_certification_available": (
+            settings.certification_write_enabled
+            and settings.deployment_environment in {"isolated-test", "preproduction"}
+        ),
     }
 
 

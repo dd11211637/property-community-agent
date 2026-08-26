@@ -339,6 +339,17 @@ def model_provider_observer(observability: Any):
 
 def supervisor_observer(observability: Any):
     def observe(event: str, fields: dict[str, Any]) -> None:
+        if event == "supervisor_plan_created":
+            observability.count(
+                "agent_plan_shape_total",
+                attributes={
+                    "runtime": fields.get("runtime"),
+                    "operation": (
+                        "multi_step" if int(fields.get("step_count") or 0) > 1 else "single_step"
+                    ),
+                    "reason": fields.get("classification"),
+                },
+            )
         mapping = {
             "supervisor_plan_created": "plan_created",
             "specialist_delegated": "delegated",

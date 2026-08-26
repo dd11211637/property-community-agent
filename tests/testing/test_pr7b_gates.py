@@ -11,6 +11,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 
+from testing.pr7b import memory_gate
 from testing.pr7b.adversarial_gate import DATASET as ADVERSARIAL_DATASET
 from testing.pr7b.adversarial_gate import derive_case_evidence
 from testing.pr7b.adversarial_gate import derive_gate_status as adversarial_gate_status
@@ -19,6 +20,7 @@ from testing.pr7b.certification_status import selected_statuses
 from testing.pr7b.chaos_gate import (
     DRILL_ASSERTION_NODES,
     DRILL_MANIFEST,
+    _chaos_observability_cases,
     derive_drill_evidence,
 )
 from testing.pr7b.chaos_gate import derive_gate_status as chaos_gate_status
@@ -312,6 +314,11 @@ def test_load_reconciles_exact_sha_server_otel_aggregate():
             "stream_peak_active",
             "stream_capacity",
             "queue_backlog_peak",
+            "v2_checkpoint_persist_total",
+            "v2_accepted_head_publish_total",
+            "v2_multi_step_turn_total",
+            "v2_multi_domain_turn_total",
+            "v2_waiting_confirm_resume_total",
         )
     }
     aggregate_metrics["hard_correctness_violation_total"] = 0
@@ -327,6 +334,70 @@ def test_load_reconciles_exact_sha_server_otel_aggregate():
     )
     assert available is True
     assert metrics["client_server_request_discrepancy_rate"] == 0.01
+
+
+def test_wrong_chaos_campaign_id_cannot_reuse_exact_sha_signals(monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "release_sha": "a" * 40,
+                "chaos_campaign_id": "different-campaign",
+                "case_signals": {case: 1 for case in DRILL_MANIFEST},
+            }
+
+    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: Response())
+    assert (
+        _chaos_observability_cases(
+            "https://collector.invalid/summary",
+            release_sha="a" * 40,
+            started_at="2026-01-01T00:00:00+00:00",
+            campaign_id="actual-campaign",
+        )
+        == frozenset()
+    )
+
+
+def test_fresh_one_record_memory_probe_cannot_replace_maintenance_window(
+    monkeypatch, tmp_path: Path
+):
+    dataset = tmp_path / "memory.json"
+    dataset.write_text("[]", encoding="utf-8")
+    metrics = {name: threshold for name, threshold in memory_gate.THRESHOLDS.items()}
+    metrics.update({name: 0 for name in memory_gate.ZERO_GATES})
+    monkeypatch.setattr(memory_gate, "evaluate_pr6", lambda _cases: {"metrics": metrics})
+    monkeypatch.setattr(
+        memory_gate,
+        "run_pytest_manifest",
+        lambda *_args, **_kwargs: (
+            {"tests": 1, "failures": 0, "errors": 0, "skipped": 0},
+            (),
+            True,
+        ),
+    )
+    monkeypatch.setattr(
+        memory_gate,
+        "_external_reindex_probe",
+        lambda: (
+            {
+                "eligible_active_records": 1,
+                "configured_model_version_ready_records": 1,
+                "pending_or_failed_records": 0,
+                "configured_model_version_coverage": 1.0,
+                "reindex_backlog_age_seconds": 0.0,
+                "degradation_reason": "",
+            },
+            "",
+        ),
+    )
+    monkeypatch.setattr(memory_gate, "_memory_observability_summary", lambda *_a, **_k: ({}, ""))
+    monkeypatch.setattr(memory_gate, "repository_state", lambda *_a: ("a" * 40, False))
+    evidence = memory_gate.evaluate(dataset)
+    assert evidence.hard_gates["embedding_provider_smoke"] is True
+    assert evidence.hard_gates["maintenance_window_certification_available"] is False
+    assert evidence.status is GateStatus.NOT_RUN
 
 
 def test_evidence_writer_rejects_raw_sensitive_fields(tmp_path: Path):
@@ -435,18 +506,26 @@ async def test_bounded_load_smoke_runs_http_sse_and_never_claims_full_load_pass(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("deployment_environment", "sha_mode", "write_enabled", "expected_reason"),
+    (
+        "deployment_environment",
+        "sha_mode",
+        "write_enabled",
+        "v2_enabled",
+        "expected_reason",
+    ),
     [
-        ("production", "match", True, "untrusted_environment"),
-        ("staging", "match", True, "untrusted_environment"),
-        ("preproduction", "mismatch", True, "release_sha_mismatch"),
-        ("isolated-test", "match", False, "write_certification_disabled"),
+        ("production", "match", True, True, "untrusted_environment"),
+        ("staging", "match", True, True, "untrusted_environment"),
+        ("preproduction", "mismatch", True, True, "release_sha_mismatch"),
+        ("isolated-test", "match", False, False, "write_certification_disabled"),
+        ("preproduction", "match", True, False, "v2_certification_unavailable"),
     ],
 )
 async def test_write_load_preflight_fails_closed_before_any_write_request(
     deployment_environment: str,
     sha_mode: str,
     write_enabled: bool,
+    v2_enabled: bool,
     expected_reason: str,
 ):
     app = FastAPI()
@@ -462,6 +541,7 @@ async def test_write_load_preflight_fails_closed_before_any_write_request(
             "deployment_environment": deployment_environment,
             "release_sha": release_sha if sha_mode == "match" else "f" * 40,
             "certification_write_enabled": write_enabled,
+            "v2_certification_available": v2_enabled,
         }
 
     @app.post("/{path:path}")

@@ -55,6 +55,8 @@ jobs:
       PR7B_BASE_URL: ${{ vars.PR7B_BASE_URL }}
       PR7B_OTEL_SUMMARY_URL: ${{ vars.PR7B_OTEL_SUMMARY_URL }}
       PR7B_OTEL_SUMMARY_TOKEN: ${{ secrets.PR7B_OTEL_SUMMARY_TOKEN }}
+      PR7B_MEMORY_WINDOW_ID: ${{ vars.PR7B_MEMORY_WINDOW_ID }}
+      PR7B_MEMORY_WINDOW_VERSION: ${{ vars.PR7B_MEMORY_WINDOW_VERSION }}
       PR7B_ENVIRONMENT: protected-preproduction
       PYTHONPATH: src
     steps:
@@ -87,7 +89,7 @@ jobs:
         if: inputs.gate == 'all' || inputs.gate == 'memory'
         continue-on-error: true
         run: |
-          python -m testing.pr7b.memory_gate --sha "${{ inputs.release_sha }}" --server-observability-url "$PR7B_OTEL_SUMMARY_URL" --output artifacts/memory.json
+          python -m testing.pr7b.memory_gate --sha "${{ inputs.release_sha }}" --server-observability-url "$PR7B_OTEL_SUMMARY_URL" --maintenance-window-id "$PR7B_MEMORY_WINDOW_ID" --maintenance-window-version "$PR7B_MEMORY_WINDOW_VERSION" --output artifacts/memory.json
           python -c "import json; assert json.load(open('artifacts/memory.json'))['status'] == 'PASS'"
       - name: Full 30m plus 10m R0 load profile
         if: inputs.gate == 'all' || inputs.gate == 'load'
@@ -98,12 +100,14 @@ jobs:
       - name: Full C1-C12 chaos and process-death campaign
         if: inputs.gate == 'all' || inputs.gate == 'chaos'
         continue-on-error: true
-        run: >-
-          python -m testing.pr7b.chaos_gate
-          --campaign full
-          --sha "${{ inputs.release_sha }}"
-          --server-observability-url "$PR7B_OTEL_SUMMARY_URL"
-          --output artifacts/chaos.json
+        run: |
+          campaign_id="$(python -c 'import uuid; print(uuid.uuid4().hex)')"
+          python -m testing.pr7b.chaos_gate \
+            --campaign full \
+            --campaign-id "$campaign_id" \
+            --sha "${{ inputs.release_sha }}" \
+            --server-observability-url "$PR7B_OTEL_SUMMARY_URL" \
+            --output artifacts/chaos.json
       - name: Deterministic adversarial release gate
         if: inputs.gate == 'all'
         continue-on-error: true
