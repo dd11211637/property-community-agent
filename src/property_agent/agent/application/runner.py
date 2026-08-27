@@ -61,7 +61,10 @@ logger = getLogger(__name__)
 
 ConfirmationTokenProvider = Callable[[GraphState], str]
 TurnRecorder = Callable[[AgentContext, GraphState, str, str], None]
-RuntimeRoute = Callable[[ConversationSnapshot | None], tuple[GraphEngine | None, str]]
+RuntimeRoute = Callable[
+    [ConversationSnapshot | None, AgentContext, str],
+    tuple[GraphEngine | None, str],
+]
 
 
 @dataclass(frozen=True)
@@ -299,7 +302,9 @@ class AgentSessionRunner:
         lease = self._turn_guard.acquire(conversation_id, uuid4())
         ctx = self._turn_guard.activate(context, lease)
         if runtime_route is not None:
-            engine, runtime_version = runtime_route(self._conversations.get(conversation_id))
+            engine, runtime_version = runtime_route(
+                self._conversations.get(conversation_id), ctx, conversation_id
+            )
         # PR4 §8：runtime 版本在创建时钉死；已存在会话沿用持久化值，绝不切换。
         conversation = self._conversations.start(
             conversation_id=conversation_id,

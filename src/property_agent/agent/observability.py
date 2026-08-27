@@ -18,7 +18,19 @@ from property_agent.agent.telemetry_provider import TelemetryProviders, Telemetr
 from property_agent.config import Settings
 
 _METRIC_LABELS = frozenset(
-    {"runtime", "operation", "outcome", "reason", "specialist", "capability", "provider"}
+    {
+        "runtime",
+        "operation",
+        "outcome",
+        "reason",
+        "specialist",
+        "capability",
+        "provider",
+        "config_version",
+        "salt_version",
+        "eligibility_policy_version",
+        "decision_class",
+    }
 )
 _TRACE_TEXT_LIMIT = 128
 _CERTIFICATION_CAMPAIGN = re.compile(r"[a-f0-9]{32}")
@@ -338,6 +350,20 @@ class AgentObservability:
             request_id=request_id,
             runtime_version=runtime_version,
             release_sha=self.release_sha or None,
+        )
+
+    def observe_runtime_assignment(self, assignment: Any) -> None:
+        """Record bounded PR7-C assignment facts without identity, prompts, or salt."""
+        self.count(
+            "agent_runtime_assignment_total",
+            attributes={
+                "runtime": assignment.runtime_version,
+                "reason": assignment.eligibility_reason.value,
+                "config_version": assignment.config_version,
+                "salt_version": assignment.salt_version,
+                "eligibility_policy_version": assignment.eligibility_policy_version,
+                "decision_class": assignment.decision_class.value,
+            },
         )
 
     def shutdown(self) -> None:

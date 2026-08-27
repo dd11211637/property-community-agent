@@ -46,6 +46,8 @@ from property_agent.agent.infrastructure.run_lease import (
     StaleAgentRunError,
     assert_run_fence,
 )
+from property_agent.agent.runtime_rollout import RolloutConfig, RolloutControl, RuntimeEligibility
+from property_agent.agent.runtime_version import RuntimeSelectionPolicy
 from property_agent.agent.state import GraphState
 from property_agent.agent.working_state import RepairWorkingState
 from property_agent.platform.application.approval_service import (
@@ -140,6 +142,70 @@ def test_concurrent_double_request_one_wins(run_lease):
     busy_results = [r for r in results if r[0] == "busy"]
     assert len(ok_results) == 1, f"exactly one writer should win, got {results}"
     assert len(busy_results) == 1, f"exactly one should get 409, got {results}"
+
+
+def test_concurrent_new_conversation_persists_one_server_owned_runtime_pin(
+    run_lease, session_factory
+):
+    """The lease/creation boundary persists one assignment under a first-turn race."""
+    from property_agent.platform.adapters.api.dependencies import RequestContext
+
+    conversations = ConversationService(session_factory)
+    context = RequestContext(
+        actor_id=uuid4(),
+        community_id=uuid4(),
+        roles=frozenset({"RESIDENT"}),
+        request_id="pr7c-create-race",
+    )
+    policy = RuntimeSelectionPolicy(
+        control=RolloutControl(
+            RolloutConfig(
+                basis_points=10_000,
+                secret_salt=b"server-owned-rollout-secret-32bytes",
+                salt_version="salt-v1",
+                config_version="pr7c-test-v1",
+            )
+        ),
+        eligibility=RuntimeEligibility(
+            v2_engine_available=True,
+            official_saver_available=True,
+            model_config_approved=True,
+        ),
+    )
+    barrier = threading.Barrier(2)
+    results: list[tuple[str, object]] = []
+
+    def attempt() -> None:
+        barrier.wait()
+        try:
+            lease = run_lease.acquire("pr7c-create-race")
+        except AgentSessionError as exc:
+            results.append(("busy", exc.code))
+            return
+        try:
+            selected = policy.select_new(
+                community_id=context.community_id,
+                actor_id=context.actor_id,
+                conversation_id="pr7c-create-race",
+            )
+            snapshot = conversations.start(
+                conversation_id="pr7c-create-race",
+                context=context,
+                runtime_version=selected.value,
+            )
+            results.append(("ok", snapshot.runtime_version))
+            time.sleep(0.2)
+        finally:
+            run_lease.release("pr7c-create-race", lease.run_id)
+
+    threads = [threading.Thread(target=attempt) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert sorted(result[0] for result in results) == ["busy", "ok"]
+    assert conversations.get("pr7c-create-race").runtime_version == "v2"
 
 
 # ── 2. 首次 conversation 创建竞争 → 不 500 ────────────────

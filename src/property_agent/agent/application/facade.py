@@ -103,12 +103,19 @@ class AgentRuntimeFacadeImpl:
     # ---- 版本选择（PR4 §8 / §9）----
 
     def _selection_for_start(
-        self, existing: ConversationSnapshot | None
+        self,
+        existing: ConversationSnapshot | None,
+        context: AgentContext,
+        conversation_id: str,
     ) -> tuple[GraphEngine | None, str]:
         version = (
             self._policy.select_for(existing.runtime_version)
             if existing is not None
-            else self._policy.select_new()
+            else self._policy.select_new(
+                community_id=context.community_id,
+                actor_id=context.actor_id,
+                conversation_id=conversation_id,
+            )
         )
         if version == AgentRuntimeVersion.V2 and self._v2_engine is None:
             raise RuntimeError("pinned v2 runtime is unavailable")

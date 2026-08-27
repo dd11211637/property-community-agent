@@ -80,6 +80,17 @@ class Settings(BaseSettings):
     agent_stream_max_concurrency: int = 16
     agent_stream_shutdown_grace_seconds: float = 15.0
 
+    # ── PR7-C controlled v2 assignment ───────────────────────────
+    # Public rollout remains hard-zero until an explicitly approved config change.
+    agent_v2_new_conversation_rollout_basis_points: int = 0
+    agent_v2_rollout_salt: str = ""
+    agent_v2_rollout_salt_version: str = "unconfigured"
+    agent_v2_rollout_config_version: str = "pr7c-default-v1"
+    agent_v2_eligibility_policy_version: str = "pr7c-eligibility-v1"
+    agent_v2_new_conversation_fallback_runtime: str = "v1"
+    agent_v2_emergency_stop: bool = False
+    agent_v2_model_config_approved: bool = False
+
     # ── OpenTelemetry 可观测性（PR7-A） ──────────────────────────
     otel_enabled: bool = True
     otel_service_name: str = "property-agent"
@@ -150,6 +161,17 @@ class Settings(BaseSettings):
             problems.append("AGENT_STREAM_MAX_CONCURRENCY must be positive")
         if self.agent_stream_shutdown_grace_seconds <= 0:
             problems.append("AGENT_STREAM_SHUTDOWN_GRACE_SECONDS must be positive")
+        if not 0 <= self.agent_v2_new_conversation_rollout_basis_points <= 10_000:
+            problems.append(
+                "AGENT_V2_NEW_CONVERSATION_ROLLOUT_BASIS_POINTS must be between 0 and 10000"
+            )
+        if (
+            self.agent_v2_new_conversation_rollout_basis_points > 0
+            and len(self.agent_v2_rollout_salt.encode()) < 32
+        ):
+            problems.append("non-zero Agent v2 rollout requires a secret salt of 32+ bytes")
+        if self.agent_v2_new_conversation_fallback_runtime != "v1":
+            problems.append("PR7-C new-conversation fallback runtime must remain v1")
 
         if problems:
             raise RuntimeError("Unsafe production configuration: " + "; ".join(problems))
