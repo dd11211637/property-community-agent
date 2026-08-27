@@ -159,6 +159,4 @@ def _runtime_rollout_status(request: Request) -> dict[str, str | int | bool]:
 def _refresh_rollout_readiness(request: Request, accepted_head_up: bool) -> None:
     policy = getattr(request.app.state, "agent_runtime_policy", None)
     if policy is not None:
-        policy.update_authoritative_readiness(
-            accepted_head_available=accepted_head_up,
-        )
+        policy.observe_accepted_head(available=accepted_head_up)

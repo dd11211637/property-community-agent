@@ -90,6 +90,10 @@ class Settings(BaseSettings):
     agent_v2_new_conversation_fallback_runtime: str = "v1"
     agent_v2_emergency_stop: bool = False
     agent_v2_model_config_approved: bool = False
+    # Deployment-provided activation manifest (PR7-C Gap 1). A non-zero rollout
+    # only becomes active when this manifest is APPROVED and matches the deployed
+    # release. Absent or invalid → fail closed at zero. Never committed as APPROVED.
+    rollout_activation_manifest_path: str = "config/rollout_activation_manifest.json"
 
     # ── OpenTelemetry 可观测性（PR7-A） ──────────────────────────
     otel_enabled: bool = True

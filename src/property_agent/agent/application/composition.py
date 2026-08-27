@@ -19,6 +19,8 @@ from property_agent.agent.runtime_rollout import (
     RolloutConfig,
     RolloutControl,
     RuntimeEligibility,
+    activate_rollout_control,
+    load_rollout_activation_manifest,
 )
 from property_agent.agent.runtime_version import RuntimeSelectionPolicy
 from property_agent.agent.specialists import (
@@ -96,7 +98,18 @@ def build_runtime_facade(
     )
 
 
-def _build_runtime_policy(app: FastAPI, *, v2_engine_available: bool) -> RuntimeSelectionPolicy:
+def build_rollout_control_from_settings(
+    settings,
+    *,
+    manifest,
+    audit_sink=None,
+) -> RolloutControl:
+    """Real production activation boundary built from validated settings.
+
+    Delegates to ``activate_rollout_control`` so a non-zero rollout can only become
+    active when an ``APPROVED`` activation manifest matches the deployed release.
+    This is the single place configuration turns into an active rollout control.
+    """
     config = RolloutConfig(
         basis_points=settings.agent_v2_new_conversation_rollout_basis_points,
         secret_salt=settings.agent_v2_rollout_salt.encode(),
@@ -104,6 +117,21 @@ def _build_runtime_policy(app: FastAPI, *, v2_engine_available: bool) -> Runtime
         config_version=settings.agent_v2_rollout_config_version,
         eligibility_policy_version=settings.agent_v2_eligibility_policy_version,
         fallback_runtime=settings.agent_v2_new_conversation_fallback_runtime,
+    )
+    return activate_rollout_control(
+        config,
+        release_sha=settings.release_sha or None,
+        manifest=manifest,
+        audit_sink=audit_sink,
+    )
+
+
+def _build_runtime_policy(app: FastAPI, *, v2_engine_available: bool) -> RuntimeSelectionPolicy:
+    manifest = load_rollout_activation_manifest(settings.rollout_activation_manifest_path)
+    observability = getattr(app.state, "agent_observability", None)
+    audit_sink = observability.observe_rollout_audit_event if observability is not None else None
+    control = build_rollout_control_from_settings(
+        settings, manifest=manifest, audit_sink=audit_sink
     )
     eligibility = RuntimeEligibility(
         deployment_compatible=settings.deployment_environment
@@ -115,9 +143,11 @@ def _build_runtime_policy(app: FastAPI, *, v2_engine_available: bool) -> Runtime
         emergency_stop=settings.agent_v2_emergency_stop,
     )
     return RuntimeSelectionPolicy(
-        control=RolloutControl(config),
+        control=control,
         eligibility=eligibility,
-        assignment_observer=app.state.agent_observability.observe_runtime_assignment,
+        assignment_observer=(
+            observability.observe_runtime_assignment if observability is not None else None
+        ),
     )
 
 

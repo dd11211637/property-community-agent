@@ -172,6 +172,9 @@ def test_concurrent_new_conversation_persists_one_server_owned_runtime_pin(
             model_config_approved=True,
         ),
     )
+    # Establish a fresh accepted-head health snapshot, as the production /ready
+    # probe would, so non-zero assignment is authorized under the freshness gate.
+    policy.observe_accepted_head(available=True)
     barrier = threading.Barrier(2)
     results: list[tuple[str, object]] = []
 

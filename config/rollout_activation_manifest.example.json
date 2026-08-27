@@ -1,0 +1,16 @@
+{
+  "identity": {
+    "release_sha": "REPLACE_WITH_DEPLOYED_RELEASE_SHA",
+    "rollout_config_version": "pr7c-default-v1",
+    "rollout_basis_points": 0,
+    "salt_version": "unconfigured",
+    "eligibility_policy_version": "pr7c-eligibility-v1",
+    "approved_fallback_runtime": "v1",
+    "model_approval_id": "REPLACE_WITH_MODEL_APPROVAL_ID",
+    "prompt_contract_version": "REPLACE_WITH_PROMPT_CONTRACT_VERSION",
+    "approver_reference": "REPLACE_WITH_BOUNDED_APPROVER_REFERENCE",
+    "approved_at": "REPLACE_WITH_ISO_UTC_TIMESTAMP"
+  },
+  "status": "pending",
+  "manifest_sha256": ""
+}

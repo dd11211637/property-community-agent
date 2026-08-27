@@ -141,6 +141,7 @@ def test_policy_observes_only_bounded_assignment_facts() -> None:
         eligibility=_eligible(),
         assignment_observer=observed.append,
     )
+    policy.observe_accepted_head(available=True)
     selected = policy.select_new(
         community_id=COMMUNITY_ID,
         actor_id=ACTOR_ID,
@@ -160,6 +161,7 @@ def test_assignment_metric_has_bounded_versions_and_no_identity_or_salt() -> Non
         eligibility=_eligible(),
         assignment_observer=observability.observe_runtime_assignment,
     )
+    policy.observe_accepted_head(available=True)
     policy.select_new(
         community_id=COMMUNITY_ID,
         actor_id=ACTOR_ID,
@@ -278,9 +280,11 @@ def test_readiness_matches_advertised_rollout() -> None:
         control=RolloutControl(_config(500)),
         eligibility=RuntimeEligibility(),
     ).readiness()
-    ready = RuntimeSelectionPolicy(
+    ready_policy = RuntimeSelectionPolicy(
         control=RolloutControl(_config(500)), eligibility=_eligible()
-    ).readiness()
+    )
+    ready_policy.observe_accepted_head(available=True)
+    ready = ready_policy.readiness()
     assert optional["state"] == "OPTIONAL_ZERO"
     assert optional["ready"] is True
     assert advertised["state"] == "NOT_READY"
@@ -300,7 +304,7 @@ def test_assignment_fails_closed_until_accepted_head_probe_passes() -> None:
         "conversation_id": "accepted-head-gate",
     }
     blocked = policy.decide_new(**inputs)
-    policy.update_authoritative_readiness(accepted_head_available=True)
+    policy.observe_accepted_head(available=True)
     allowed = policy.decide_new(**inputs)
     assert blocked.runtime_version == "v1"
     assert blocked.eligibility_reason is EligibilityReason.ACCEPTED_HEAD_UNAVAILABLE
@@ -326,10 +330,12 @@ def test_new_secret_changes_only_future_assignment() -> None:
     old = RuntimeSelectionPolicy(
         control=RolloutControl(_config(5000, salt=SALT_A)), eligibility=_eligible()
     )
+    old.observe_accepted_head(available=True)
     new = RuntimeSelectionPolicy(
         control=RolloutControl(_config(5000, salt=SALT_B, version="cfg-v2")),
         eligibility=_eligible(),
     )
+    new.observe_accepted_head(available=True)
     candidate = next(
         f"future-{index}"
         for index in range(100)

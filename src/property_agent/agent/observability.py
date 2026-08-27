@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from collections.abc import Iterator, Mapping
@@ -14,8 +15,11 @@ from opentelemetry.propagate import extract
 from opentelemetry.trace import SpanKind, Status, StatusCode, get_current_span
 
 from property_agent.agent.runtime import RuntimeObservation
+from property_agent.agent.runtime_rollout import RolloutAuditEvent
 from property_agent.agent.telemetry_provider import TelemetryProviders, TelemetryState
 from property_agent.config import Settings
+
+logger = logging.getLogger(__name__)
 
 _METRIC_LABELS = frozenset(
     {
@@ -364,6 +368,38 @@ class AgentObservability:
                 "eligibility_policy_version": assignment.eligibility_policy_version,
                 "decision_class": assignment.decision_class.value,
             },
+        )
+
+    def observe_rollout_audit_event(self, event: RolloutAuditEvent) -> None:
+        """Record bounded PR7-C rollout audit transitions (release_sha, no salt)."""
+        outcome = (
+            "activation"
+            if event.old_basis_points == 0 and event.new_basis_points > 0
+            else "rollback"
+            if event.new_basis_points == 0
+            else "change"
+        )
+        self.count(
+            "agent_rollout_audit_total",
+            attributes={
+                "reason": event.reason.value,
+                "outcome": outcome,
+                "old_basis_points": str(event.old_basis_points),
+                "new_basis_points": str(event.new_basis_points),
+                "config_version": event.new_config_version,
+            },
+        )
+        logger.info(
+            "agent rollout audit old_bps=%s new_bps=%s old_version=%s new_version=%s "
+            "reason=%s approver_ref=%s release_sha=%s changed_at=%s",
+            event.old_basis_points,
+            event.new_basis_points,
+            event.old_config_version,
+            event.new_config_version,
+            event.reason.value,
+            event.operator_reference,
+            event.release_sha,
+            event.changed_at,
         )
 
     def shutdown(self) -> None:
