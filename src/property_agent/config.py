@@ -92,7 +92,7 @@ class Settings(BaseSettings):
     agent_v2_model_config_approved: bool = False
     # Model/prompt approval identity is derived from the shared production
     # ModelReleaseIdentity (property_agent.agent.model_release), not operator env,
-    # so a rollout is bound to the ACTUAL running model/provider/prompt release
+    # so a rollout is bound to the certified model execution contract and readiness
     # (PR7-C Blocker 1). "PENDING" (default) keeps any non-zero rollout fail-closed.
     # Deployment-provided activation manifest (PR7-C Gap 1). A non-zero rollout
     # only becomes active when this manifest is APPROVED and matches the deployed

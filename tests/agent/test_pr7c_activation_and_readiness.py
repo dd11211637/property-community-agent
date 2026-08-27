@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -16,14 +17,23 @@ import pytest
 
 from property_agent.agent.adapters.api.schemas import SendMessageRequest
 from property_agent.agent.application.composition import build_rollout_control_from_settings
+from property_agent.agent.model_gateway import (
+    DeterministicModelGateway,
+    FallbackModelGateway,
+    ModelGatewayError,
+)
 from property_agent.agent.model_release import (
     ModelReleaseIdentity,
     actual_model_release_identity,
 )
 from property_agent.agent.model_release_approval import (
     BASELINE_APPROVAL_MANIFEST_VERSION,
-    actual_provider_class,
+    FALLBACK_POLICY_VERSION,
+    PRIMARY_PROVIDER,
+    PROVIDER_RESPONSE_CONFIG_VERSION,
+    RETRY_POLICY_VERSION,
     effective_provider_config,
+    primary_provider_ready,
     provider_config_fingerprint,
     verify_approval_evidence,
     verify_committed_baseline_approval,
@@ -51,6 +61,7 @@ from property_agent.agent.runtime_version import (
     RuntimeEligibility,
     RuntimeSelectionPolicy,
 )
+from property_agent.config import Settings
 
 SALT = b"a" * 32
 COMMUNITY_ID = UUID("00000000-0000-0000-0000-000000000001")
@@ -110,10 +121,11 @@ def _identity(
         prompt_contract_version="semantic-planner-pr5-v1",
         approver_reference=approver,
         approved_at="2026-08-27T00:00:00+00:00",
-        provider_class="deepseek",
+        primary_provider="deepseek",
         model="deepseek-v4-flash",
         provider_config_version="deepseek-bounded-retry-v1",
         provider_config_fingerprint=FINGERPRINT,
+        fallback_policy_version=FALLBACK_POLICY_VERSION,
         model_release_evidence_reference="real-model:approved-baseline-v1",
         previous_rollout_basis_points=0,
         previous_rollout_config_version=ROLLOUT_BASELINE_CONFIG_VERSION,
@@ -121,14 +133,16 @@ def _identity(
 
 
 def _real_actual() -> ModelReleaseIdentity:
-    """The ACTUAL running model/provider/prompt release identity (approved state)."""
+    """A runnable certified model execution identity with verified evidence."""
     return ModelReleaseIdentity(
-        provider_class="deepseek",
+        primary_provider="deepseek",
         model="deepseek-v4-flash",
         provider_config_version="deepseek-bounded-retry-v1",
         provider_config_fingerprint=FINGERPRINT,
         prompt_contract_version="semantic-planner-pr5-v1",
         model_release_evidence_reference="real-model:approved-baseline-v1",
+        primary_provider_ready=True,
+        fallback_policy_version=FALLBACK_POLICY_VERSION,
     )
 
 
@@ -408,7 +422,7 @@ def test_parse_manifest_roundtrip_and_secret_salt_absent() -> None:
         ),
         (
             "manifest-version",
-            replace(_identity(), activation_manifest_version="pr7c-activation-v0"),
+            replace(_identity(), activation_manifest_version="pr7c-activation-v1"),
             RELEASE_SHA,
             "correct",
             "unsupported activation_manifest_version",
@@ -441,13 +455,12 @@ def test_activation_negative_matrix(cid, identity, running, sha_mode, match) -> 
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Blocker 1 — bind rollout approval to the ACTUAL model/provider/prompt release
+# Blocker 1 — bind rollout approval to the certified execution contract + readiness
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 def test_blocker1_actual_model_must_match_approved_manifest() -> None:
-    # Approved-looking manifest, but the ACTUAL running DeepSeek model differs from
-    # what the manifest claims. Binding to the actual ModelReleaseIdentity rejects.
+    # Approved-looking manifest, but the certified DeepSeek model differs.
     actual = replace(_real_actual(), model="deepseek-v4-pro")
     with pytest.raises(RolloutActivationError, match="model"):
         activate_rollout_control(
@@ -469,6 +482,28 @@ def test_blocker1_wrong_provider_config_version_rejected() -> None:
         )
 
 
+def test_blocker1_wrong_primary_provider_rejected() -> None:
+    identity = replace(_identity(), primary_provider="deterministic")
+    with pytest.raises(RolloutActivationError, match="primary_provider"):
+        activate_rollout_control(
+            _config(500),
+            release_sha=RELEASE_SHA,
+            manifest=_approved(identity),
+            model_release_identity=_real_actual(),
+        )
+
+
+def test_blocker1_wrong_fallback_policy_rejected() -> None:
+    identity = replace(_identity(), fallback_policy_version="no-fallback-v1")
+    with pytest.raises(RolloutActivationError, match="fallback_policy_version"):
+        activate_rollout_control(
+            _config(500),
+            release_sha=RELEASE_SHA,
+            manifest=_approved(identity),
+            model_release_identity=_real_actual(),
+        )
+
+
 def test_blocker1_wrong_prompt_contract_rejected() -> None:
     actual = replace(_real_actual(), prompt_contract_version="semantic-planner-pr5-v2")
     with pytest.raises(RolloutActivationError, match="prompt_contract_version"):
@@ -482,7 +517,7 @@ def test_blocker1_wrong_prompt_contract_rejected() -> None:
 
 def test_blocker1_duplicate_looking_strings_without_real_evidence_rejected() -> None:
     # The manifest carries real-looking model_approval_id/model_release_evidence_reference,
-    # but the ACTUAL approved model/release evidence reference is empty (PENDING
+    # but the certified release evidence reference is empty (PENDING
     # baseline -> no verified artifact), so no string can self-authorize.
     actual = replace(_real_actual(), model_release_evidence_reference="")
     identity = replace(
@@ -500,8 +535,7 @@ def test_blocker1_duplicate_looking_strings_without_real_evidence_rejected() -> 
 
 
 def test_blocker1_actual_release_identity_match_proceeds() -> None:
-    # When the approved manifest matches the ACTUAL running model/provider/prompt
-    # release identity and a real evidence reference exists, activation proceeds.
+    # Matching certified contract, current readiness, and verified evidence proceeds.
     events: list[RolloutAuditEvent] = []
     control = activate_rollout_control(
         _config(500),
@@ -543,13 +577,12 @@ def _verified_evidence_reference() -> str:
 
 def test_gov_a_baseline_pending_fails_closed_via_shared_validator() -> None:
     # The committed baseline approval is PENDING with an empty artifact_sha256, so
-    # the shared production validator yields no verified evidence and the real
-    # actual identity carries an EMPTY evidence reference (never "PENDING").
+    # the shared production validator yields no verified evidence and the certified
+    # identity carries an EMPTY evidence reference (never "PENDING").
     assert verify_committed_baseline_approval() is None
     actual = actual_model_release_identity()
     assert actual.model_release_evidence_reference == ""
-    # Non-zero activation against the real actual fails closed (either because the
-    # deterministic fallback provider differs, or because the evidence is PENDING).
+    # Non-zero activation fails closed on provider readiness or PENDING evidence.
     with pytest.raises(RolloutActivationError):
         activate_rollout_control(
             _config(500),
@@ -634,6 +667,34 @@ def test_gov_e_verified_approval_generates_evidence_reference(tmp_path) -> None:
     assert committed.evidence_reference == f"pr7b-real-model:{digest}"
 
 
+def test_gov_e_resolved_artifact_must_remain_under_config(tmp_path, monkeypatch) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    outside = tmp_path / "outside.json"
+    outside.write_bytes(b'{"outside": true}')
+    digest = hashlib.sha256(outside.read_bytes()).hexdigest()
+    approval = {
+        "approval_manifest_version": BASELINE_APPROVAL_MANIFEST_VERSION,
+        "approval_status": "APPROVED",
+        "artifact_path": "config/link.json",
+        "artifact_sha256": digest,
+    }
+    (config_dir / "pr7b_real_model_baseline_approval.json").write_text(
+        json.dumps(approval), encoding="utf-8"
+    )
+    original_resolve = Path.resolve
+    escaped_path = original_resolve(outside)
+    linked_path = config_dir / "link.json"
+
+    def resolve_with_escape(path, *args, **kwargs):
+        if path == linked_path:
+            return escaped_path
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve_with_escape)
+    assert verify_committed_baseline_approval(repo_root=tmp_path) is None
+
+
 def test_gov_f_forged_evidence_reference_fails_closed() -> None:
     # The manifest's model_release_evidence_reference is hashed into the digest but
     # must ALSO be validated against the actual release: a forged value fails even
@@ -671,20 +732,57 @@ def test_gov_g_model_approval_id_mismatch_fails_closed() -> None:
         )
 
 
-def test_gov_h_deterministic_fallback_cannot_masquerade_as_deepseek() -> None:
-    # No DeepSeek credential -> production gateway is DeterministicModelGateway and
-    # the actual provider class is "deterministic"; a deepseek-approved manifest
-    # fails closed instead of binding to a static "deepseek" source constant.
-    assert actual_provider_class(_provider_settings(api_key="")) == "deterministic"
-    assert actual_provider_class(_provider_settings(api_key="sk-key")) == "deepseek"
-    deterministic = replace(_real_actual(), provider_class="deterministic")
-    with pytest.raises(RolloutActivationError, match="provider_class"):
+def test_gov_h_unready_primary_provider_cannot_authorize_rollout() -> None:
+    # No DeepSeek credential -> the certified DeepSeek primary is NOT runnable, so a
+    # non-zero rollout must fail closed. The identity is NEVER mutated to "deterministic":
+    # primary_provider stays the certified DeepSeek contract; readiness is a separate
+    # runtime gate that activation checks independently.
+    assert primary_provider_ready(_provider_settings(api_key="")) is False
+    assert primary_provider_ready(_provider_settings(api_key="sk-key")) is True
+    assert PRIMARY_PROVIDER == "deepseek"
+    without_key = _provider_settings(api_key="")
+    with_key = _provider_settings(api_key="sk-key")
+    assert effective_provider_config(without_key) == effective_provider_config(with_key)
+    assert provider_config_fingerprint(without_key) == provider_config_fingerprint(with_key)
+    not_ready = replace(_real_actual(), primary_provider_ready=False)
+    with pytest.raises(RolloutActivationError, match="primary provider"):
         activate_rollout_control(
             _config(500),
             release_sha=RELEASE_SHA,
             manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA)),
-            model_release_identity=deterministic,
+            model_release_identity=not_ready,
         )
+
+
+def test_gov_h_ready_primary_without_verified_evidence_still_rejects() -> None:
+    ready_but_pending = replace(_real_actual(), model_release_evidence_reference="")
+    assert ready_but_pending.primary_provider == "deepseek"
+    assert ready_but_pending.primary_provider_ready is True
+    with pytest.raises(RolloutActivationError, match="PENDING"):
+        activate_rollout_control(
+            _config(500),
+            release_sha=RELEASE_SHA,
+            manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA)),
+            model_release_identity=ready_but_pending,
+        )
+
+
+def test_gov_h_deterministic_request_fallback_does_not_mutate_release_identity() -> None:
+    class FailingDeepSeek:
+        def ready(self):
+            return True
+
+        def analyze(self, text):
+            raise ModelGatewayError("synthetic provider failure")
+
+    identity = _real_actual()
+    gateway = FallbackModelGateway(FailingDeepSeek(), DeterministicModelGateway())
+    result = gateway.analyze("水管漏水需要报修")
+
+    assert result.provider == "keyword"
+    assert result.degraded is True
+    assert identity.primary_provider == "deepseek"
+    assert identity.primary_provider_ready is True
 
 
 def test_gov_i_base_url_change_changes_fingerprint_and_fails_closed() -> None:
@@ -730,7 +828,43 @@ def test_gov_j_timeout_change_changes_fingerprint_and_fails_closed() -> None:
         )
 
 
-def test_gov_k_secrets_excluded_from_identity_payload_and_audit() -> None:
+@pytest.mark.parametrize(
+    ("contract_name", "changed"),
+    [
+        ("DEEPSEEK_MAX_ATTEMPTS", 3),
+        ("RETRY_POLICY_VERSION", "different-retry-policy-v2"),
+        ("FALLBACK_ENABLED", False),
+        ("FALLBACK_POLICY_VERSION", "different-fallback-policy-v2"),
+        ("PROVIDER_RESPONSE_CONFIG_VERSION", "different-response-contract-v2"),
+    ],
+)
+def test_gov_k_fingerprint_binds_fallback_retry_and_response_contract(
+    monkeypatch, contract_name, changed
+) -> None:
+    import property_agent.agent.model_release_approval as approval_contract
+
+    settings_obj = _provider_settings()
+    effective = effective_provider_config(settings_obj)
+    assert effective == {
+        "primary_provider": PRIMARY_PROVIDER,
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-v4-flash",
+        "connect_timeout_seconds": 3.0,
+        "read_timeout_seconds": 12.0,
+        "total_timeout_seconds": 6.0,
+        "max_attempts": 2,
+        "retry_policy_version": RETRY_POLICY_VERSION,
+        "fallback_enabled": True,
+        "fallback_policy_version": FALLBACK_POLICY_VERSION,
+        "provider_response_config_version": PROVIDER_RESPONSE_CONFIG_VERSION,
+    }
+
+    certified = provider_config_fingerprint(settings_obj)
+    monkeypatch.setattr(approval_contract, contract_name, changed)
+    assert provider_config_fingerprint(settings_obj) != certified
+
+
+def test_gov_l_secrets_excluded_from_identity_payload_and_audit() -> None:
     api_key = "sk-super-secret-value"
     settings_obj = _provider_settings(api_key=api_key)
     assert api_key not in provider_config_fingerprint(settings_obj)
@@ -752,6 +886,11 @@ def test_gov_k_secrets_excluded_from_identity_payload_and_audit() -> None:
     )
     assert api_key not in repr(events[0])
     assert SALT.decode() not in repr(events[0])
+    first = _provider_settings()
+    second = _provider_settings()
+    first.agent_v2_rollout_salt = "first-secret-salt"
+    second.agent_v2_rollout_salt = "second-secret-salt"
+    assert provider_config_fingerprint(first) == provider_config_fingerprint(second)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -993,6 +1132,11 @@ def _settings(*, basis_points: int, release_sha: str = RELEASE_SHA) -> _FakeSett
 def test_composition_zero_rollout_activates_without_manifest() -> None:
     control = build_rollout_control_from_settings(_FakeSettings(), manifest=None, audit_sink=None)
     assert control.config.basis_points == 0
+
+
+def test_production_default_public_v2_rollout_remains_zero() -> None:
+    field = Settings.model_fields["agent_v2_new_conversation_rollout_basis_points"]
+    assert field.default == 0
 
 
 def test_composition_nonzero_without_manifest_fails_closed() -> None:

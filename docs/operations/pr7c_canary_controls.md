@@ -66,13 +66,22 @@ manifest and is returned as-is.
 
 The model/provider/prompt approval identity is **not** operator-supplied. It is derived from the
 single shared production contract `property_agent.agent.model_release.ModelReleaseIdentity`
-(`provider_class` from the ACTUAL running gateway — DeepSeek only when a credential is
-configured, otherwise the deterministic fallback — `model` from `settings.deepseek_model`,
-`provider_config_version`, `provider_config_fingerprint` (SHA-256 of the canonical non-secret
-effective provider configuration: base_url / model / timeouts / bounded retry `max_attempts`),
-`prompt_contract_version`, and the verified `model_release_evidence_reference`). PR7-B
-certification metadata consumes the same source of truth, so there is exactly one
-model-configuration authority.
+(`primary_provider` = the CERTIFIED DeepSeek contract — never dynamically swapped to whichever
+provider answered a request; `model` from `settings.deepseek_model`; `provider_config_version`;
+`provider_config_fingerprint` = SHA-256 of the canonical non-secret certified provider execution
+contract: primary_provider / normalized base_url / model / connect|read|total timeouts / bounded
+retry `max_attempts` + `retry_policy_version` / `fallback_enabled` / `fallback_policy_version` /
+`provider_response_config_version`); `prompt_contract_version`;
+and the verified `model_release_evidence_reference`). PR7-B certification metadata consumes the
+same source of truth, so there is exactly one model-configuration authority.
+
+`primary_provider_ready` (DeepSeek credential readiness) is an independent runtime eligibility
+condition, NOT part of the signed rollout manifest: activation fails closed when it is False, so a
+non-zero rollout can never be authorized while the certified DeepSeek primary cannot actually be
+constructed (production would otherwise run the deterministic fallback). The certified fallback /
+retry contract (`fallback_policy_version = deepseek-to-deterministic-v1`) is part of the signed
+identity and the provider-config fingerprint, so the certified fallback behavior is bound, not
+merely a runtime detail.
 
 The evidence reference is derived by the shared production validator
 `property_agent.agent.model_release_approval.verify_committed_baseline_approval` from the
@@ -91,20 +100,24 @@ The boundary enforces five independent controls on every non-zero activation:
 2. **Complete identity match + actual model binding.** Every field of `RolloutReleaseIdentity`
    must match the active `RolloutConfig` exactly: `rollout_config_version`, `rollout_basis_points`,
    `salt_version`, `eligibility_policy_version`, and `approved_fallback_runtime`. The
-   `activation_manifest_version` must be a *supplied* supported version (a missing version is not
-   silently defaulted); `approver_reference` must be a bounded opaque identifier and must not be a
+   `activation_manifest_version` must be the supplied `pr7c-activation-v2` schema version (v1 used
+   `provider_class` and is rejected after this correction; a missing version is not silently
+   defaulted); `approver_reference` must be a bounded opaque identifier and must not be a
    placeholder/`unconfigured` value; `approved_at` must be a valid UTC ISO-8601 timestamp. The
-   manifest's `provider_class`, `model`, `provider_config_version`, `provider_config_fingerprint`,
-   `prompt_contract_version`, `model_release_evidence_reference`, and `model_approval_id` are
-   verified against the **actual running** `ModelReleaseIdentity` — not against operator env and
-   not against each other — so a deployment cannot self-approve a rollout by supplying
-   matching-looking operator strings while the real model, provider (including a deterministic
-   fallback masquerading as DeepSeek), effective provider configuration, or approval evidence
-   differs. `provider_config_fingerprint` must be an exact 64-hex SHA-256 and equal the actual
-   fingerprint, so a certification against one base_url/timeout set can never run against a
-   different one. `model_release_evidence_reference` and `model_approval_id` must both equal the
-   SAME verified evidence reference (a single approval authority; the manifest's evidence field
-   is hashed into the digest AND validated against the actual release). A non-zero rollout
+   manifest's `primary_provider`, `model`, `provider_config_version`, `provider_config_fingerprint`,
+   `fallback_policy_version`, `prompt_contract_version`, `model_release_evidence_reference`, and
+   `model_approval_id` are verified against the **actual** `ModelReleaseIdentity` — not against
+   operator env and not against each other — so a deployment cannot self-approve a rollout by
+   supplying matching-looking operator strings while the real model, certified provider, effective
+   provider configuration (including the fallback/retry contract), or approval evidence differs.
+   `primary_provider_ready` (DeepSeek credential readiness) must be True at activation — a
+   non-zero rollout is never authorized while the certified DeepSeek primary cannot be constructed
+   (no static `"deepseek"` constant can masquerade). `provider_config_fingerprint` must be an exact
+   64-hex SHA-256 and equal the actual fingerprint, so a certification against one
+   base_url/timeout/fallback-policy set can never run against a different one.
+   `model_release_evidence_reference` and `model_approval_id` must both equal the SAME verified
+   evidence reference (a single approval authority; the manifest's evidence field is hashed into the
+   digest AND validated against the actual release). A non-zero rollout
    therefore remains fail-closed while `REAL_MODEL_BASELINE_APPROVAL=PENDING`.
 3. **SHA-256 integrity.** `manifest_sha256` must be the lowercase 64-hex SHA-256 of the
    canonical approval payload (see digest generation below). The payload now also binds the

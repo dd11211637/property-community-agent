@@ -25,46 +25,57 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 # Canonical server-owned production provider configuration and prompt contract versions.
-PROVIDER_CLASS = "deepseek"
 PROVIDER_CONFIG_VERSION = "deepseek-bounded-retry-v1"
 PROMPT_CONTRACT_VERSION = "semantic-planner-pr5-v1"
 
 
 @dataclass(frozen=True, slots=True)
 class ModelReleaseIdentity:
-    """Bounded facts describing the ACTUAL running model/provider/prompt release.
+    """Bounded facts describing the CERTIFIED model execution contract for this release.
 
-    This is the authoritative running release identity. Rollout activation binds an
+    This describes the certified release (the DeepSeek primary contract), NOT whichever
+    provider happened to answer an individual request. Rollout activation binds an
     approved manifest against these facts, never against operator env strings.
 
+    ``primary_provider`` is always the certified primary (``deepseek``); it is never
+    dynamically swapped to the deterministic fallback. ``primary_provider_ready`` is an
+    independent runtime eligibility condition (credential readiness) — activation must
+    fail closed when it is False; it is NOT part of the signed rollout manifest.
+    ``fallback_policy_version`` binds the certified fallback/retry contract.
     ``model_release_evidence_reference`` is the verified approval evidence reference
     derived from the protected baseline approval artifact (empty while PENDING).
-    ``provider_config_fingerprint`` is the SHA-256 of the canonical non-secret
-    effective provider configuration (base_url / model / timeouts / retry contract).
-    Neither field ever contains an API key, the rollout salt, or any credential.
+    ``provider_config_fingerprint`` is the SHA-256 of the canonical non-secret effective
+    provider configuration (base_url / model / timeouts / retry + fallback contract).
+    No field ever contains an API key, the rollout salt, or any credential.
     """
 
-    provider_class: str
+    primary_provider: str
     model: str
     provider_config_version: str
     provider_config_fingerprint: str
     prompt_contract_version: str
     model_release_evidence_reference: str
+    primary_provider_ready: bool
+    fallback_policy_version: str
 
 
 def actual_model_release_identity() -> ModelReleaseIdentity:
-    """The actual running model/provider/prompt release identity for this deployment.
+    """The certified model execution contract identity for this deployment.
 
-    Derived from the real configured model (``settings.deepseek_model``), the ACTUAL
-    running provider class (DeepSeek only when a credential is configured, otherwise
-    the deterministic fallback), the canonical effective provider-config fingerprint,
-    and the VERIFIED baseline approval evidence reference (empty while the protected
-    real-model baseline approval is PENDING). The import of ``settings`` and the
-    approval contract is lazy so this module stays importable from tests and
-    certification metadata without a full application boot.
+    Describes the CERTIFIED release: ``primary_provider`` is the DeepSeek certified
+    primary (never swapped to the fallback); ``primary_provider_ready`` reports whether
+    the DeepSeek credential is actually configured (an independent runtime gate);
+    ``fallback_policy_version`` and ``provider_config_fingerprint`` bind the certified
+    fallback/retry contract; and ``model_release_evidence_reference`` is derived by the
+    shared production validator from the protected real-model baseline approval artifact
+    (empty while the baseline is PENDING). Imports of ``settings`` and the approval
+    contract are lazy so this module stays importable from tests and certification
+    metadata without a full application boot.
     """
     from property_agent.agent.model_release_approval import (
-        actual_provider_class,
+        FALLBACK_POLICY_VERSION,
+        PRIMARY_PROVIDER,
+        primary_provider_ready,
         provider_config_fingerprint,
         verify_committed_baseline_approval,
     )
@@ -72,7 +83,7 @@ def actual_model_release_identity() -> ModelReleaseIdentity:
 
     evidence = verify_committed_baseline_approval()
     return ModelReleaseIdentity(
-        provider_class=actual_provider_class(settings),
+        primary_provider=PRIMARY_PROVIDER,
         model=settings.deepseek_model,
         provider_config_version=PROVIDER_CONFIG_VERSION,
         provider_config_fingerprint=provider_config_fingerprint(settings),
@@ -80,4 +91,6 @@ def actual_model_release_identity() -> ModelReleaseIdentity:
         model_release_evidence_reference=(
             evidence.evidence_reference if evidence is not None else ""
         ),
+        primary_provider_ready=primary_provider_ready(settings),
+        fallback_policy_version=FALLBACK_POLICY_VERSION,
     )

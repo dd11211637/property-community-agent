@@ -110,7 +110,7 @@ def build_rollout_control_from_settings(
 
     Delegates to ``activate_rollout_control`` so a non-zero rollout can only become
     active when an ``APPROVED`` activation manifest matches the deployed release AND
-    the ACTUAL running model/provider/prompt release identity (Blocker 1). This is the
+    the certified model execution identity and current provider readiness (Blocker 1). This is the
     single place configuration turns into an active rollout control.
 
     The model/prompt approval identity is derived from the shared production

@@ -48,7 +48,7 @@ _UNCONFIGURED_APPROVAL = "unconfigured"
 # bounded strings: equality of such strings can never constitute approval evidence.
 _NON_APPROVAL_SENTINELS = frozenset({"pending", "unapproved", "unconfigured", "none", "null", ""})
 
-ROLLOUT_ACTIVATION_MANIFEST_VERSION = "pr7c-activation-v1"
+ROLLOUT_ACTIVATION_MANIFEST_VERSION = "pr7c-activation-v2"
 SUPPORTED_ACTIVATION_MANIFEST_VERSIONS = frozenset({ROLLOUT_ACTIVATION_MANIFEST_VERSION})
 
 
@@ -68,26 +68,13 @@ class RolloutActivationManifestStatus(StrEnum):
 class RolloutReleaseIdentity:
     """Canonical, auditable rollout release/config identity.
 
-    Every field is server-owned and bounded. The secret rollout salt is NOT
-    included here: it must never enter logs, metrics, or audit evidence.
-
-    The actual running model/provider/prompt facts (``provider_class``, ``model``,
-    ``provider_config_version``, ``prompt_contract_version``) are bound against the
-    shared production ``ModelReleaseIdentity`` so a rollout is authorized only when the
-    manifest matches the *real* running release, never an operator-supplied string.
-
-    ``model_approval_id`` is the real approved model/release evidence reference and
-    must equal the actual ``ModelReleaseIdentity.model_release_evidence_reference``.
-    ``model_release_evidence_reference`` must equal the SAME verified evidence
-    reference (no second approval authority). ``provider_config_fingerprint`` is the
-    SHA-256 of the canonical effective non-secret provider configuration and must
-    equal the actual fingerprint, so certified configuration == rollout configuration.
-
-    The transition identity (``previous_*`` / target) is the explicit approved
-    rollout transition. The previous/target facts live inside the canonical manifest
-    SHA-256 payload so the digest binds them. ``record_activation`` emits exactly
-    these, and never synthesizes a previous state of zero except for a manifest that
-    explicitly represents the initial zero -> first-canary transition.
+    Every field is server-owned and bounded; the secret rollout salt is NEVER here.
+    ``primary_provider``/``model``/``provider_config_version``/``provider_config_fingerprint``/
+    ``fallback_policy_version``/``prompt_contract_version`` are bound against the shared
+    ``ModelReleaseIdentity`` (the certified contract). ``model_release_evidence_reference`` and
+    ``model_approval_id`` must both equal the SAME verified evidence reference (single approval
+    authority). The ``previous_*``/target transition facts live inside the canonical SHA-256
+    payload so the digest binds them; ``record_activation`` emits exactly these.
     """
 
     release_sha: str
@@ -101,11 +88,13 @@ class RolloutReleaseIdentity:
     approver_reference: str
     approved_at: str
     activation_manifest_version: str = ROLLOUT_ACTIVATION_MANIFEST_VERSION
-    # Actual running model/provider/prompt release facts (bound to ModelReleaseIdentity).
-    provider_class: str = "deepseek"
+    # Certified provider contract. Readiness is an independent activation gate,
+    # intentionally excluded from this signed manifest.
+    primary_provider: str = "deepseek"
     model: str = ""
     provider_config_version: str = "deepseek-bounded-retry-v1"
     provider_config_fingerprint: str = ""
+    fallback_policy_version: str = ""
     # Real verified model/release evidence reference (must equal the actual identity).
     model_release_evidence_reference: str = ""
     # Explicit approved transition identity (previous -> target rollout).
@@ -141,12 +130,11 @@ def parse_rollout_activation_manifest(data: dict) -> RolloutActivationManifest:
         # Hardening B: an APPROVED manifest must supply an explicit version. Do NOT
         # silently treat a missing version as the current supported version.
         activation_manifest_version=str(raw.get("activation_manifest_version", "")),
-        provider_class=str(raw.get("provider_class", "deepseek")),
+        primary_provider=str(raw.get("primary_provider", "")),
         model=str(raw.get("model", "")),
-        provider_config_version=str(
-            raw.get("provider_config_version", "deepseek-bounded-retry-v1")
-        ),
+        provider_config_version=str(raw.get("provider_config_version", "")),
         provider_config_fingerprint=str(raw.get("provider_config_fingerprint", "")),
+        fallback_policy_version=str(raw.get("fallback_policy_version", "")),
         model_release_evidence_reference=str(raw.get("model_release_evidence_reference", "")),
         previous_rollout_basis_points=int(raw.get("previous_rollout_basis_points", 0)),
         previous_rollout_config_version=str(
@@ -218,10 +206,11 @@ def _canonical_approval_payload(manifest: RolloutActivationManifest) -> str:
             "approver_reference": identity.approver_reference,
             "approved_at": identity.approved_at,
             "activation_manifest_version": identity.activation_manifest_version,
-            "provider_class": identity.provider_class,
+            "primary_provider": identity.primary_provider,
             "model": identity.model,
             "provider_config_version": identity.provider_config_version,
             "provider_config_fingerprint": identity.provider_config_fingerprint,
+            "fallback_policy_version": identity.fallback_policy_version,
             "model_release_evidence_reference": identity.model_release_evidence_reference,
             "previous_rollout_basis_points": identity.previous_rollout_basis_points,
             "previous_rollout_config_version": identity.previous_rollout_config_version,
@@ -349,18 +338,28 @@ def _validate_activation_config_match(
 def _validate_activation_model_release(
     identity: RolloutReleaseIdentity, *, model_release_identity: _ActualModelReleaseIdentity
 ) -> None:
-    """Fail closed: bind to the ACTUAL running model/provider/prompt release.
+    """Fail closed: bind to the certified model execution contract.
 
-    The manifest's provider/model/provider-config/fingerprint/prompt-contract facts,
-    the verified model/release evidence reference, and the model approval id are all
-    verified against the shared production ``ModelReleaseIdentity`` -- the *real
-    running* release -- never against operator env strings or each other.
+    Provider, model, config, prompt, and verified approval facts must all match the
+    server-owned ``ModelReleaseIdentity``. Readiness is checked independently.
     """
     actual = model_release_identity
     _require(
-        identity.provider_class == actual.provider_class,
-        f"activation manifest provider_class {identity.provider_class!r} "
-        f"does not match actual {actual.provider_class!r}",
+        identity.primary_provider == actual.primary_provider,
+        f"activation manifest primary_provider {identity.primary_provider!r} "
+        f"does not match actual {actual.primary_provider!r}",
+    )
+    # The certified DeepSeek primary must be constructible. Identity stays fixed;
+    # unavailable credentials make the release ineligible rather than deterministic.
+    _require(
+        actual.primary_provider_ready,
+        "certified primary provider is not ready "
+        "(DeepSeek credential unavailable); non-zero rollout fails closed",
+    )
+    _require(
+        identity.fallback_policy_version == actual.fallback_policy_version,
+        f"activation manifest fallback_policy_version {identity.fallback_policy_version!r} "
+        f"does not match actual {actual.fallback_policy_version!r}",
     )
     _require(
         identity.model == actual.model,
@@ -386,18 +385,11 @@ def _validate_activation_model_release(
         f"activation manifest prompt_contract_version {identity.prompt_contract_version!r} "
         f"does not match actual {actual.prompt_contract_version!r}",
     )
-    # Blocker A/B — the ACTUAL evidence reference must itself be a verified (real,
-    # non-PENDING) approval reference. An empty/PENDING derived reference means the
-    # protected real-model baseline approval has not recorded verified evidence, so
-    # no non-zero rollout may pass, no matter what strings the manifest carries.
     _require(
         _is_real_approval_id(actual.model_release_evidence_reference),
         "actual model_release_evidence_reference is not a verified approval reference "
         "(REAL_MODEL_BASELINE_APPROVAL=PENDING)",
     )
-    # Blocker C — the manifest's evidence reference must equal the same verified
-    # actual reference (it is hashed into the manifest digest, but must ALSO be
-    # validated against the actual release so a forged field cannot pass).
     _require(
         _is_real_approval_id(identity.model_release_evidence_reference),
         "manifest model_release_evidence_reference must be a real bounded approval identifier",

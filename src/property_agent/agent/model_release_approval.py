@@ -35,8 +35,22 @@ from typing import Any
 BASELINE_APPROVAL_MANIFEST_VERSION = "pr7b-real-model-baseline-approval-v1"
 # Canonical baseline approval file (committed; today approval_status=PENDING).
 COMMITTED_BASELINE_APPROVAL_PATH = "config/pr7b_real_model_baseline_approval.json"
-# DeepSeek gateway retries once -> two total attempts (deepseek-bounded-retry-v1).
+# The CERTIFIED primary model execution contract. This is the release a rollout is
+# certified against; it is NOT dynamically swapped to whichever provider happened to
+# answer an individual request. DeepSeek is the certified primary; the deterministic
+# gateway is a fallback, whose policy is itself part of the provider config contract.
+PRIMARY_PROVIDER = "deepseek"
+# Bounded retry contract: the DeepSeek gateway retries once (two total attempts).
 DEEPSEEK_MAX_ATTEMPTS = 2
+# Fallback policy: DeepSeek primary degrades to DeterministicModelGateway on failure.
+FALLBACK_POLICY_VERSION = "deepseek-to-deterministic-v1"
+FALLBACK_ENABLED = True
+RETRY_POLICY_VERSION = "transport-429-5xx-or-invalid-response-v1"
+# Provider request/response contract used by ``DeepSeekModelGateway``: Chat
+# Completions, JSON-object response format, thinking disabled, non-streaming. A
+# behavior change to that contract requires a new version so the certified
+# provider-config fingerprint changes even when endpoint/model/timeouts do not.
+PROVIDER_RESPONSE_CONFIG_VERSION = "deepseek-chat-json-object-no-thinking-v1"
 
 _SHA256_HEX = re.compile(r"^[a-f0-9]{64}$")
 _CONFIG_PREFIX = "config/"
@@ -136,24 +150,37 @@ def verify_committed_baseline_approval(
     except (OSError, ValueError):
         return None
     artifact_path = approval.get("artifact_path")
-    if not _within_config_boundary(artifact_path):
-        return None
-    full = (root / str(artifact_path)).resolve()
-    artifact_bytes = full.read_bytes() if full.is_file() else None
+    artifact_bytes = _read_bounded_config_artifact(root, artifact_path)
     return verify_approval_evidence(approval, artifact_bytes=artifact_bytes)
 
 
-def actual_provider_class(settings: Any) -> str:
-    """The ACTUAL running provider class for this deployment.
+def _read_bounded_config_artifact(root: Path, artifact_path: Any) -> bytes | None:
+    """Read an artifact only when its resolved path remains inside ``config/``."""
+    if not _within_config_boundary(artifact_path):
+        return None
+    try:
+        config_root = (root / "config").resolve()
+        full = (root / str(artifact_path)).resolve()
+        if not full.is_relative_to(config_root) or not full.is_file():
+            return None
+        return full.read_bytes()
+    except (OSError, RuntimeError):
+        return None
 
-    ``build_model_gateway`` returns ``DeterministicModelGateway`` when no DeepSeek
-    credential is configured, so a rollout must never bind to ``deepseek`` merely from
-    a static source constant. Returns ``"deepseek"`` only when a credential exists,
-    otherwise ``"deterministic"`` (the fallback that production actually runs).
+
+def primary_provider_ready(settings: Any) -> bool:
+    """Whether the CERTIFIED DeepSeek primary provider can actually be constructed.
+
+    ``build_model_gateway`` only constructs the DeepSeek gateway when a credential is
+    configured; otherwise production runs the deterministic fallback and the certified
+    DeepSeek release is NOT runnable. Readiness is an independent runtime eligibility
+    condition (NOT part of the signed rollout manifest), but activation must never
+    authorize a non-zero rollout while the certified primary cannot be constructed.
+
+    This never mutates the certified ``primary_provider``: the identity always describes
+    the DeepSeek certified contract; readiness is reported separately.
     """
-    if (getattr(settings, "deepseek_api_key", "") or "").strip():
-        return "deepseek"
-    return "deterministic"
+    return bool((getattr(settings, "deepseek_api_key", "") or "").strip())
 
 
 def _normalized_base_url(settings: Any) -> str:
@@ -166,20 +193,27 @@ def _normalized_base_url(settings: Any) -> str:
 
 
 def effective_provider_config(settings: Any) -> dict[str, Any]:
-    """Canonical NON-SECRET effective provider configuration (what actually runs).
+    """Canonical NON-SECRET certified provider execution contract.
 
-    Only parameters that materially change certified provider behavior are included.
-    API keys, authorization headers, the rollout salt, JWT and credentials are NEVER
-    included.
+    Binds the certified model execution contract (NOT whichever provider happened to
+    answer one request): the certified ``primary_provider``, normalized base_url, model,
+    timeouts, bounded retry policy, AND the fallback/retry contract
+    (``fallback_enabled`` + ``fallback_policy_version``). Only parameters that
+    materially change certified provider behavior are included. API keys, authorization
+    headers, the rollout salt, JWT and credentials are NEVER included.
     """
     return {
-        "provider_class": actual_provider_class(settings),
+        "primary_provider": PRIMARY_PROVIDER,
         "base_url": _normalized_base_url(settings),
         "model": getattr(settings, "deepseek_model", "") or "",
         "connect_timeout_seconds": getattr(settings, "deepseek_connect_timeout_seconds", 0),
         "read_timeout_seconds": getattr(settings, "deepseek_read_timeout_seconds", 0),
         "total_timeout_seconds": getattr(settings, "deepseek_total_timeout_seconds", 0),
         "max_attempts": DEEPSEEK_MAX_ATTEMPTS,
+        "retry_policy_version": RETRY_POLICY_VERSION,
+        "fallback_enabled": FALLBACK_ENABLED,
+        "fallback_policy_version": FALLBACK_POLICY_VERSION,
+        "provider_response_config_version": PROVIDER_RESPONSE_CONFIG_VERSION,
     }
 
 
