@@ -22,6 +22,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from property_agent.agent.infrastructure.models import AgentActionApprovalModel
@@ -82,6 +83,75 @@ class Approval:
         )
 
 
+# 部分唯一索引：同一 (conversation, action, params_hash) 至多一个开放审批。
+# create_pending 的并发竞争最终由它兜底，SAVEPOINT 仅负责优雅恢复，绝不替代它。
+_OPEN_APPROVAL_UNIQUE_CONSTRAINT = "ux_agent_approval_open_action"
+
+
+def _select_open_approval(
+    session: Session,
+    *,
+    conversation_id: str,
+    action: str,
+    params_hash: str,
+) -> AgentActionApprovalModel | None:
+    """读取同一 (conversation, action, params_hash) 的开放审批（PENDING/APPROVED）。
+
+    ``FOR UPDATE`` 只能锁定已存在行，无法消除"两线程都 SELECT 到 None 后并发
+    INSERT"的竞争——该竞争由部分唯一索引 + SAVEPOINT 恢复在 ``create_pending``
+    内兜底。本函数同时服务于 fast path 与 race 恢复后的 re-select。
+    """
+    return (
+        session.execute(
+            select(AgentActionApprovalModel)
+            .where(
+                AgentActionApprovalModel.conversation_id == conversation_id,
+                AgentActionApprovalModel.action == action,
+                AgentActionApprovalModel.params_hash == params_hash,
+                AgentActionApprovalModel.status.in_(
+                    [ApprovalStatus.PENDING.value, ApprovalStatus.APPROVED.value]
+                ),
+            )
+            .with_for_update()
+        )
+        .scalars()
+        .first()
+    )
+
+
+def _integrity_constraint_name(exc: IntegrityError) -> str | None:
+    """尽力从底层 DBAPI 异常取出违反的约束名（跨 psycopg3/2、SQLite）。
+
+    psycopg3 把 ``constraint_name`` 直接挂在异常上；psycopg2 走 ``.diag``；
+    SQLite 不暴露约束名。无法识别时返回 None，由调用方用 re-select 作最终仲裁，
+    绝不静默吞掉非预期异常。
+    """
+    orig = getattr(exc, "orig", None)
+    if orig is None:
+        return None
+    direct = getattr(orig, "constraint_name", None)
+    if direct:
+        return direct
+    diag = getattr(orig, "diag", None)
+    if diag is not None:
+        return getattr(diag, "constraint_name", None)
+    return None
+
+
+def _is_open_approval_unique_race(exc: IntegrityError) -> bool:
+    """是否为预期的开放审批并发重复竞争。
+
+    * 约束名可识别且等于 ``ux_agent_approval_open_action`` → True（恢复）；
+    * 约束名可识别但不符 → False（立即 re-raise，绝不吞掉其它约束冲突）；
+    * 无法识别约束名 → True，交由后续 re-select 做最终判断（找不到同 open
+      approval 即 re-raise）。
+    """
+    name = _integrity_constraint_name(exc)
+    if name is None:
+        return True
+    return name == _OPEN_APPROVAL_UNIQUE_CONSTRAINT
+
+
 class ApprovalService:
     """受控写操作的审批记录管理。"""
 
@@ -108,28 +178,24 @@ class ApprovalService:
         """为一次待确认操作创建 PENDING 审批。
 
         同一会话 + 同一动作 + 同一参数指纹，若已存在开放（PENDING/APPROVED）审批则
-        复用之（部分唯一索引保证原子性，避免重复确认凭空产生第二个业务对象）。
-        返回前在传入 session（或新建 session）内提交。
+        复用之（fast path）。否则在 SAVEPOINT 内 INSERT；若并发竞争中落败，部分唯一
+        索引 ``ux_agent_approval_open_action`` 会拒绝第二条 INSERT，落败方在此
+        **仅回滚 SAVEPOINT**（绝不回滚调用方传入 session 的整个事务），re-select 取
+        回胜方已提交的同一条 open approval 并返回。胜方提交语义维持不变：
+
+        * 内部新建 session → 本方法提交；
+        * 调用方传入 session → 不替调用方提交。
+
+        ``SELECT ... FOR UPDATE`` 无法锁定不存在的行，因此无法消除"两线程都读到
+        None 后并发 INSERT"的竞争；correctness 来自 DB 唯一索引 + SAVEPOINT 恢复，
+        而非单进程锁或 sleep/retry。
         """
         params_hash = canonical_hash(params)
         owned = session is not None
         s = session or self._session_factory()
         try:
-            existing = (
-                s.execute(
-                    select(AgentActionApprovalModel)
-                    .where(
-                        AgentActionApprovalModel.conversation_id == conversation_id,
-                        AgentActionApprovalModel.action == action,
-                        AgentActionApprovalModel.params_hash == params_hash,
-                        AgentActionApprovalModel.status.in_(
-                            [ApprovalStatus.PENDING.value, ApprovalStatus.APPROVED.value]
-                        ),
-                    )
-                    .with_for_update()
-                )
-                .scalars()
-                .first()
+            existing = _select_open_approval(
+                s, conversation_id=conversation_id, action=action, params_hash=params_hash
             )
             if existing is not None:
                 return Approval.from_model(existing)
@@ -142,8 +208,25 @@ class ApprovalService:
                 status=ApprovalStatus.PENDING.value,
                 expires_at=expires_at,
             )
-            s.add(model)
-            s.flush()
+            try:
+                with s.begin_nested():
+                    s.add(model)
+                    s.flush()
+            except IntegrityError as exc:
+                # 仅恢复预期的开放审批并发重复；其它约束冲突必须原样抛出。
+                if not _is_open_approval_unique_race(exc):
+                    raise
+                existing = _select_open_approval(
+                    s,
+                    conversation_id=conversation_id,
+                    action=action,
+                    params_hash=params_hash,
+                )
+                if existing is None:
+                    # SAVEPOINT 已回滚，但本事务看不到并发胜方的 open approval
+                    # （例如胜方仍在未提交状态）——无法安全恢复，必须抛出。
+                    raise
+                return Approval.from_model(existing)
             approval = Approval.from_model(model)
             if not owned:
                 s.commit()
