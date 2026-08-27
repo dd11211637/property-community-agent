@@ -6,7 +6,10 @@ review are closed without weakening the existing canary invariants.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import replace
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
@@ -16,6 +19,14 @@ from property_agent.agent.application.composition import build_rollout_control_f
 from property_agent.agent.model_release import (
     ModelReleaseIdentity,
     actual_model_release_identity,
+)
+from property_agent.agent.model_release_approval import (
+    BASELINE_APPROVAL_MANIFEST_VERSION,
+    actual_provider_class,
+    effective_provider_config,
+    provider_config_fingerprint,
+    verify_approval_evidence,
+    verify_committed_baseline_approval,
 )
 from property_agent.agent.observability import AgentObservability
 from property_agent.agent.runtime_rollout import (
@@ -48,6 +59,9 @@ ACTOR_ID = UUID("00000000-0000-0000-0000-000000000002")
 # Exact 40-char lowercase Git commit SHAs used across activation tests.
 RELEASE_SHA = "d289b13fee000000000000000000000000000000"
 RELEASE_SHA_B = "f00dcafe00000000000000000000000000000000"
+
+# Shared provider-config fingerprint used by the fixture identities (64 hex).
+FINGERPRINT = "a1a1" * 16
 
 APPROVED = RolloutActivationManifestStatus.APPROVED
 
@@ -99,6 +113,7 @@ def _identity(
         provider_class="deepseek",
         model="deepseek-v4-flash",
         provider_config_version="deepseek-bounded-retry-v1",
+        provider_config_fingerprint=FINGERPRINT,
         model_release_evidence_reference="real-model:approved-baseline-v1",
         previous_rollout_basis_points=0,
         previous_rollout_config_version=ROLLOUT_BASELINE_CONFIG_VERSION,
@@ -111,6 +126,7 @@ def _real_actual() -> ModelReleaseIdentity:
         provider_class="deepseek",
         model="deepseek-v4-flash",
         provider_config_version="deepseek-bounded-retry-v1",
+        provider_config_fingerprint=FINGERPRINT,
         prompt_contract_version="semantic-planner-pr5-v1",
         model_release_evidence_reference="real-model:approved-baseline-v1",
     )
@@ -465,19 +481,21 @@ def test_blocker1_wrong_prompt_contract_rejected() -> None:
 
 
 def test_blocker1_duplicate_looking_strings_without_real_evidence_rejected() -> None:
-    # The manifest carries a real-looking model_approval_id, and would "match" an
-    # operator-supplied string, but the ACTUAL approved model/release evidence
-    # reference is PENDING (no real approval artifact exists). Binding to the actual
-    # identity must reject — matching-looking strings alone cannot authorize rollout.
+    # The manifest carries real-looking model_approval_id/model_release_evidence_reference,
+    # but the ACTUAL approved model/release evidence reference is empty (PENDING
+    # baseline -> no verified artifact), so no string can self-authorize.
+    actual = replace(_real_actual(), model_release_evidence_reference="")
     identity = replace(
-        _identity(bps=500, release_sha=RELEASE_SHA), model_approval_id="real-model:looks-approved"
+        _identity(bps=500, release_sha=RELEASE_SHA),
+        model_approval_id="real-model:looks-approved",
+        model_release_evidence_reference="real-model:looks-approved",
     )
-    with pytest.raises(RolloutActivationError, match="model_approval_id"):
+    with pytest.raises(RolloutActivationError, match="PENDING"):
         activate_rollout_control(
             _config(500),
             release_sha=RELEASE_SHA,
             manifest=_approved(identity),
-            model_release_identity=actual_model_release_identity(),
+            model_release_identity=actual,
         )
 
 
@@ -494,6 +512,246 @@ def test_blocker1_actual_release_identity_match_proceeds() -> None:
     )
     assert control.config.basis_points == 500
     assert events[0].new_basis_points == 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Model-release governance — shared approval contract + actual binding
+# (Blocker A–E: PENDING fail-closed, artifact digest, evidence reference,
+#  actual provider, effective provider config)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _provider_settings(
+    *,
+    base_url: str = "https://api.deepseek.com",
+    api_key: str = "sk-test-key",
+    total_timeout: float = 6.0,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        deepseek_base_url=base_url,
+        deepseek_model="deepseek-v4-flash",
+        deepseek_api_key=api_key,
+        deepseek_connect_timeout_seconds=3.0,
+        deepseek_read_timeout_seconds=12.0,
+        deepseek_total_timeout_seconds=total_timeout,
+    )
+
+
+def _verified_evidence_reference() -> str:
+    return "pr7b-real-model:" + "a" * 64
+
+
+def test_gov_a_baseline_pending_fails_closed_via_shared_validator() -> None:
+    # The committed baseline approval is PENDING with an empty artifact_sha256, so
+    # the shared production validator yields no verified evidence and the real
+    # actual identity carries an EMPTY evidence reference (never "PENDING").
+    assert verify_committed_baseline_approval() is None
+    actual = actual_model_release_identity()
+    assert actual.model_release_evidence_reference == ""
+    # Non-zero activation against the real actual fails closed (either because the
+    # deterministic fallback provider differs, or because the evidence is PENDING).
+    with pytest.raises(RolloutActivationError):
+        activate_rollout_control(
+            _config(500),
+            release_sha=RELEASE_SHA,
+            manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA)),
+            model_release_identity=actual,
+        )
+    # Even when provider matches, the PENDING-derived empty evidence reference must
+    # fail closed — this is the governance, not a mocked "PENDING" string check.
+    pending = replace(_real_actual(), model_release_evidence_reference="")
+    with pytest.raises(RolloutActivationError, match="PENDING"):
+        activate_rollout_control(
+            _config(500),
+            release_sha=RELEASE_SHA,
+            manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA)),
+            model_release_identity=pending,
+        )
+
+
+def test_gov_b_pending_equality_cannot_self_authorize() -> None:
+    # actual / manifest all carry the literal "PENDING" and match each other, yet
+    # fail closed: equality of PENDING strings is not approval evidence.
+    pending_actual = replace(_real_actual(), model_release_evidence_reference="PENDING")
+    identity = replace(
+        _identity(bps=500, release_sha=RELEASE_SHA),
+        model_approval_id="PENDING",
+        model_release_evidence_reference="PENDING",
+    )
+    with pytest.raises(RolloutActivationError, match="PENDING"):
+        activate_rollout_control(
+            _config(500),
+            release_sha=RELEASE_SHA,
+            manifest=_approved(identity),
+            model_release_identity=pending_actual,
+        )
+
+
+def test_gov_c_approved_without_digest_fails_closed() -> None:
+    # approval_status=APPROVED but artifact_sha256="" -> NOT verified evidence.
+    approval = {
+        "approval_manifest_version": BASELINE_APPROVAL_MANIFEST_VERSION,
+        "approval_status": "APPROVED",
+        "artifact_path": "config/pr7b_real_model_approved_baseline_v1.json",
+        "artifact_sha256": "",
+    }
+    assert verify_approval_evidence(approval, artifact_bytes=b"{}") is None
+
+
+def test_gov_d_digest_mismatch_fails_closed() -> None:
+    # approval_status=APPROVED but artifact_sha256 is valid-looking yet wrong.
+    approval = {
+        "approval_manifest_version": BASELINE_APPROVAL_MANIFEST_VERSION,
+        "approval_status": "APPROVED",
+        "artifact_path": "config/pr7b_real_model_approved_baseline_v1.json",
+        "artifact_sha256": "0" * 64,
+    }
+    assert verify_approval_evidence(approval, artifact_bytes=b'{"x": 1}') is None
+
+
+def test_gov_e_verified_approval_generates_evidence_reference(tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    artifact = config_dir / "approved_baseline_v1.json"
+    artifact.write_bytes(b'{"baseline_version": "v1"}')
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    approval = {
+        "approval_manifest_version": BASELINE_APPROVAL_MANIFEST_VERSION,
+        "approval_status": "APPROVED",
+        "artifact_path": "config/approved_baseline_v1.json",
+        "artifact_sha256": digest,
+    }
+    verified = verify_approval_evidence(approval, artifact_bytes=artifact.read_bytes())
+    assert verified is not None
+    assert verified.artifact_sha256 == digest
+    assert verified.evidence_reference == f"pr7b-real-model:{digest}"
+    # Same contract through the committed-manifest loader with a repo-root override.
+    (config_dir / "pr7b_real_model_baseline_approval.json").write_text(
+        json.dumps(approval), encoding="utf-8"
+    )
+    committed = verify_committed_baseline_approval(repo_root=tmp_path)
+    assert committed is not None
+    assert committed.evidence_reference == f"pr7b-real-model:{digest}"
+
+
+def test_gov_f_forged_evidence_reference_fails_closed() -> None:
+    # The manifest's model_release_evidence_reference is hashed into the digest but
+    # must ALSO be validated against the actual release: a forged value fails even
+    # when the digest is recomputed correctly and model_approval_id matches.
+    evidence = _verified_evidence_reference()
+    actual = replace(_real_actual(), model_release_evidence_reference=evidence)
+    identity = replace(
+        _identity(bps=500, release_sha=RELEASE_SHA),
+        model_approval_id=evidence,
+        model_release_evidence_reference="forged:other-authority",
+    )
+    with pytest.raises(RolloutActivationError, match="model_release_evidence_reference"):
+        activate_rollout_control(
+            _config(500),
+            release_sha=RELEASE_SHA,
+            manifest=_approved(identity),
+            model_release_identity=actual,
+        )
+
+
+def test_gov_g_model_approval_id_mismatch_fails_closed() -> None:
+    evidence = _verified_evidence_reference()
+    actual = replace(_real_actual(), model_release_evidence_reference=evidence)
+    identity = replace(
+        _identity(bps=500, release_sha=RELEASE_SHA),
+        model_approval_id="different-authority:z",
+        model_release_evidence_reference=evidence,
+    )
+    with pytest.raises(RolloutActivationError, match="model_approval_id"):
+        activate_rollout_control(
+            _config(500),
+            release_sha=RELEASE_SHA,
+            manifest=_approved(identity),
+            model_release_identity=actual,
+        )
+
+
+def test_gov_h_deterministic_fallback_cannot_masquerade_as_deepseek() -> None:
+    # No DeepSeek credential -> production gateway is DeterministicModelGateway and
+    # the actual provider class is "deterministic"; a deepseek-approved manifest
+    # fails closed instead of binding to a static "deepseek" source constant.
+    assert actual_provider_class(_provider_settings(api_key="")) == "deterministic"
+    assert actual_provider_class(_provider_settings(api_key="sk-key")) == "deepseek"
+    deterministic = replace(_real_actual(), provider_class="deterministic")
+    with pytest.raises(RolloutActivationError, match="provider_class"):
+        activate_rollout_control(
+            _config(500),
+            release_sha=RELEASE_SHA,
+            manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA)),
+            model_release_identity=deterministic,
+        )
+
+
+def test_gov_i_base_url_change_changes_fingerprint_and_fails_closed() -> None:
+    certified = _provider_settings(base_url="https://api.deepseek.com")
+    different = _provider_settings(base_url="https://different.example")
+    assert provider_config_fingerprint(certified) != provider_config_fingerprint(different)
+    # Minimal normalization: a trailing slash does not change the fingerprint.
+    trailing = _provider_settings(base_url="https://api.deepseek.com/")
+    assert provider_config_fingerprint(certified) == provider_config_fingerprint(trailing)
+    fp_certified = provider_config_fingerprint(certified)
+    fp_different = provider_config_fingerprint(different)
+    actual = replace(_real_actual(), provider_config_fingerprint=fp_different)
+    identity = replace(
+        _identity(bps=500, release_sha=RELEASE_SHA),
+        provider_config_fingerprint=fp_certified,
+    )
+    with pytest.raises(RolloutActivationError, match="provider_config_fingerprint"):
+        activate_rollout_control(
+            _config(500),
+            release_sha=RELEASE_SHA,
+            manifest=_approved(identity),
+            model_release_identity=actual,
+        )
+
+
+def test_gov_j_timeout_change_changes_fingerprint_and_fails_closed() -> None:
+    certified = _provider_settings(total_timeout=6.0)
+    different = _provider_settings(total_timeout=10.0)
+    assert provider_config_fingerprint(certified) != provider_config_fingerprint(different)
+    fp_certified = provider_config_fingerprint(certified)
+    fp_different = provider_config_fingerprint(different)
+    actual = replace(_real_actual(), provider_config_fingerprint=fp_different)
+    identity = replace(
+        _identity(bps=500, release_sha=RELEASE_SHA),
+        provider_config_fingerprint=fp_certified,
+    )
+    with pytest.raises(RolloutActivationError, match="provider_config_fingerprint"):
+        activate_rollout_control(
+            _config(500),
+            release_sha=RELEASE_SHA,
+            manifest=_approved(identity),
+            model_release_identity=actual,
+        )
+
+
+def test_gov_k_secrets_excluded_from_identity_payload_and_audit() -> None:
+    api_key = "sk-super-secret-value"
+    settings_obj = _provider_settings(api_key=api_key)
+    assert api_key not in provider_config_fingerprint(settings_obj)
+    assert "api_key" not in json.dumps(effective_provider_config(settings_obj))
+    assert "deepseek_api_key" not in ModelReleaseIdentity.__dataclass_fields__
+    assert "secret_salt" not in ModelReleaseIdentity.__dataclass_fields__
+    assert "secret_salt" not in RolloutReleaseIdentity.__dataclass_fields__
+    actual = _real_actual()
+    identity = _identity(bps=500, release_sha=RELEASE_SHA)
+    assert api_key not in repr(actual)
+    assert SALT.decode() not in repr(identity)
+    events: list[RolloutAuditEvent] = []
+    activate_rollout_control(
+        _config(500),
+        release_sha=RELEASE_SHA,
+        manifest=_approved(identity),
+        model_release_identity=actual,
+        audit_sink=events.append,
+    )
+    assert api_key not in repr(events[0])
+    assert SALT.decode() not in repr(events[0])
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 from collections import Counter
@@ -25,6 +24,12 @@ from property_agent.agent.model_contracts import ModelGatewayError
 from property_agent.agent.model_release import (
     PROMPT_CONTRACT_VERSION,
     PROVIDER_CONFIG_VERSION,
+)
+from property_agent.agent.model_release_approval import (
+    BASELINE_APPROVAL_MANIFEST_VERSION,
+    actual_provider_class,
+    provider_config_fingerprint,
+    verify_approval_evidence,
 )
 from property_agent.agent.observability import AgentObservability
 from property_agent.agent.observed_boundaries import ObservedModelGateway
@@ -166,9 +171,12 @@ def evaluate(
         dataset_sha256=dataset_sha256(dataset),
         configuration={
             "provider": "DeepSeek",
+            "provider_class": actual_provider_class(settings),
             "model": settings.deepseek_model,
             "provider_config_version": PROVIDER_CONFIG_VERSION,
+            "provider_config_fingerprint": provider_config_fingerprint(settings),
             "prompt_contract_version": PROMPT_CONTRACT_VERSION,
+            "approval_manifest_version": BASELINE_APPROVAL_MANIFEST_VERSION,
             "failure_categories": dict(sorted(category_failures.items())),
             "approved_baseline_sha256": dataset_sha256(approved_baseline),
             "approved_baseline_identity": "pr7b-real-model-approved-baseline-v1",
@@ -393,8 +401,10 @@ def _not_run(
         dataset_sha256=dataset_sha256(dataset),
         configuration={
             "provider": "DeepSeek",
+            "provider_class": actual_provider_class(settings),
             "model": settings.deepseek_model,
             "provider_config_version": PROVIDER_CONFIG_VERSION,
+            "provider_config_fingerprint": provider_config_fingerprint(settings),
             "prompt_contract_version": PROMPT_CONTRACT_VERSION,
         },
         limitations=(reason,),
@@ -407,24 +417,28 @@ def _load_approved_baseline(
     approval_manifest: Path = DEFAULT_APPROVAL_MANIFEST,
     root: Path = ROOT,
 ) -> dict[str, float]:
+    # Consume the SINGLE shared production approval-validation contract: APPROVED
+    # status + bounded artifact path + exact artifact digest are all verified here,
+    # exactly as PR7-C rollout activation verifies them. PENDING / missing / digest
+    # mismatch / malformed manifests all yield a non-approved result.
     try:
         approval = json.loads(approval_manifest.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise BaselineIdentityError("approved baseline identity unavailable") from exc
-    if approval.get("approval_manifest_version") != "pr7b-real-model-baseline-approval-v1":
-        raise BaselineIdentityError("unsupported approved baseline identity version")
-    if approval.get("approval_status") != "APPROVED":
-        raise BaselineIdentityError("approved baseline identity is not approved")
     artifact_path = approval.get("artifact_path")
-    expected_digest = str(approval.get("artifact_sha256", ""))
-    if not isinstance(artifact_path, str) or len(expected_digest) != 64:
+    if not isinstance(artifact_path, str):
         raise BaselineIdentityError("approved baseline identity is incomplete")
     expected_path = (root / artifact_path).resolve()
+    artifact_bytes = expected_path.read_bytes() if expected_path.is_file() else None
+    verified = verify_approval_evidence(approval, artifact_bytes=artifact_bytes)
+    if verified is None:
+        raise BaselineIdentityError(
+            "approved baseline identity is not verified "
+            f"(approval_manifest_version={approval.get('approval_manifest_version')!r}, "
+            f"approval_status={approval.get('approval_status')!r})"
+        )
     if path.resolve() != expected_path or not expected_path.is_file():
         raise BaselineIdentityError("approved baseline artifact path mismatch")
-    actual_digest = hashlib.sha256(expected_path.read_bytes()).hexdigest()
-    if actual_digest != expected_digest:
-        raise BaselineIdentityError("approved baseline artifact digest mismatch")
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:

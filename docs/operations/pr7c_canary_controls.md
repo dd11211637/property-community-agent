@@ -66,9 +66,22 @@ manifest and is returned as-is.
 
 The model/provider/prompt approval identity is **not** operator-supplied. It is derived from the
 single shared production contract `property_agent.agent.model_release.ModelReleaseIdentity`
-(`provider_class`, `model` from `settings.deepseek_model`, `provider_config_version`,
-`prompt_contract_version`, and the real `model_release_evidence_reference`). PR7-B certification
-metadata consumes the same source of truth, so there is exactly one model-configuration authority.
+(`provider_class` from the ACTUAL running gateway — DeepSeek only when a credential is
+configured, otherwise the deterministic fallback — `model` from `settings.deepseek_model`,
+`provider_config_version`, `provider_config_fingerprint` (SHA-256 of the canonical non-secret
+effective provider configuration: base_url / model / timeouts / bounded retry `max_attempts`),
+`prompt_contract_version`, and the verified `model_release_evidence_reference`). PR7-B
+certification metadata consumes the same source of truth, so there is exactly one
+model-configuration authority.
+
+The evidence reference is derived by the shared production validator
+`property_agent.agent.model_release_approval.verify_committed_baseline_approval` from the
+protected real-model baseline approval artifact (`config/pr7b_real_model_baseline_approval.json`):
+only an `APPROVED` manifest whose artifact exists, is within the repo `config/` boundary, and
+whose exact SHA-256 matches the recorded `artifact_sha256` produces the deterministic evidence
+reference `pr7b-real-model:<artifact_sha256>`. While that baseline is `PENDING` the derived
+reference is empty, so no non-zero rollout can pass — `"PENDING"` equality can never
+self-authorize, and no source constant or operator string can claim approval.
 
 The boundary enforces five independent controls on every non-zero activation:
 
@@ -81,12 +94,18 @@ The boundary enforces five independent controls on every non-zero activation:
    `activation_manifest_version` must be a *supplied* supported version (a missing version is not
    silently defaulted); `approver_reference` must be a bounded opaque identifier and must not be a
    placeholder/`unconfigured` value; `approved_at` must be a valid UTC ISO-8601 timestamp. The
-   manifest's `provider_class`, `model`, `provider_config_version`, `prompt_contract_version`, and
-   `model_approval_id` (the real model/release evidence reference) are verified against the
-   **actual running** `ModelReleaseIdentity` — not against operator env — so a deployment cannot
-   self-approve a rollout by supplying matching-looking operator strings while the real model or
-   provider differs. A non-zero rollout therefore remains fail-closed until the protected
-   real-model baseline approval records a real `model_release_evidence_reference`.
+   manifest's `provider_class`, `model`, `provider_config_version`, `provider_config_fingerprint`,
+   `prompt_contract_version`, `model_release_evidence_reference`, and `model_approval_id` are
+   verified against the **actual running** `ModelReleaseIdentity` — not against operator env and
+   not against each other — so a deployment cannot self-approve a rollout by supplying
+   matching-looking operator strings while the real model, provider (including a deterministic
+   fallback masquerading as DeepSeek), effective provider configuration, or approval evidence
+   differs. `provider_config_fingerprint` must be an exact 64-hex SHA-256 and equal the actual
+   fingerprint, so a certification against one base_url/timeout set can never run against a
+   different one. `model_release_evidence_reference` and `model_approval_id` must both equal the
+   SAME verified evidence reference (a single approval authority; the manifest's evidence field
+   is hashed into the digest AND validated against the actual release). A non-zero rollout
+   therefore remains fail-closed while `REAL_MODEL_BASELINE_APPROVAL=PENDING`.
 3. **SHA-256 integrity.** `manifest_sha256` must be the lowercase 64-hex SHA-256 of the
    canonical approval payload (see digest generation below). The payload now also binds the
    actual model/provider/prompt facts and the explicit approved transition identity

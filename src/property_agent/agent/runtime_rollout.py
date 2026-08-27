@@ -117,13 +117,15 @@ class RolloutConfig:
         # Model/prompt approval identities are bounded opaque identifiers (a real
         # id may carry a provider qualifier such as "model:deepseek-v4"). They are
         # validated with the same bounded-opaque rule as operator references, not
-        # the strict version rule, and must still pass _is_real_approval_id before
-        # any non-zero activation is authorized.
+        # the strict version rule. An EMPTY model_approval_id is the legitimate
+        # pre-approval state (the actual evidence reference is empty while the
+        # protected real-model baseline approval is PENDING); non-zero activation
+        # still requires _is_real_approval_id at the activation boundary.
         for name, value in (
             ("model approval id", self.model_approval_id),
             ("prompt contract version", self.prompt_contract_version),
         ):
-            if not _OPERATOR_REFERENCE.fullmatch(value):
+            if value and not _OPERATOR_REFERENCE.fullmatch(value):
                 raise ValueError(f"invalid {name}")
         if self.fallback_runtime != "v1":
             raise ValueError("PR7-C safe new-conversation fallback must remain v1")

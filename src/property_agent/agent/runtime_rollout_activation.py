@@ -22,12 +22,9 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 
 from property_agent.agent.model_release import (
-    REAL_MODEL_RELEASE_EVIDENCE_REFERENCE,
-    actual_model_release_identity,
-)
-from property_agent.agent.model_release import (
     ModelReleaseIdentity as _ActualModelReleaseIdentity,
 )
+from property_agent.agent.model_release import actual_model_release_identity
 from property_agent.agent.runtime_rollout import (
     _OPERATOR_REFERENCE,
     ROLLOUT_BASELINE_CONFIG_VERSION,
@@ -43,9 +40,13 @@ logger = logging.getLogger(__name__)
 _RELEASE_SHA = re.compile(r"^[a-f0-9]{40}$")
 _SHA256_HEX = re.compile(r"^[a-f0-9]{64}$")
 # Model/prompt approval identities must be real bounded ids, never the literal
-# operator placeholders shipped inside the example manifest.
+# operator placeholders shipped inside the example manifest, and never an
+# un-verified approval sentinel (PENDING / UNAPPROVED / unconfigured / empty).
 _PLACEHOLDER_PREFIX = "REPLACE_WITH"
 _UNCONFIGURED_APPROVAL = "unconfigured"
+# Values that describe a NOT-approved approval must fail closed even though they are
+# bounded strings: equality of such strings can never constitute approval evidence.
+_NON_APPROVAL_SENTINELS = frozenset({"pending", "unapproved", "unconfigured", "none", "null", ""})
 
 ROLLOUT_ACTIVATION_MANIFEST_VERSION = "pr7c-activation-v1"
 SUPPORTED_ACTIVATION_MANIFEST_VERSIONS = frozenset({ROLLOUT_ACTIVATION_MANIFEST_VERSION})
@@ -77,6 +78,10 @@ class RolloutReleaseIdentity:
 
     ``model_approval_id`` is the real approved model/release evidence reference and
     must equal the actual ``ModelReleaseIdentity.model_release_evidence_reference``.
+    ``model_release_evidence_reference`` must equal the SAME verified evidence
+    reference (no second approval authority). ``provider_config_fingerprint`` is the
+    SHA-256 of the canonical effective non-secret provider configuration and must
+    equal the actual fingerprint, so certified configuration == rollout configuration.
 
     The transition identity (``previous_*`` / target) is the explicit approved
     rollout transition. The previous/target facts live inside the canonical manifest
@@ -100,8 +105,9 @@ class RolloutReleaseIdentity:
     provider_class: str = "deepseek"
     model: str = ""
     provider_config_version: str = "deepseek-bounded-retry-v1"
-    # Real approved model/release evidence reference (must equal the actual identity).
-    model_release_evidence_reference: str = REAL_MODEL_RELEASE_EVIDENCE_REFERENCE
+    provider_config_fingerprint: str = ""
+    # Real verified model/release evidence reference (must equal the actual identity).
+    model_release_evidence_reference: str = ""
     # Explicit approved transition identity (previous -> target rollout).
     previous_rollout_basis_points: int = 0
     previous_rollout_config_version: str = ROLLOUT_BASELINE_CONFIG_VERSION
@@ -140,9 +146,8 @@ def parse_rollout_activation_manifest(data: dict) -> RolloutActivationManifest:
         provider_config_version=str(
             raw.get("provider_config_version", "deepseek-bounded-retry-v1")
         ),
-        model_release_evidence_reference=str(
-            raw.get("model_release_evidence_reference", REAL_MODEL_RELEASE_EVIDENCE_REFERENCE)
-        ),
+        provider_config_fingerprint=str(raw.get("provider_config_fingerprint", "")),
+        model_release_evidence_reference=str(raw.get("model_release_evidence_reference", "")),
         previous_rollout_basis_points=int(raw.get("previous_rollout_basis_points", 0)),
         previous_rollout_config_version=str(
             raw.get("previous_rollout_config_version", ROLLOUT_BASELINE_CONFIG_VERSION)
@@ -174,10 +179,14 @@ def load_rollout_activation_manifest(path: str) -> RolloutActivationManifest | N
 
 
 def _is_real_approval_id(value: str) -> bool:
-    """A model/prompt approval id is real only when bounded and not a placeholder."""
-    if not _OPERATOR_REFERENCE.fullmatch(value):
+    """A model/prompt approval id is real only when bounded and not a placeholder
+    and not an un-verified approval sentinel (PENDING / UNAPPROVED / unconfigured /
+    empty). String equality between such values can never constitute approval."""
+    if not value or not _OPERATOR_REFERENCE.fullmatch(value):
         return False
-    if value == _UNCONFIGURED_APPROVAL or value.upper().startswith(_PLACEHOLDER_PREFIX):
+    if value.lower() in _NON_APPROVAL_SENTINELS:
+        return False
+    if value.upper().startswith(_PLACEHOLDER_PREFIX):
         return False
     return True
 
@@ -212,6 +221,7 @@ def _canonical_approval_payload(manifest: RolloutActivationManifest) -> str:
             "provider_class": identity.provider_class,
             "model": identity.model,
             "provider_config_version": identity.provider_config_version,
+            "provider_config_fingerprint": identity.provider_config_fingerprint,
             "model_release_evidence_reference": identity.model_release_evidence_reference,
             "previous_rollout_basis_points": identity.previous_rollout_basis_points,
             "previous_rollout_config_version": identity.previous_rollout_config_version,
@@ -339,43 +349,76 @@ def _validate_activation_config_match(
 def _validate_activation_model_release(
     identity: RolloutReleaseIdentity, *, model_release_identity: _ActualModelReleaseIdentity
 ) -> None:
-    """Fail closed on Blocker 1: bind to the ACTUAL running model/provider/prompt release.
+    """Fail closed: bind to the ACTUAL running model/provider/prompt release.
 
-    The manifest's provider/model/provider-config/prompt-contract facts and the real
-    approved model/release evidence reference are verified against the shared production
-    ``ModelReleaseIdentity`` -- the *real running* release -- not against operator env
-    strings. A deployment cannot make rollout eligible merely by supplying
-    matching-looking operator values while the actual model/provider differs.
+    The manifest's provider/model/provider-config/fingerprint/prompt-contract facts,
+    the verified model/release evidence reference, and the model approval id are all
+    verified against the shared production ``ModelReleaseIdentity`` -- the *real
+    running* release -- never against operator env strings or each other.
     """
+    actual = model_release_identity
     _require(
-        identity.provider_class == model_release_identity.provider_class,
+        identity.provider_class == actual.provider_class,
         f"activation manifest provider_class {identity.provider_class!r} "
-        f"does not match actual {model_release_identity.provider_class!r}",
+        f"does not match actual {actual.provider_class!r}",
     )
     _require(
-        identity.model == model_release_identity.model,
+        identity.model == actual.model,
         f"activation manifest model {identity.model!r} "
-        f"does not match actual configured model {model_release_identity.model!r}",
+        f"does not match actual configured model {actual.model!r}",
     )
     _require(
-        identity.provider_config_version == model_release_identity.provider_config_version,
+        identity.provider_config_version == actual.provider_config_version,
         f"activation manifest provider_config_version {identity.provider_config_version!r} "
-        f"does not match actual {model_release_identity.provider_config_version!r}",
+        f"does not match actual {actual.provider_config_version!r}",
     )
     _require(
-        identity.prompt_contract_version == model_release_identity.prompt_contract_version,
-        f"activation manifest prompt_contract_version {identity.prompt_contract_version!r} "
-        f"does not match actual {model_release_identity.prompt_contract_version!r}",
+        _SHA256_HEX.fullmatch(identity.provider_config_fingerprint),
+        "manifest provider_config_fingerprint must be a 64-char lowercase SHA-256 hex digest",
     )
+    _require(
+        identity.provider_config_fingerprint == actual.provider_config_fingerprint,
+        f"activation manifest provider_config_fingerprint {identity.provider_config_fingerprint!r} "
+        f"does not match actual {actual.provider_config_fingerprint!r}",
+    )
+    _require(
+        identity.prompt_contract_version == actual.prompt_contract_version,
+        f"activation manifest prompt_contract_version {identity.prompt_contract_version!r} "
+        f"does not match actual {actual.prompt_contract_version!r}",
+    )
+    # Blocker A/B — the ACTUAL evidence reference must itself be a verified (real,
+    # non-PENDING) approval reference. An empty/PENDING derived reference means the
+    # protected real-model baseline approval has not recorded verified evidence, so
+    # no non-zero rollout may pass, no matter what strings the manifest carries.
+    _require(
+        _is_real_approval_id(actual.model_release_evidence_reference),
+        "actual model_release_evidence_reference is not a verified approval reference "
+        "(REAL_MODEL_BASELINE_APPROVAL=PENDING)",
+    )
+    # Blocker C — the manifest's evidence reference must equal the same verified
+    # actual reference (it is hashed into the manifest digest, but must ALSO be
+    # validated against the actual release so a forged field cannot pass).
+    _require(
+        _is_real_approval_id(identity.model_release_evidence_reference),
+        "manifest model_release_evidence_reference must be a real bounded approval identifier",
+    )
+    _require(
+        identity.model_release_evidence_reference == actual.model_release_evidence_reference,
+        f"activation manifest model_release_evidence_reference "
+        f"{identity.model_release_evidence_reference!r} does not match actual verified "
+        f"{actual.model_release_evidence_reference!r}",
+    )
+    # model_approval_id binds to the SAME verified evidence authority (no second
+    # approval authority).
     _require(
         _is_real_approval_id(identity.model_approval_id),
         "manifest model_approval_id must be a real bounded approval identifier",
     )
     _require(
-        identity.model_approval_id == model_release_identity.model_release_evidence_reference,
+        identity.model_approval_id == actual.model_release_evidence_reference,
         f"activation manifest model_approval_id {identity.model_approval_id!r} "
-        f"does not match the actual approved model/release evidence reference "
-        f"{model_release_identity.model_release_evidence_reference!r}",
+        f"does not match the actual verified model/release evidence reference "
+        f"{actual.model_release_evidence_reference!r}",
     )
 
 
@@ -411,14 +454,17 @@ def activate_rollout_control(
     * complete ``RolloutReleaseIdentity`` matches the active configuration
       field-by-field, with a bounded ``approver_reference``, a valid UTC
       ``approved_at``, and real model/prompt approval identities (Blocker 2);
-    * provider/model/provider-config/prompt-contract facts and the real approved
-      model/release evidence reference match the ACTUAL running ``ModelReleaseIdentity``
-      (Blocker 1 — no self-referential operator string).
+    * provider/model/provider-config/prompt-contract facts, the effective
+      provider-config fingerprint, and the real verified model/release evidence
+      reference match the ACTUAL running ``ModelReleaseIdentity`` (Blocker 1 — no
+      self-referential operator string, no un-verified PENDING equality, no forged
+      evidence reference).
 
     ``model_release_identity`` is the actual running release identity; when omitted it
-    defaults to ``actual_model_release_identity()``. Today that reference is ``PENDING``,
-    so any non-zero rollout remains fail-closed until the protected real-model baseline
-    approval records a real reference.
+    defaults to ``actual_model_release_identity()``. The evidence reference is derived
+    from the protected real-model baseline approval artifact; while that baseline is
+    PENDING the reference is empty, so any non-zero rollout remains fail-closed until
+    the protected real-model baseline approval records verified evidence.
 
     Otherwise this fails closed by raising ``RolloutActivationError``. A fresh
     process starting directly at a non-zero rollout therefore cannot silently
