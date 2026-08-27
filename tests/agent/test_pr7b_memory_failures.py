@@ -1,7 +1,10 @@
+from types import SimpleNamespace
 from uuid import uuid4
 
 from property_agent.agent.application.embedding import EmbeddingUnavailable
 from property_agent.agent.application.memory_service import AgentMemoryService
+from property_agent.agent.observability import AgentObservability
+from property_agent.agent.observed_boundaries import ObservedMemoryReader
 from tests.agent.test_pr6_long_term_memory import Context, _factory, _query
 
 
@@ -27,7 +30,12 @@ def test_embedding_vector_outage_uses_only_structured_scope_safe_results():
         )
     with factory() as session:
         service = AgentMemoryService(session, embedding_provider=FailingEmbedding())
-        result = service.retrieve(_query(owner, house))
+        observation = AgentObservability.in_memory()
+        reader = ObservedMemoryReader(
+            lambda _text, _runtime: service.retrieve(_query(owner, house)), observation
+        )
+        runtime = SimpleNamespace(observation=SimpleNamespace(runtime_version="v1"))
+        result = reader("联系偏好", runtime)
         assert [item.content for item in result.items] == ["上门前发送站内通知"]
         assert result.degraded is True
         assert result.degradation_reason == "EMBEDDING_OR_VECTOR_UNAVAILABLE"

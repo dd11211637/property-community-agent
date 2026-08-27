@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -14,8 +13,12 @@ from property_agent.agent.application.langgraph_runtime import LangGraphEngine, 
 from property_agent.agent.application.memory_writer import AcceptedEvidenceMemoryWriter
 from property_agent.agent.application.runner import AgentSessionRunner
 from property_agent.agent.infrastructure.checkpointer import SqlAlchemyCheckpointer
-from property_agent.agent.infrastructure.run_lease import Lease, StaleAgentRunError
+from property_agent.agent.infrastructure.run_lease import RunLeaseService, StaleAgentRunError
 from property_agent.agent.memory_contracts import MemoryCandidate, MemoryKind, MemorySource
+from property_agent.agent.observability import AgentObservability
+from property_agent.agent.observed_boundaries import ObservedMemoryWriter
+from property_agent.agent.state import AgentState
+from property_agent.agent.stream_events import StreamEventKind
 from property_agent.platform.infrastructure.orm_models import Base
 from tests.agent.test_pr4_langgraph_runtime import _supervisor, repair_state, runtime_fixture
 from tests.agent.test_pr6_long_term_memory import (
@@ -29,7 +32,8 @@ from tests.agent.test_pr6_long_term_memory import (
 
 
 def test_c5_official_checkpoint_failure_never_advances_application_accepted_head(monkeypatch):
-    resource = build_saver_resource(in_memory=True)
+    observation = AgentObservability.in_memory()
+    resource = build_saver_resource(in_memory=True, observability=observation)
     runtime = runtime_fixture()
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
@@ -41,7 +45,7 @@ def test_c5_official_checkpoint_failure_never_advances_application_accepted_head
     def fail_put(*_args, **_kwargs):
         raise RuntimeError("injected official saver failure")
 
-    monkeypatch.setattr(resource.saver, "put", fail_put)
+    monkeypatch.setattr(resource.saver._delegate, "put", fail_put)
     graph = LangGraphEngine(
         resource.saver,
         _supervisor({"repair_list": lambda _request, _runtime: {"count": 0, "items": ()}}),
@@ -73,7 +77,11 @@ def test_c10_memory_writer_persistence_failure_does_not_rollback_accepted_turn()
     def failed_service(_session):
         raise RuntimeError("injected Memory persistence failure")
 
-    writer = AcceptedEvidenceMemoryWriter(sessions, Extractor(), service_factory=failed_service)
+    observation = AgentObservability.in_memory()
+    writer = ObservedMemoryWriter(
+        AcceptedEvidenceMemoryWriter(sessions, Extractor(), service_factory=failed_service),
+        observation,
+    )
     context = Context(uuid4(), uuid4(), frozenset())
     runner = AgentSessionRunner(
         graph=_Graph(),
@@ -89,17 +97,51 @@ def test_c10_memory_writer_persistence_failure_does_not_rollback_accepted_turn()
     engine.dispose()
 
 
-def test_c12_runner_rejects_stale_candidate_before_canonical_publication(monkeypatch):
+@pytest.mark.parametrize("operation", ["start", "stream_start", "resume", "stream_resume"])
+def test_c12_runner_rejects_stale_candidate_before_canonical_publication(operation):
     context = Context(uuid4(), uuid4(), frozenset())
-    conversation_id = "pr7b-c12-runner"
+    conversation_id = f"pr7b-c12-{operation}"
 
-    class CandidateGraph(_Graph):
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(bind=engine, expire_on_commit=False)
+
+    class RecordingRunLeaseService(RunLeaseService):
+        acquired = []
+
+        def acquire(self, *args, **kwargs):
+            lease = super().acquire(*args, **kwargs)
+            self.acquired.append(lease)
+            return lease
+
+    leases = RecordingRunLeaseService(sessions, lease_seconds=30)
+
+    class CandidateEngine:
         internal_candidate = None
+        replacement = None
 
-        def invoke(self, state, **kwargs):
-            result = super().invoke(state, **kwargs)
-            self.internal_candidate = result["state"]
-            return result
+        def _complete_after_replacement(self, state):
+            state.add_message("assistant", "候选结果")
+            self.internal_candidate = state
+            original = leases.acquired[0]
+            leases.release(conversation_id, original.run_id)
+            self.replacement = leases.acquire(conversation_id, run_id=uuid4())
+            assert self.replacement.fence == original.fence + 1
+            return {"state": state, "interrupt": None, "done": True}
+
+        def invoke(self, state, **_kwargs):
+            return self._complete_after_replacement(state)
+
+        def invoke_stream(self, state, **_kwargs):
+            yield "__final__", self._complete_after_replacement(state)
+
+        def resume(self, _thread_id, _resume_value, *, state, **_kwargs):
+            return self._complete_after_replacement(state)
+
+        def resume_stream(self, _thread_id, _resume_value, *, state, **_kwargs):
+            yield "__final__", self._complete_after_replacement(state)
 
     class AcceptedHead:
         version = 7
@@ -112,61 +154,79 @@ def test_c12_runner_rejects_stale_candidate_before_canonical_publication(monkeyp
             self.published += 1
             return self.version + 1
 
-    class LeaseService:
-        def __init__(self):
-            self.current = self._lease(1)
-
-        def _lease(self, fence):
-            return Lease(
-                conversation_id,
-                uuid4(),
-                fence,
-                datetime.now(timezone.utc) + timedelta(seconds=30),
-            )
-
-        def acquire(self, _thread_id, *, run_id):
-            self.current = Lease(
-                conversation_id, run_id, 1, datetime.now(timezone.utc) + timedelta(seconds=30)
-            )
-            return self.current
-
-        def renew(self, *_args, **_kwargs):
-            return self.current
-
-        def release(self, *_args, **_kwargs):
+        def load_accepted(self, _conversation_id):
             return None
 
-        def replace(self):
-            self.current = self._lease(2)
-            return self.current
+    class Conversations(_Conversations):
+        sync_calls = 0
 
-    graph = CandidateGraph()
+        def sync_from_state(self, state, *, waiting_confirm):
+            self.sync_calls += 1
+            return super().sync_from_state(state, waiting_confirm=waiting_confirm)
+
+    candidate_engine = CandidateEngine()
     accepted = AcceptedHead()
-    leases = LeaseService()
     writer = _WriterSpy()
     business_mutations = []
+    conversations = Conversations(context)
+    restored = AgentState(conversation_id=conversation_id)
     runner = AgentSessionRunner(
-        graph=graph,
-        conversations=_Conversations(context),
-        recovery=_Recovery(),
+        graph=_Graph(),
+        conversations=conversations,
+        recovery=_Recovery(restored),
         checkpointer=accepted,
         run_lease=leases,
         memory_writer=writer,
         turn_recorder=lambda *_args: business_mutations.append("mutation"),
         enforce_concurrency=True,
+        heartbeat_interval_seconds=3600,
     )
-    monkeypatch.setattr(runner._turn_guard, "start_heartbeat", lambda _lease: None)
+    delivered = []
 
-    def reject_after_engine(_lease, _heartbeat):
-        replacement = leases.replace()
-        assert replacement.fence == 2
-        raise StaleAgentRunError(conversation_id)
-
-    monkeypatch.setattr(runner._turn_guard, "assert_alive", reject_after_engine)
     with pytest.raises(StaleAgentRunError):
-        runner.start(conversation_id=conversation_id, context=context, user_text="候选结果")
-    assert graph.internal_candidate is not None
+        if operation == "start":
+            runner.start(
+                conversation_id=conversation_id,
+                context=context,
+                user_text="候选结果",
+                engine=candidate_engine,
+            )
+        elif operation == "stream_start":
+            delivered.extend(
+                runner.stream_start(
+                    conversation_id=conversation_id,
+                    context=context,
+                    user_text="候选结果",
+                    engine=candidate_engine,
+                )
+            )
+        elif operation == "resume":
+            runner.resume(
+                conversation_id=conversation_id,
+                context=context,
+                confirmed=False,
+                engine=candidate_engine,
+            )
+        else:
+            delivered.extend(
+                runner.stream_resume(
+                    conversation_id=conversation_id,
+                    context=context,
+                    confirmed=False,
+                    engine=candidate_engine,
+                )
+            )
+    assert candidate_engine.internal_candidate is not None
+    assert candidate_engine.replacement is not None
     assert accepted.version == 7
     assert accepted.published == 0
+    assert conversations.sync_calls == 0
     assert writer.calls == 0
     assert business_mutations == []
+    assert all(event.kind is not StreamEventKind.FINAL for event in delivered)
+    assert any(
+        point.name == "agent_lease_operation_total"
+        and point.attributes == {"operation": "renew", "outcome": "lost"}
+        for point in runner._observability.points
+    )
+    engine.dispose()

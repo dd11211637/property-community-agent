@@ -21,9 +21,11 @@ from testing.pr7b.chaos_gate import (
     DRILL_ASSERTION_NODES,
     DRILL_MANIFEST,
     _chaos_observability_cases,
+    _valid_campaign_receipt,
     derive_drill_evidence,
 )
 from testing.pr7b.chaos_gate import derive_gate_status as chaos_gate_status
+from testing.pr7b.chaos_signals import matching_signals
 from testing.pr7b.evidence import GateEvidence, GateStatus, write_evidence
 from testing.pr7b.load_gate import LoadProfile, _server_observability_metrics, execute
 from testing.pr7b.real_model_gate import (
@@ -251,6 +253,72 @@ def test_chaos_test_assertions_remain_distinct_from_missing_telemetry():
     assert evidence["C2"]["durable_database_assertion"]["status"] == "NOT_APPLICABLE"
     assert evidence["C2"]["telemetry_evidence"]["status"] == "NOT_RUN"
     assert evidence["C2"]["status"] == "NOT_RUN"
+
+
+def test_correct_campaign_synthetic_wrapper_signal_cannot_satisfy_chaos_receipt():
+    signals = [
+        {
+            "name": "agent_model_provider_outcome_total",
+            "attributes": {"outcome": "timeout"},
+            "production_origin": False,
+        }
+    ]
+    assert matching_signals("C1", signals) == []
+
+
+def test_actual_component_signal_for_another_case_cannot_satisfy_chaos_receipt():
+    signals = [
+        {
+            "name": "agent_model_provider_outcome_total",
+            "attributes": {"outcome": "schema_failure"},
+            "production_origin": True,
+        }
+    ]
+    assert matching_signals("C1", signals) == []
+
+
+def test_correct_campaign_wrapper_only_receipt_cannot_pass(tmp_path: Path):
+    path = tmp_path / "receipt.json"
+    path.write_text(
+        json.dumps(
+            {
+                "campaign_id": "a" * 32,
+                "case_id": "C1",
+                "pytest_node_id": "tests/a.py::test_fault",
+                "actual_component_signals": [
+                    {
+                        "name": "agent_model_provider_outcome_total",
+                        "attributes": {"outcome": "timeout"},
+                        "source_module": "tests.synthetic_wrapper",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert not _valid_campaign_receipt(path, "a" * 32, "C1", "tests/a.py::test_fault")
+
+
+def test_other_case_actual_component_receipt_cannot_pass(tmp_path: Path):
+    path = tmp_path / "receipt.json"
+    path.write_text(
+        json.dumps(
+            {
+                "campaign_id": "a" * 32,
+                "case_id": "C1",
+                "pytest_node_id": "tests/a.py::test_fault",
+                "actual_component_signals": [
+                    {
+                        "name": "agent_model_provider_outcome_total",
+                        "attributes": {"outcome": "schema_failure"},
+                        "source_module": "property_agent.agent.model_gateway",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert not _valid_campaign_receipt(path, "a" * 32, "C1", "tests/a.py::test_fault")
 
 
 def test_safe_chaos_missing_test_evidence_cannot_pass():

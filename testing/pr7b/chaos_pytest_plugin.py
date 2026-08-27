@@ -1,14 +1,23 @@
-"""Attach a safe PR7-A span receipt to one exact chaos pytest execution."""
+"""Capture telemetry emitted by the faulted production component itself."""
 
 from __future__ import annotations
 
 import json
 import os
+from inspect import currentframe
 from pathlib import Path
 
 import pytest
 
-from property_agent.agent.observability import AgentObservability
+from property_agent.agent.observability import AgentObservability, InMemoryCounter
+from testing.pr7b.chaos_signals import matching_signals
+
+
+def _production_caller_module() -> str:
+    frame = currentframe()
+    caller = frame.f_back.f_back if frame is not None and frame.f_back is not None else None
+    module = str(caller.f_globals.get("__name__", "")) if caller is not None else ""
+    return module if module.startswith("property_agent.") else ""
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -20,15 +29,54 @@ def pytest_runtest_call(item):
     if not campaign_id or not case_id or not receipt_path:
         yield
         return
-    observation = AgentObservability.in_memory()
-    with observation.span("chaos.drill", attributes={"certification.chaos.case": case_id}):
+    signals = []
+    original_count = AgentObservability.count
+    original_inc = InMemoryCounter.inc
+
+    def captured_count(self, name, *, amount=1, attributes=None):
+        source_module = _production_caller_module()
+        signals.append(
+            {
+                "name": name,
+                "attributes": self.metric_attributes(attributes),
+                "production_origin": bool(source_module),
+                "source_module": source_module,
+            }
+        )
+        return original_count(self, name, amount=amount, attributes=attributes)
+
+    def captured_inc(self, amount=1, attributes=None):
+        source_module = _production_caller_module()
+        signals.append(
+            {
+                "name": self.name,
+                "attributes": dict(attributes or {}),
+                "production_origin": bool(source_module),
+                "source_module": source_module,
+            }
+        )
+        return original_inc(self, amount, attributes)
+
+    AgentObservability.count = captured_count
+    InMemoryCounter.inc = captured_inc
+    try:
         outcome = yield
-    if outcome.excinfo is None:
-        span = observation.spans[-1]
+    finally:
+        AgentObservability.count = original_count
+        InMemoryCounter.inc = original_inc
+    matches = matching_signals(case_id, signals)
+    if outcome.excinfo is None and matches:
         payload = {
-            "campaign_id": span.attributes.get("certification.campaign.id", ""),
-            "case_id": span.attributes.get("certification.chaos.case", ""),
+            "campaign_id": campaign_id,
+            "case_id": case_id,
             "pytest_node_id": target_node_id or item.nodeid,
-            "span_name": span.name,
+            "actual_component_signals": [
+                {
+                    "name": match["name"],
+                    "attributes": match["attributes"],
+                    "source_module": match["source_module"],
+                }
+                for match in matches
+            ],
         }
         Path(receipt_path).write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")

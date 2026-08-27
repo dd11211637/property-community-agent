@@ -14,6 +14,7 @@ from uuid import uuid4
 
 import httpx
 
+from testing.pr7b.chaos_signals import matching_signals
 from testing.pr7b.evidence import (
     GateEvidence,
     GateStatus,
@@ -33,6 +34,9 @@ DRILL_MANIFEST: dict[str, dict[str, Any]] = {
             "tests/agent/test_pr7a_telemetry_foundation.py::test_production_model_shape_records_primary_failure_then_fallback_success",
             "tests/agent/test_pr7a_telemetry_foundation.py::test_semantic_plan_primary_failure_propagates_without_fallback",
         ],
+        "telemetry_node_ids": [
+            "tests/agent/test_pr7a_telemetry_foundation.py::test_production_model_shape_records_primary_failure_then_fallback_success"
+        ],
         "user_visible_assertion": "fallback is degraded success or forbidden fallback propagates",
         "durable_database_assertion": "not applicable; provider boundary executes before mutation",
         "accepted_head_assertion": "forbidden semantic fallback produces no accepted completion",
@@ -43,6 +47,9 @@ DRILL_MANIFEST: dict[str, dict[str, Any]] = {
     "C2": {
         "injection_point": "malformed structured response",
         "pytest_node_ids": [
+            "tests/agent/test_pr7a_telemetry_foundation.py::test_production_model_shape_records_schema_failure_before_fallback"
+        ],
+        "telemetry_node_ids": [
             "tests/agent/test_pr7a_telemetry_foundation.py::test_production_model_shape_records_schema_failure_before_fallback"
         ],
         "user_visible_assertion": "schema failure is distinct from deterministic fallback outcome",
@@ -59,6 +66,9 @@ DRILL_MANIFEST: dict[str, dict[str, Any]] = {
         "pytest_node_ids": [
             "tests/agent/test_pr7b_memory_failures.py::test_embedding_vector_outage_uses_only_structured_scope_safe_results"
         ],
+        "telemetry_node_ids": [
+            "tests/agent/test_pr7b_memory_failures.py::test_embedding_vector_outage_uses_only_structured_scope_safe_results"
+        ],
         "user_visible_assertion": "reasoning degrades to scoped structured no-Memory input",
         "durable_database_assertion": "canonical business state is not replaced by vector fallback",
         "accepted_head_assertion": "turn may proceed only without unscoped Memory",
@@ -71,6 +81,9 @@ DRILL_MANIFEST: dict[str, dict[str, Any]] = {
         "pytest_node_ids": [
             "tests/agent/test_pr7b_chaos_postgres.py::test_c4_transient_postgres_interruption_rejects_failed_transaction_and_recovers"
         ],
+        "telemetry_node_ids": [
+            "tests/agent/test_pr7b_chaos_postgres.py::test_c4_transient_postgres_interruption_rejects_failed_transaction_and_recovers"
+        ],
         "user_visible_assertion": "failed transaction is rejected and readiness recovers",
         "durable_database_assertion": "injected marker row count remains zero after recovery",
         "accepted_head_assertion": "not exercised by this dependency-level interruption subcase",
@@ -81,6 +94,9 @@ DRILL_MANIFEST: dict[str, dict[str, Any]] = {
     "C5": {
         "injection_point": "official LangGraph saver put failure",
         "pytest_node_ids": [
+            "tests/agent/test_pr7b_chaos.py::test_c5_official_checkpoint_failure_never_advances_application_accepted_head"
+        ],
+        "telemetry_node_ids": [
             "tests/agent/test_pr7b_chaos.py::test_c5_official_checkpoint_failure_never_advances_application_accepted_head"
         ],
         "user_visible_assertion": "official saver failure propagates without success",
@@ -99,6 +115,9 @@ DRILL_MANIFEST: dict[str, dict[str, Any]] = {
         "full_pytest_node_ids": [
             "tests/agent/test_pr4_repair_vertical_postgres.py::test_v2_stream_checkpoint_success_then_accepted_failure_has_no_public_success"
         ],
+        "telemetry_node_ids": [
+            "tests/agent/test_pr7a_telemetry_foundation.py::test_accepted_head_failure_has_no_completed_outcome"
+        ],
         "user_visible_assertion": "orphan state emits no public final success",
         "durable_database_assertion": "PostgreSQL vertical keeps orphan noncanonical",
         "accepted_head_assertion": (
@@ -113,6 +132,9 @@ DRILL_MANIFEST: dict[str, dict[str, Any]] = {
         "pytest_node_ids": [
             "tests/agent/test_pr7b_chaos_postgres.py::test_c7_process_death_after_internal_checkpoint_recovers_exact_accepted_cursor"
         ],
+        "telemetry_node_ids": [
+            "tests/agent/test_pr7b_chaos_postgres.py::test_c7_process_death_after_internal_checkpoint_recovers_exact_accepted_cursor"
+        ],
         "user_visible_assertion": "restart resolves only the exact published cursor",
         "durable_database_assertion": "accepted cursor remains persisted across subprocess death",
         "accepted_head_assertion": "recovery loads the previously published accepted cursor",
@@ -125,6 +147,9 @@ DRILL_MANIFEST: dict[str, dict[str, Any]] = {
         "pytest_node_ids": [
             "tests/agent/test_pr7b_chaos_postgres.py::test_c8_business_commit_then_process_death_retries_same_resource_once",
             "tests/agent/test_pr4_repair_vertical_postgres.py::test_v2_disconnect_after_confirmed_commit_recovers_one_canonical_mutation",
+        ],
+        "telemetry_node_ids": [
+            "tests/agent/test_pr4_repair_vertical_postgres.py::test_v2_disconnect_after_confirmed_commit_recovers_one_canonical_mutation"
         ],
         "user_visible_assertion": "retry/status recovers one canonical business result",
         "durable_database_assertion": (
@@ -147,6 +172,9 @@ DRILL_MANIFEST: dict[str, dict[str, Any]] = {
         "full_pytest_node_ids": [
             "tests/test_p0_postgres_concurrency.py::test_consume_rollback_on_business_failure"
         ],
+        "telemetry_node_ids": [
+            "tests/test_p0_concurrency_atomicity.py::test_approval_consume_atomic_with_business_mutation"
+        ],
         "user_visible_assertion": "failed business mutation cannot consume approval",
         "durable_database_assertion": "approval and mutation roll back in the same UoW",
         "accepted_head_assertion": "no accepted business success follows rollback",
@@ -157,6 +185,9 @@ DRILL_MANIFEST: dict[str, dict[str, Any]] = {
     "C10": {
         "injection_point": "Memory Writer persistence failure",
         "pytest_node_ids": [
+            "tests/agent/test_pr7b_chaos.py::test_c10_memory_writer_persistence_failure_does_not_rollback_accepted_turn"
+        ],
+        "telemetry_node_ids": [
             "tests/agent/test_pr7b_chaos.py::test_c10_memory_writer_persistence_failure_does_not_rollback_accepted_turn"
         ],
         "user_visible_assertion": "accepted business/turn result remains successful",
@@ -171,6 +202,9 @@ DRILL_MANIFEST: dict[str, dict[str, Any]] = {
     "C11": {
         "injection_point": "concurrent PostgreSQL approval consume",
         "pytest_node_ids": [
+            "tests/test_p0_postgres_concurrency.py::test_double_consume_produces_one_consumed"
+        ],
+        "telemetry_node_ids": [
             "tests/test_p0_postgres_concurrency.py::test_double_consume_produces_one_consumed"
         ],
         "user_visible_assertion": (
@@ -190,6 +224,9 @@ DRILL_MANIFEST: dict[str, dict[str, Any]] = {
         ],
         "full_pytest_node_ids": [
             "tests/test_p0_postgres_concurrency.py::test_stale_fence_writer_rejected"
+        ],
+        "telemetry_node_ids": [
+            "tests/agent/test_pr7b_chaos.py::test_c12_runner_rejects_stale_candidate_before_canonical_publication"
         ],
         "user_visible_assertion": "stale worker fails closed",
         "durable_database_assertion": "PostgreSQL writer rejects stale fence mutation",
@@ -482,8 +519,13 @@ def _run_fault_campaign(
                     limitations.extend(notes)
                     if _valid_campaign_receipt(path, campaign_id, case, node):
                         receipts[case].append(node)
-                    elif node_results.get(node) == "PASS":
-                        limitations.append(f"{node}: campaign-bound span receipt unavailable")
+                    elif (
+                        node_results.get(node) == "PASS"
+                        and node in DRILL_MANIFEST[case]["telemetry_node_ids"]
+                    ):
+                        limitations.append(
+                            f"{node}: causal actual-component telemetry receipt unavailable"
+                        )
     finally:
         for name, value in previous.items():
             if value is None:
@@ -493,7 +535,7 @@ def _run_fault_campaign(
     receipt_cases = frozenset(
         case
         for case in selected
-        if set(receipts.get(case, ())) == set(_case_targets(case, full=full))
+        if set(DRILL_MANIFEST[case]["telemetry_node_ids"]).issubset(receipts.get(case, ()))
     )
     return results, dict(totals), tuple(limitations), receipt_cases, receipts
 
@@ -518,12 +560,29 @@ def _valid_campaign_receipt(path: Path, campaign_id: str, case: str, node: str) 
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
-    return value == {
-        "campaign_id": campaign_id,
-        "case_id": case,
-        "pytest_node_id": node,
-        "span_name": "chaos.drill",
-    }
+    if not isinstance(value, dict) or any(
+        value.get(key) != expected
+        for key, expected in {
+            "campaign_id": campaign_id,
+            "case_id": case,
+            "pytest_node_id": node,
+        }.items()
+    ):
+        return False
+    actual = value.get("actual_component_signals")
+    if not isinstance(actual, list):
+        return False
+    bounded = [
+        {
+            "name": signal.get("name"),
+            "attributes": signal.get("attributes", {}),
+            "production_origin": str(signal.get("source_module", "")).startswith("property_agent."),
+        }
+        for signal in actual
+        if isinstance(signal, dict)
+    ]
+    matches = matching_signals(case, bounded)
+    return len(matches) == len(actual) and bool(matches)
 
 
 def _node_execution_status(statuses: list[str], selected: bool) -> str:

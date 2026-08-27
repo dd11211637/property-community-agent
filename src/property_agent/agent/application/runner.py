@@ -175,7 +175,7 @@ class AgentSessionRunner:
                         thread_id=conversation_id,
                         runtime=runtime_context(self._observability, plan),
                     )
-                self._turn_guard.assert_alive(plan.lease, plan.heartbeat)
+                self._turn_guard.assert_current(plan.lease, plan.heartbeat)
                 accepted_version = publish_result(
                     self._observability, self._checkpointer, plan, result
                 )
@@ -258,7 +258,7 @@ class AgentSessionRunner:
                         )
                     elif kind == "__final__":
                         result = result_from_payload(payload)
-                        self._turn_guard.assert_alive(plan.lease, plan.heartbeat)
+                        self._turn_guard.assert_current(plan.lease, plan.heartbeat)
                         accepted_version = publish_result(
                             self._observability, self._checkpointer, plan, result
                         )
@@ -404,7 +404,7 @@ class AgentSessionRunner:
                             self._observability, self._checkpointer, plan
                         ),
                     )
-                self._turn_guard.assert_alive(plan.lease, plan.heartbeat)
+                self._turn_guard.assert_current(plan.lease, plan.heartbeat)
                 accepted_version = publish_result(
                     self._observability, self._checkpointer, plan, result
                 )
@@ -482,7 +482,7 @@ class AgentSessionRunner:
                         )
                     elif kind == "__final__":
                         result = result_from_payload(payload)
-                        self._turn_guard.assert_alive(plan.lease, plan.heartbeat)
+                        self._turn_guard.assert_current(plan.lease, plan.heartbeat)
                         accepted_version = publish_result(
                             self._observability, self._checkpointer, plan, result
                         )

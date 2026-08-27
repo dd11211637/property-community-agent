@@ -22,6 +22,7 @@ _METRIC_LABELS = frozenset(
 )
 _TRACE_TEXT_LIMIT = 128
 _CERTIFICATION_CAMPAIGN = re.compile(r"[a-f0-9]{32}")
+_CHAOS_CASE = re.compile(r"C(?:[1-9]|1[0-2])")
 _TRACE_ATTRIBUTE_KEYS = frozenset(
     {
         "agent.conversation.id",
@@ -253,6 +254,9 @@ class AgentObservability:
         campaign_id = os.getenv("PR7B_CHAOS_CAMPAIGN_ID", "").strip()
         if _CERTIFICATION_CAMPAIGN.fullmatch(campaign_id):
             values["certification.campaign.id"] = campaign_id
+        chaos_case = os.getenv("PR7B_CHAOS_CASE_ID", "").strip()
+        if _CHAOS_CASE.fullmatch(chaos_case):
+            values["certification.chaos.case"] = chaos_case
         safe = self._trace_attributes(values)
         started = perf_counter()
         with self.tracer.start_as_current_span(

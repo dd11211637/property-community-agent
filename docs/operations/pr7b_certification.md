@@ -127,13 +127,18 @@ coverage is claimed and pool sizing is unchanged.
   its exact-window telemetry signal to pass. Every campaign uses a new bounded opaque
   `chaos_campaign_id`; the same ID is injected into fault-test processes, attached to PR7-A
   spans (never metric labels), stored in GateEvidence, and required by the collector query and
-  response. A pytest support plugin wraps each exact fault node with that existing production
-  span seam and returns a bounded campaign/case/node receipt; full telemetry evidence is the
-  intersection of complete local receipts and same-ID collector signals. Same-SHA signals
-  carrying another ID cannot satisfy a drill. C12 additionally runs
-  the authoritative Runner post-engine guard and proves a stale candidate cannot publish an
-  accepted head or become Memory Writer input; the existing PostgreSQL stale-fence test remains
-  the business-mutation assertion.
+  response. A pytest support plugin captures only metrics emitted by the actual
+  `property_agent.*` component boundary during the exact fault node; it creates no telemetry
+  provider and no wrapper span. Each bounded receipt names the production source module and
+  must satisfy the drill's signal/outcome contract. Full telemetry evidence is the intersection
+  of causal local receipts and same-ID collector signals. A test-side synthetic wrapper, a
+  signal from another case, or same-SHA signals carrying another campaign ID cannot satisfy a
+  drill. C12 additionally uses the real `RunLeaseService`: run A produces a candidate, releases
+  its lease, and run B acquires the next fence while A's background heartbeat is not pre-stale.
+  All four Runner publication paths synchronously renew A immediately before accepted-head
+  publication and reject it, so the stale candidate cannot publish, sync conversation state,
+  become transcript/Memory Writer input, or emit final streamed success. The existing
+  PostgreSQL stale-fence test remains the business-mutation assertion.
 - The versioned adversarial manifest maps every case to exact pytest nodes, hard gates, and an
   expected safe invariant. Each case is executed and classified independently as PASS, FAIL,
   or NOT_RUN; a hard gate passes only when all mapped cases pass, and missing/unmapped required

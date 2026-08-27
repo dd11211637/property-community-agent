@@ -184,6 +184,10 @@ def test_concurrent_create_pending_does_not_500(approval_service):
 
 def test_double_consume_produces_one_consumed(approval_service, session_factory):
     """双 tab 同时 confirm：FOR UPDATE + 状态机保证只有一个 CONSUMED，另一个幂等返回。"""
+    from property_agent.agent.observability import AgentObservability
+    from property_agent.agent.observed_boundaries import ObservedApprovalService
+
+    approval_service = ObservedApprovalService(approval_service, AgentObservability.in_memory())
     actor = uuid4()
     approval = approval_service.create_pending(
         conversation_id="pg-double-confirm",

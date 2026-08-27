@@ -27,7 +27,7 @@ def publish_accepted(
     *,
     observability: Any | None = None,
 ) -> int | None:
-    """Publish only after graph durability and the lifecycle heartbeat assertion."""
+    """Publish only after graph durability and the synchronous lease-fence assertion."""
     if checkpointer is None:
         return None
     normalized = result_from_payload(result)

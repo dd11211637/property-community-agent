@@ -15,11 +15,14 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import sessionmaker
 
+from property_agent.agent.application.accepted_head import cursor_for
 from property_agent.agent.application.langgraph_runtime import build_saver_resource
 from property_agent.agent.infrastructure.checkpointer import SqlAlchemyCheckpointer
+from property_agent.agent.observability import AgentObservability
 from property_agent.agent.state import GraphState
 from property_agent.platform.container import check_database_health
 from property_agent.platform.infrastructure.orm_models import Base
+from property_agent.platform.infrastructure.pool_observability import install_pool_observability
 from property_agent.repair.infrastructure.models import WorkOrderModel
 from testing.pr7b.crash_worker import (
     CRASH_EXIT_CODE,
@@ -45,6 +48,8 @@ def provision_application_tables():
 
 def test_c4_transient_postgres_interruption_rejects_failed_transaction_and_recovers():
     engine = create_engine(POSTGRES_URL, pool_pre_ping=True)
+    observation = AgentObservability.in_memory()
+    install_pool_observability(engine, observation)
     marker = f"pr7b-db-interrupt-{uuid4()}"
     connection = engine.connect()
     target_url = make_url(str(POSTGRES_URL))
@@ -101,6 +106,10 @@ def test_c7_process_death_after_internal_checkpoint_recovers_exact_accepted_curs
     recovered = SqlAlchemyCheckpointer(sessions).load_accepted(conversation_id)
     assert recovered is not None and recovered.runtime_cursor is not None
     assert recovered.runtime_cursor.to_dict() == accepted_cursor
+    observation = AgentObservability.in_memory()
+    assert cursor_for(
+        checkpointer, conversation_id, observability=observation, runtime_version="v2"
+    )
     resource = build_saver_resource(dsn=POSTGRES_URL.replace("postgresql+psycopg", "postgresql"))
     try:
         exact = resource.saver.get_tuple({"configurable": accepted_cursor})
