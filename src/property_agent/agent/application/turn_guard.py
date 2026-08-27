@@ -254,6 +254,18 @@ class TurnLeaseController:
                 thread_id, reason="lease heartbeat detected stale run; aborting turn"
             )
 
+    def assert_current(self, lease: Lease | None, heartbeat: LeaseHeartbeat | None) -> None:
+        """Synchronously prove lease ownership immediately before publication.
+
+        The background heartbeat is only an early-warning mechanism. A different run
+        can acquire the lease after this worker's last heartbeat, so publication must
+        perform an authoritative ``run_id + fence + expiry`` renewal at the boundary.
+        """
+        self.assert_alive(lease, heartbeat)
+        if self._enforce() and lease is not None:
+            self.renew(lease)
+        self.assert_alive(lease, heartbeat)
+
 
 __all__ = [
     "AgentSessionError",

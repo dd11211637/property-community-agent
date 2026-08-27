@@ -57,6 +57,7 @@ class Supervisor:
                     "plan_id": state.plan.plan_id,
                     "classification": state.plan.objective_classification.value,
                     "step_count": len(state.plan.steps),
+                    "runtime": runtime.observation.runtime_version,
                 },
             )
         elif state.orchestration_budget is not None:

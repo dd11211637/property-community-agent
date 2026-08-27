@@ -92,6 +92,7 @@ def bind_runtime(app, lifecycle, conversations, services) -> None:
     facade = build_runtime_facade(app, lifecycle=lifecycle, conversations=conversations)
     app.state.agent_lifecycle = lifecycle
     app.state.agent_runner = facade
+    app.state.agent_conversations = conversations
     services["agent_runner"] = facade
     services["agent_lifecycle"] = lifecycle
 

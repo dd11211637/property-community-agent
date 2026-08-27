@@ -6,7 +6,9 @@ from property_agent.platform.services import auth
 
 
 def test_development_profile_allows_local_defaults():
-    Settings(_env_file=None).validate_runtime_security()
+    config = Settings(_env_file=None)
+    config.validate_runtime_security()
+    assert config.certification_write_enabled is False
 
 
 def test_production_profile_rejects_default_credentials():

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import re
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -19,6 +21,8 @@ _METRIC_LABELS = frozenset(
     {"runtime", "operation", "outcome", "reason", "specialist", "capability", "provider"}
 )
 _TRACE_TEXT_LIMIT = 128
+_CERTIFICATION_CAMPAIGN = re.compile(r"[a-f0-9]{32}")
+_CHAOS_CASE = re.compile(r"C(?:[1-9]|1[0-2])")
 _TRACE_ATTRIBUTE_KEYS = frozenset(
     {
         "agent.conversation.id",
@@ -31,6 +35,8 @@ _TRACE_ATTRIBUTE_KEYS = frozenset(
         "http.request.id",
         "http.request.method",
         "service.version",
+        "certification.campaign.id",
+        "certification.chaos.case",
         "runtime",
         "operation",
         "outcome",
@@ -244,7 +250,14 @@ class AgentObservability:
 
     @contextmanager
     def span(self, name: str, *, attributes: Mapping[str, Any] | None = None):
-        safe = self._trace_attributes(attributes)
+        values = dict(attributes or {})
+        campaign_id = os.getenv("PR7B_CHAOS_CAMPAIGN_ID", "").strip()
+        if _CERTIFICATION_CAMPAIGN.fullmatch(campaign_id):
+            values["certification.campaign.id"] = campaign_id
+        chaos_case = os.getenv("PR7B_CHAOS_CASE_ID", "").strip()
+        if _CHAOS_CASE.fullmatch(chaos_case):
+            values["certification.chaos.case"] = chaos_case
+        safe = self._trace_attributes(values)
         started = perf_counter()
         with self.tracer.start_as_current_span(
             name, attributes=safe, kind=SpanKind.INTERNAL

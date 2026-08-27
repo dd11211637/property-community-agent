@@ -10,6 +10,7 @@ import os
 from collections.abc import Generator
 
 from sqlalchemy import Engine, create_engine
+from sqlalchemy.exc import TimeoutError as SqlAlchemyTimeoutError
 from sqlalchemy.orm import Session, sessionmaker
 
 from property_agent.platform.infrastructure.orm_models import Base
@@ -21,6 +22,7 @@ DATABASE_URL = os.getenv(
 
 _engine: Engine | None = None
 _SessionLocal: sessionmaker[Session] | None = None
+_pool_observer: object | None = None
 
 
 def get_engine() -> Engine:
@@ -58,8 +60,24 @@ def get_db() -> Generator[Session, None, None]:
     session = factory()
     try:
         yield session
+    except SqlAlchemyTimeoutError:
+        timeout = getattr(_pool_observer, "timeout", None)
+        if timeout is not None:
+            timeout()
+        raise
     finally:
         session.close()
+
+
+def observe_pool(observability: object) -> object:
+    """Attach telemetry to the existing singleton pool without changing its policy."""
+    global _pool_observer
+    from property_agent.platform.infrastructure.pool_observability import (
+        install_pool_observability,
+    )
+
+    _pool_observer = install_pool_observability(get_engine(), observability)
+    return _pool_observer
 
 
 def init_db() -> None:
@@ -69,8 +87,9 @@ def init_db() -> None:
 
 def dispose_engine() -> None:
     """Dispose the engine (for testing / shutdown)."""
-    global _engine, _SessionLocal
+    global _engine, _SessionLocal, _pool_observer
     if _engine is not None:
         _engine.dispose()
         _engine = None
     _SessionLocal = None
+    _pool_observer = None

@@ -46,6 +46,8 @@ from property_agent.agent.infrastructure.run_lease import (
     StaleAgentRunError,
     assert_run_fence,
 )
+from property_agent.agent.observability import AgentObservability
+from property_agent.agent.observed_boundaries import ObservedApprovalService
 from property_agent.agent.state import GraphState
 from property_agent.agent.working_state import RepairWorkingState
 from property_agent.platform.application.approval_service import (
@@ -467,6 +469,7 @@ def test_approval_consume_marks_expired_when_approved_past_ttl(approval_service,
 
 def test_approval_consume_atomic_with_business_mutation(approval_service, session_factory):
     """consume 与业务 mutation 必须在同一事务里——任一失败两者一起回滚。"""
+    approval_service = ObservedApprovalService(approval_service, AgentObservability.in_memory())
     actor = uuid4()
     approval = approval_service.create_pending(
         conversation_id="conv-1",

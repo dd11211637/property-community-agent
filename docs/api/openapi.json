@@ -4271,6 +4271,67 @@
         ]
       }
     },
+    "/api/certification/identity": {
+      "get": {
+        "description": "Return bounded server-owned deployment identity for write certification preflight.",
+        "operationId": "certification_identity_api_certification_identity_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "boolean"
+                      }
+                    ]
+                  },
+                  "title": "Response Certification Identity Api Certification Identity Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Certification Identity",
+        "tags": [
+          "health"
+        ]
+      }
+    },
     "/api/confirmations": {
       "post": {
         "description": "Generate a confirmation token for a pending write operation.",

@@ -71,6 +71,7 @@ from property_agent.platform.context import RequestContext
 from property_agent.platform.infrastructure.database import (
     dispose_engine,
     get_session_factory,
+    observe_pool,
 )
 from property_agent.platform.infrastructure.orm_models import MessageRecordModel
 from property_agent.platform.infrastructure.outbox_dispatcher import OutboxDispatcher
@@ -620,10 +621,9 @@ def _build_services(app: FastAPI) -> dict[str, Any]:
 
     services: dict[str, Any] = {}
     app.state.agent_observability = AgentObservability.build(settings)
+    app.state.database_pool_observer = observe_pool(app.state.agent_observability)
     stream_exec.install_stream_execution(app, settings, services)
-
-    # Session-scoped platform services are constructed per request from the
-    # `get_db` dependency, so here we only record that they are available.
+    # Session-scoped platform services are constructed per request from `get_db`.
     services["auth_service"] = "configured"
     services["audit_service"] = "configured"
     services["idempotency_service"] = "configured"

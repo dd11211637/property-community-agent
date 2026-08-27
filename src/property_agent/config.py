@@ -87,6 +87,7 @@ class Settings(BaseSettings):
     otel_export_interval_ms: int = 30_000
     release_sha: str = ""
     deployment_environment: str = ""
+    certification_write_enabled: bool = False
 
     def validate_runtime_security(self) -> None:
         """Reject development credentials when the production profile is selected."""
@@ -117,6 +118,13 @@ class Settings(BaseSettings):
             problems.append("OTEL_EXPORTER_ENDPOINT is required when OTEL_ENABLED is true")
         if self.otel_export_interval_ms <= 0:
             problems.append("OTEL_EXPORT_INTERVAL_MS must be positive")
+        if self.certification_write_enabled and self.deployment_environment not in {
+            "preproduction",
+            "isolated-test",
+        }:
+            problems.append(
+                "CERTIFICATION_WRITE_ENABLED requires preproduction or isolated-test deployment"
+            )
 
         if self.login_failure_limit <= 0:
             problems.append("LOGIN_FAILURE_LIMIT must be positive")
