@@ -181,31 +181,30 @@ def test_assignment_metric_has_bounded_versions_and_no_identity_or_salt() -> Non
     assert SALT_A.decode() not in repr(point)
 
 
-def test_rollout_increase_needs_approval_and_rollback_changes_only_config() -> None:
+def test_rollout_increase_rejected_without_new_activation_and_rollback_works() -> None:
     events = []
-    control = RolloutControl(_config(0), audit_sink=events.append)
-    with pytest.raises(ValueError, match="explicit approval"):
+    control = RolloutControl(_config(500), audit_sink=events.append)
+    # Runtime apply can only decrease; an increase is rejected and there is no
+    # in-process promotion bypass.
+    with pytest.raises(ValueError, match="new approved activation manifest"):
         control.apply(
-            _config(500, version="cfg-v2"),
+            _config(1000, version="cfg-v2"),
             reason=RolloutChangeReason.APPROVED_PROMOTION,
-            operator_reference="change:42",
+            approver_reference="change:42",
         )
-    control.apply(
-        _config(500, version="cfg-v2"),
-        reason=RolloutChangeReason.APPROVED_PROMOTION,
-        operator_reference="change:42",
-        promotion_approved=True,
-    )
     rollback = control.rollback_to_zero(
         config_version="cfg-v3",
         reason=RolloutChangeReason.INCIDENT_ROLLBACK,
-        operator_reference="incident:7",
+        approver_reference="incident:7",
+        change_reference="incident:inc-7",
     )
     assert control.config.basis_points == 0
     assert rollback.old_basis_points == 500
     assert rollback.new_basis_points == 0
+    assert rollback.approver_reference == "incident:7"
+    assert rollback.change_reference == "incident:inc-7"
     assert not hasattr(rollback, "secret_salt")
-    assert len(events) == 2
+    assert len(events) == 1
 
 
 def _snapshot(runtime: str, *, status: str = "ACTIVE") -> ConversationSnapshot:
@@ -322,7 +321,7 @@ def test_rollout_config_rejects_unbounded_or_unsafe_values() -> None:
         RolloutControl(RolloutConfig()).rollback_to_zero(
             config_version="rollback-v1",
             reason=RolloutChangeReason.INCIDENT_ROLLBACK,
-            operator_reference="operator pii with spaces",
+            approver_reference="operator pii with spaces",
         )
 
 

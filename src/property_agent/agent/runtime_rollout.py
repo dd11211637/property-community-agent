@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 import logging
 import re
 from collections.abc import Callable
@@ -24,94 +23,10 @@ _MINIMUM_SALT_BYTES = 32
 # from the implicit zero default. The secret salt is intentionally NEVER part of
 # any activation identity or audit evidence.
 ROLLOUT_BASELINE_CONFIG_VERSION = "pr7c-baseline-zero"
-ROLLOUT_ACTIVATION_MANIFEST_VERSION = "pr7c-activation-v1"
 
-
-class RolloutActivationError(RuntimeError):
-    """Raised when a non-zero rollout cannot be authorized by an approved identity."""
-
-
-class RolloutActivationManifestStatus(StrEnum):
-    """Lifecycle of a deployment-provided rollout activation manifest."""
-
-    APPROVED = "approved"
-    PENDING = "pending"
-    REVOKED = "revoked"
-
-
-@dataclass(frozen=True, slots=True)
-class RolloutReleaseIdentity:
-    """Canonical, auditable rollout release/config identity.
-
-    Every field is server-owned and bounded. The secret rollout salt is NOT
-    included here: it must never enter logs, metrics, or audit evidence.
-    """
-
-    release_sha: str
-    rollout_config_version: str
-    rollout_basis_points: int
-    salt_version: str
-    eligibility_policy_version: str
-    approved_fallback_runtime: str
-    model_approval_id: str
-    prompt_contract_version: str
-    approver_reference: str
-    approved_at: str
-    activation_manifest_version: str = ROLLOUT_ACTIVATION_MANIFEST_VERSION
-
-
-@dataclass(frozen=True, slots=True)
-class RolloutActivationManifest:
-    """Deployment-time versioned activation manifest verified at startup."""
-
-    identity: RolloutReleaseIdentity
-    status: RolloutActivationManifestStatus
-    manifest_sha256: str = ""
-
-
-def parse_rollout_activation_manifest(data: dict) -> RolloutActivationManifest:
-    """Parse a manifest dict; raises ValueError on malformed structured fields."""
-    raw = data.get("identity", {})
-    if not isinstance(raw, dict):
-        raise ValueError("rollout activation manifest 'identity' must be an object")
-    identity = RolloutReleaseIdentity(
-        release_sha=str(raw.get("release_sha", "")),
-        rollout_config_version=str(raw.get("rollout_config_version", "")),
-        rollout_basis_points=int(raw.get("rollout_basis_points", 0)),
-        salt_version=str(raw.get("salt_version", "")),
-        eligibility_policy_version=str(raw.get("eligibility_policy_version", "")),
-        approved_fallback_runtime=str(raw.get("approved_fallback_runtime", "v1")),
-        model_approval_id=str(raw.get("model_approval_id", "")),
-        prompt_contract_version=str(raw.get("prompt_contract_version", "")),
-        approver_reference=str(raw.get("approver_reference", "")),
-        approved_at=str(raw.get("approved_at", "")),
-        activation_manifest_version=str(
-            raw.get("activation_manifest_version", ROLLOUT_ACTIVATION_MANIFEST_VERSION)
-        ),
-    )
-    status = RolloutActivationManifestStatus(str(data.get("status", "pending")))
-    return RolloutActivationManifest(
-        identity=identity,
-        status=status,
-        manifest_sha256=str(data.get("manifest_sha256", "")),
-    )
-
-
-def load_rollout_activation_manifest(path: str) -> RolloutActivationManifest | None:
-    """Load an activation manifest from disk.
-
-    Returns ``None`` when the file is missing or structurally invalid so that the
-    caller can fail closed on a non-zero rollout. Never raises for I/O or parse
-    errors — a broken manifest is treated as "no approved identity".
-    """
-    try:
-        with open(path, encoding="utf-8") as handle:
-            return parse_rollout_activation_manifest(json.load(handle))
-    except FileNotFoundError:
-        return None
-    except (json.JSONDecodeError, ValueError, KeyError, TypeError) as exc:
-        logger.warning("invalid rollout activation manifest at %s: %s", path, exc)
-        return None
+# The rollout activation boundary (manifest, release identity, SHA-256 integrity,
+# and the only non-zero promotion path) lives in runtime_rollout_activation and
+# is re-exported at the bottom of this module to preserve public import paths.
 
 
 class EligibilityReason(StrEnum):
@@ -186,6 +101,8 @@ class RolloutConfig:
     config_version: str = "pr7c-default-v1"
     eligibility_policy_version: str = "pr7c-eligibility-v1"
     fallback_runtime: str = "v1"
+    model_approval_id: str = "unconfigured"
+    prompt_contract_version: str = "unconfigured"
 
     def __post_init__(self) -> None:
         if not 0 <= self.basis_points <= 10_000:
@@ -196,6 +113,17 @@ class RolloutConfig:
             ("eligibility policy version", self.eligibility_policy_version),
         ):
             if not _VERSION.fullmatch(value):
+                raise ValueError(f"invalid {name}")
+        # Model/prompt approval identities are bounded opaque identifiers (a real
+        # id may carry a provider qualifier such as "model:deepseek-v4"). They are
+        # validated with the same bounded-opaque rule as operator references, not
+        # the strict version rule, and must still pass _is_real_approval_id before
+        # any non-zero activation is authorized.
+        for name, value in (
+            ("model approval id", self.model_approval_id),
+            ("prompt contract version", self.prompt_contract_version),
+        ):
+            if not _OPERATOR_REFERENCE.fullmatch(value):
                 raise ValueError(f"invalid {name}")
         if self.fallback_runtime != "v1":
             raise ValueError("PR7-C safe new-conversation fallback must remain v1")
@@ -230,7 +158,9 @@ class RolloutAuditEvent:
     """Explicit config transition evidence suitable for an audit sink.
 
     ``release_sha`` binds the transition to an exact deployed release. The secret
-    rollout salt is never placed in this structure.
+    rollout salt is never placed in this structure. ``approver_reference`` and
+    ``change_reference`` are bounded opaque identifiers (no PII) so activation
+    and rollback are both attributable without leaking operator identity text.
     """
 
     old_basis_points: int
@@ -238,7 +168,8 @@ class RolloutAuditEvent:
     old_config_version: str
     new_config_version: str
     reason: RolloutChangeReason
-    operator_reference: str
+    approver_reference: str
+    change_reference: str
     changed_at: str
     release_sha: str = ""
 
@@ -267,20 +198,27 @@ class RolloutControl:
         config: RolloutConfig,
         *,
         reason: RolloutChangeReason,
-        operator_reference: str,
-        promotion_approved: bool = False,
+        approver_reference: str,
+        change_reference: str = "",
     ) -> RolloutAuditEvent:
-        if not _OPERATOR_REFERENCE.fullmatch(operator_reference):
-            raise ValueError("operator reference must be a bounded opaque identifier")
+        if not _OPERATOR_REFERENCE.fullmatch(approver_reference):
+            raise ValueError("approver reference must be a bounded opaque identifier")
+        # change_reference is optional; when present it must still be bounded opaque.
+        if change_reference and not _OPERATOR_REFERENCE.fullmatch(change_reference):
+            raise ValueError("change reference must be a bounded opaque identifier")
         with self._lock:
             previous = self._config
-            if config.basis_points > previous.basis_points and not promotion_approved:
-                raise ValueError("rollout increase requires explicit approval")
+            # Promotion is NEVER an in-process authority. A runtime increase can
+            # only occur through a brand-new approved activation manifest crossing
+            # the real deployment boundary (activate_rollout_control), not here.
+            if config.basis_points > previous.basis_points:
+                raise ValueError("rollout increase requires a new approved activation manifest")
             event = _audit_event(
                 previous,
                 config,
                 reason,
-                operator_reference,
+                approver_reference,
+                change_reference=change_reference,
                 release_sha=self._release_sha,
             )
             self._audit_sink(event)
@@ -292,13 +230,15 @@ class RolloutControl:
         *,
         config_version: str,
         reason: RolloutChangeReason,
-        operator_reference: str,
+        approver_reference: str,
+        change_reference: str = "",
     ) -> RolloutAuditEvent:
         target = replace(self.config, basis_points=0, config_version=config_version)
         return self.apply(
             target,
             reason=reason,
-            operator_reference=operator_reference,
+            approver_reference=approver_reference,
+            change_reference=change_reference,
         )
 
     def record_activation(self, identity: RolloutReleaseIdentity) -> RolloutAuditEvent:
@@ -314,7 +254,8 @@ class RolloutControl:
             old_config_version=ROLLOUT_BASELINE_CONFIG_VERSION,
             new_config_version=identity.rollout_config_version,
             reason=RolloutChangeReason.APPROVED_PROMOTION,
-            operator_reference=identity.approver_reference,
+            approver_reference=identity.approver_reference,
+            change_reference="",
             changed_at=datetime.now(timezone.utc).isoformat(),
             release_sha=identity.release_sha,
         )
@@ -376,8 +317,9 @@ def _audit_event(
     previous: RolloutConfig,
     current: RolloutConfig,
     reason: RolloutChangeReason,
-    operator_reference: str,
+    approver_reference: str,
     *,
+    change_reference: str = "",
     release_sha: str = "",
 ) -> RolloutAuditEvent:
     return RolloutAuditEvent(
@@ -386,7 +328,8 @@ def _audit_event(
         old_config_version=previous.config_version,
         new_config_version=current.config_version,
         reason=reason,
-        operator_reference=operator_reference,
+        approver_reference=approver_reference,
+        change_reference=change_reference,
         changed_at=datetime.now(timezone.utc).isoformat(),
         release_sha=release_sha,
     )
@@ -395,61 +338,33 @@ def _audit_event(
 def _log_audit_event(event: RolloutAuditEvent) -> None:
     logger.info(
         "agent rollout config changed old_bps=%s new_bps=%s old_version=%s "
-        "new_version=%s reason=%s operator_ref=%s changed_at=%s release_sha=%s",
+        "new_version=%s reason=%s approver_ref=%s change_ref=%s changed_at=%s release_sha=%s",
         event.old_basis_points,
         event.new_basis_points,
         event.old_config_version,
         event.new_config_version,
         event.reason.value,
-        event.operator_reference,
+        event.approver_reference,
+        event.change_reference,
         event.changed_at,
         event.release_sha,
     )
 
 
-def activate_rollout_control(
-    config: RolloutConfig,
-    *,
-    release_sha: str | None,
-    manifest: RolloutActivationManifest | None,
-    audit_sink: AuditSink | None = None,
-) -> RolloutControl:
-    """Production rollout activation boundary.
-
-    The ONLY path through which a non-zero rollout may become active. A rollout of
-    zero basis points needs no activation identity and is returned as-is. Any
-    non-zero rollout MUST be backed by an ``APPROVED`` manifest whose
-    ``release_sha`` (when known), ``config_version`` and ``basis_points`` match the
-    active configuration; otherwise this fails closed by raising
-    ``RolloutActivationError``. A fresh process starting directly at a non-zero
-    rollout therefore cannot silently bypass the audit/release identity.
-    """
-    control = RolloutControl(config, audit_sink=audit_sink)
-    if config.basis_points == 0:
-        return control
-    if manifest is None or manifest.status != RolloutActivationManifestStatus.APPROVED:
-        raise RolloutActivationError(
-            "non-zero rollout_basis_points requires an APPROVED RolloutActivationManifest"
-        )
-    identity = manifest.identity
-    if identity.rollout_config_version != config.config_version:
-        raise RolloutActivationError(
-            f"activation manifest config_version {identity.rollout_config_version!r} "
-            f"does not match active {config.config_version!r}"
-        )
-    if identity.rollout_basis_points != config.basis_points:
-        raise RolloutActivationError(
-            f"activation manifest basis_points {identity.rollout_basis_points} "
-            f"does not match active {config.basis_points}"
-        )
-    if release_sha and identity.release_sha and identity.release_sha != release_sha:
-        raise RolloutActivationError(
-            f"activation manifest release_sha {identity.release_sha!r} "
-            f"does not match deployed release {release_sha!r}"
-        )
-    control.record_activation(identity)
-    return control
-
+# Compatibility facade: the activation boundary was extracted into
+# runtime_rollout_activation to keep this module within repository structure
+# limits. Re-export its public symbols so existing import paths are preserved.
+from property_agent.agent.runtime_rollout_activation import (  # noqa: E402
+    RolloutActivationError,
+    RolloutActivationManifest,
+    RolloutActivationManifestStatus,
+    RolloutReleaseIdentity,
+    activate_rollout_control,
+    compute_manifest_sha256,
+    load_rollout_activation_manifest,
+    parse_rollout_activation_manifest,
+    verify_manifest_integrity,
+)
 
 __all__ = [
     "BucketDecisionClass",
@@ -465,7 +380,9 @@ __all__ = [
     "RuntimeAssignment",
     "RuntimeEligibility",
     "activate_rollout_control",
+    "compute_manifest_sha256",
     "decide_assignment",
     "load_rollout_activation_manifest",
     "parse_rollout_activation_manifest",
+    "verify_manifest_integrity",
 ]

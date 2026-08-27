@@ -90,6 +90,11 @@ class Settings(BaseSettings):
     agent_v2_new_conversation_fallback_runtime: str = "v1"
     agent_v2_emergency_stop: bool = False
     agent_v2_model_config_approved: bool = False
+    # Server-owned model/prompt approval identities. These are real bounded
+    # approval ids set by the deployment; "unconfigured" (default) fails closed
+    # for any non-zero rollout activation (PR7-C Gap 1 Blocker 2).
+    agent_v2_model_approval_id: str = ""
+    agent_v2_prompt_contract_version: str = ""
     # Deployment-provided activation manifest (PR7-C Gap 1). A non-zero rollout
     # only becomes active when this manifest is APPROVED and matches the deployed
     # release. Absent or invalid → fail closed at zero. Never committed as APPROVED.

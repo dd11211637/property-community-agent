@@ -391,13 +391,14 @@ class AgentObservability:
         )
         logger.info(
             "agent rollout audit old_bps=%s new_bps=%s old_version=%s new_version=%s "
-            "reason=%s approver_ref=%s release_sha=%s changed_at=%s",
+            "reason=%s approver_ref=%s change_ref=%s release_sha=%s changed_at=%s",
             event.old_basis_points,
             event.new_basis_points,
             event.old_config_version,
             event.new_config_version,
             event.reason.value,
-            event.operator_reference,
+            event.approver_reference,
+            event.change_reference,
             event.release_sha,
             event.changed_at,
         )

@@ -117,6 +117,8 @@ def build_rollout_control_from_settings(
         config_version=settings.agent_v2_rollout_config_version,
         eligibility_policy_version=settings.agent_v2_eligibility_policy_version,
         fallback_runtime=settings.agent_v2_new_conversation_fallback_runtime,
+        model_approval_id=settings.agent_v2_model_approval_id or "unconfigured",
+        prompt_contract_version=settings.agent_v2_prompt_contract_version or "unconfigured",
     )
     return activate_rollout_control(
         config,

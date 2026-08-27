@@ -6,6 +6,7 @@ review are closed without weakening the existing canary invariants.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from uuid import UUID
 
 import pytest
@@ -24,6 +25,7 @@ from property_agent.agent.runtime_rollout import (
     RolloutControl,
     RolloutReleaseIdentity,
     activate_rollout_control,
+    compute_manifest_sha256,
     load_rollout_activation_manifest,
     parse_rollout_activation_manifest,
 )
@@ -38,13 +40,28 @@ SALT = b"a" * 32
 COMMUNITY_ID = UUID("00000000-0000-0000-0000-000000000001")
 ACTOR_ID = UUID("00000000-0000-0000-0000-000000000002")
 
+# Exact 40-char lowercase Git commit SHAs used across activation tests.
+RELEASE_SHA = "d289b13fee000000000000000000000000000000"
+RELEASE_SHA_B = "f00dcafe00000000000000000000000000000000"
 
-def _config(basis_points: int, *, version: str = "cfg-v1", salt: bytes = SALT):
+APPROVED = RolloutActivationManifestStatus.APPROVED
+
+
+def _config(
+    basis_points: int,
+    *,
+    version: str = "cfg-v1",
+    salt: bytes = SALT,
+    model_approval_id: str = "model:deepseek-v4",
+    prompt_contract_version: str = "pc-v2",
+):
     return RolloutConfig(
         basis_points=basis_points,
         secret_salt=salt,
         salt_version="salt-v1",
         config_version=version,
+        model_approval_id=model_approval_id,
+        prompt_contract_version=prompt_contract_version,
     )
 
 
@@ -59,7 +76,7 @@ def _eligible() -> RuntimeEligibility:
 def _identity(
     *,
     bps: int = 500,
-    release_sha: str = "deploy-sha",
+    release_sha: str = RELEASE_SHA,
     config_version: str = "cfg-v1",
     approver: str = "ops:42",
 ):
@@ -77,10 +94,21 @@ def _identity(
     )
 
 
-def _approved_manifest(identity: RolloutReleaseIdentity) -> RolloutActivationManifest:
-    return RolloutActivationManifest(
-        identity=identity, status=RolloutActivationManifestStatus.APPROVED
-    )
+def _manifest_for(identity: RolloutReleaseIdentity, *, sha: str = "correct"):
+    base = RolloutActivationManifest(identity=identity, status=APPROVED, manifest_sha256="")
+    if sha == "correct":
+        digest = compute_manifest_sha256(base)
+    elif sha == "empty":
+        digest = ""
+    elif sha == "malformed":
+        digest = "zzz-not-a-hex-digest"
+    else:  # mismatch: valid 64-hex but not the canonical digest
+        digest = "0" * 64
+    return RolloutActivationManifest(identity=identity, status=APPROVED, manifest_sha256=digest)
+
+
+def _approved(identity: RolloutReleaseIdentity, *, sha: str = "correct"):
+    return _manifest_for(identity, sha=sha)
 
 
 class _Clock:
@@ -103,7 +131,7 @@ def test_zero_rollout_activates_without_manifest() -> None:
 
 def test_nonzero_without_manifest_fails_closed() -> None:
     with pytest.raises(RolloutActivationError, match="APPROVED"):
-        activate_rollout_control(_config(500), release_sha=None, manifest=None)
+        activate_rollout_control(_config(500), release_sha=RELEASE_SHA, manifest=None)
 
 
 def test_nonzero_with_pending_manifest_fails_closed() -> None:
@@ -111,7 +139,7 @@ def test_nonzero_with_pending_manifest_fails_closed() -> None:
         identity=_identity(), status=RolloutActivationManifestStatus.PENDING
     )
     with pytest.raises(RolloutActivationError):
-        activate_rollout_control(_config(500), release_sha="deploy-sha", manifest=manifest)
+        activate_rollout_control(_config(500), release_sha=RELEASE_SHA, manifest=manifest)
 
 
 def test_nonzero_with_revoked_manifest_fails_closed() -> None:
@@ -119,15 +147,15 @@ def test_nonzero_with_revoked_manifest_fails_closed() -> None:
         identity=_identity(), status=RolloutActivationManifestStatus.REVOKED
     )
     with pytest.raises(RolloutActivationError):
-        activate_rollout_control(_config(500), release_sha="deploy-sha", manifest=manifest)
+        activate_rollout_control(_config(500), release_sha=RELEASE_SHA, manifest=manifest)
 
 
 def test_nonzero_activation_requires_approved_manifest_and_emits_audit() -> None:
     events: list[RolloutAuditEvent] = []
     control = activate_rollout_control(
         _config(500),
-        release_sha="deploy-sha",
-        manifest=_approved_manifest(_identity(bps=500, release_sha="deploy-sha")),
+        release_sha=RELEASE_SHA,
+        manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA)),
         audit_sink=events.append,
     )
     assert control.config.basis_points == 500
@@ -137,8 +165,8 @@ def test_nonzero_activation_requires_approved_manifest_and_emits_audit() -> None
     assert event.new_basis_points == 500
     assert event.new_config_version == "cfg-v1"
     assert event.reason is RolloutChangeReason.APPROVED_PROMOTION
-    assert event.release_sha == "deploy-sha"
-    assert event.operator_reference == "ops:42"
+    assert event.release_sha == RELEASE_SHA
+    assert event.approver_reference == "ops:42"
     assert not hasattr(event, "secret_salt")
 
 
@@ -146,25 +174,23 @@ def test_activation_audit_carries_exact_release_sha_and_bounded_approver() -> No
     events: list[RolloutAuditEvent] = []
     activate_rollout_control(
         _config(500),
-        release_sha="abc123def456",
-        manifest=_approved_manifest(
-            _identity(bps=500, release_sha="abc123def456", approver="approver:ops-77")
-        ),
+        release_sha=RELEASE_SHA,
+        manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA, approver="approver:ops-77")),
         audit_sink=events.append,
     )
-    assert events[0].release_sha == "abc123def456"
-    assert events[0].operator_reference == "approver:ops-77"
+    assert events[0].release_sha == RELEASE_SHA
+    assert events[0].approver_reference == "approver:ops-77"
     # Secret salt must never be part of the evidence.
     assert SALT.decode() not in repr(events[0])
     assert "secret" not in repr(events[0])
 
 
 def test_activation_release_sha_mismatch_fails_closed() -> None:
-    with pytest.raises(RolloutActivationError, match="release_sha"):
+    with pytest.raises(RolloutActivationError, match="does not match deployed"):
         activate_rollout_control(
             _config(500),
-            release_sha="deploy-sha",
-            manifest=_approved_manifest(_identity(bps=500, release_sha="other-sha")),
+            release_sha=RELEASE_SHA,
+            manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA_B)),
         )
 
 
@@ -172,8 +198,10 @@ def test_activation_config_version_mismatch_fails_closed() -> None:
     with pytest.raises(RolloutActivationError, match="config_version"):
         activate_rollout_control(
             _config(500, version="cfg-v2"),
-            release_sha="deploy-sha",
-            manifest=_approved_manifest(_identity(bps=500, config_version="cfg-v1")),
+            release_sha=RELEASE_SHA,
+            manifest=_approved(
+                _identity(bps=500, release_sha=RELEASE_SHA, config_version="cfg-v1")
+            ),
         )
 
 
@@ -181,8 +209,8 @@ def test_activation_basis_points_mismatch_fails_closed() -> None:
     with pytest.raises(RolloutActivationError, match="basis_points"):
         activate_rollout_control(
             _config(500),
-            release_sha="deploy-sha",
-            manifest=_approved_manifest(_identity(bps=600, release_sha="deploy-sha")),
+            release_sha=RELEASE_SHA,
+            manifest=_approved(_identity(bps=600, release_sha=RELEASE_SHA)),
         )
 
 
@@ -190,43 +218,42 @@ def test_rollback_records_required_evidence_and_changes_future_only() -> None:
     events: list[RolloutAuditEvent] = []
     control = activate_rollout_control(
         _config(500),
-        release_sha="deploy-sha",
-        manifest=_approved_manifest(_identity(bps=500, release_sha="deploy-sha", approver="ops:1")),
+        release_sha=RELEASE_SHA,
+        manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA, approver="ops:1")),
         audit_sink=events.append,
     )
     rollback = control.rollback_to_zero(
         config_version="cfg-v3",
         reason=RolloutChangeReason.INCIDENT_ROLLBACK,
-        operator_reference="incident:7",
+        approver_reference="incident:7",
+        change_reference="incident:inc-7",
     )
     assert control.config.basis_points == 0
     assert rollback.old_basis_points == 500
     assert rollback.new_basis_points == 0
-    assert rollback.release_sha == "deploy-sha"
-    assert rollback.operator_reference == "incident:7"
+    assert rollback.release_sha == RELEASE_SHA
+    assert rollback.approver_reference == "incident:7"
+    assert rollback.change_reference == "incident:inc-7"
     assert rollback.reason is RolloutChangeReason.INCIDENT_ROLLBACK
     assert not hasattr(rollback, "secret_salt")
 
 
-def test_rollout_increase_still_requires_explicit_approval_after_activation() -> None:
+def test_rollout_increase_requires_new_activation_not_runtime_apply() -> None:
+    # A non-zero rollout is active via an approved manifest.
     control = activate_rollout_control(
         _config(500),
-        release_sha="deploy-sha",
-        manifest=_approved_manifest(_identity(bps=500, release_sha="deploy-sha")),
+        release_sha=RELEASE_SHA,
+        manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA)),
     )
-    with pytest.raises(ValueError, match="explicit approval"):
+    # Runtime apply can ONLY decrease (rollback); an increase is rejected and is
+    # NOT accessible through any in-process promotion flag.
+    with pytest.raises(ValueError, match="new approved activation manifest"):
         control.apply(
             _config(1000, version="cfg-v2"),
             reason=RolloutChangeReason.APPROVED_PROMOTION,
-            operator_reference="ops:2",
+            approver_reference="ops:2",
         )
-    control.apply(
-        _config(1000, version="cfg-v2"),
-        reason=RolloutChangeReason.APPROVED_PROMOTION,
-        operator_reference="ops:2",
-        promotion_approved=True,
-    )
-    assert control.config.basis_points == 1000
+    assert control.config.basis_points == 500
 
 
 def test_load_manifest_missing_and_invalid_fail_closed() -> None:
@@ -266,6 +293,194 @@ def test_parse_manifest_roundtrip_and_secret_salt_absent() -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Gap 1 — 16-case negative activation matrix (fail closed)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.parametrize(
+    "cid,identity,running,sha_mode,match",
+    [
+        # Blocker 1 — exact 40-hex Git SHA required on BOTH sides, matched exactly.
+        ("running-sha-missing", _identity(), None, "correct", "deployed release_sha"),
+        ("running-sha-malformed", _identity(), "abc123", "correct", "deployed release_sha"),
+        (
+            "manifest-sha-missing",
+            _identity(release_sha=""),
+            RELEASE_SHA,
+            "correct",
+            "manifest release_sha",
+        ),
+        (
+            "manifest-sha-malformed",
+            _identity(release_sha="deadbeef"),
+            RELEASE_SHA,
+            "correct",
+            "manifest release_sha",
+        ),
+        (
+            "sha-mismatch",
+            _identity(release_sha=RELEASE_SHA_B),
+            RELEASE_SHA,
+            "correct",
+            "does not match deployed",
+        ),
+        # Blocker 3 — manifest_sha256 must be SHA-256 of the canonical payload.
+        ("sha256-empty", _identity(), RELEASE_SHA, "empty", "manifest_sha256"),
+        ("sha256-malformed", _identity(), RELEASE_SHA, "malformed", "manifest_sha256"),
+        ("sha256-mismatch", _identity(), RELEASE_SHA, "mismatch", "does not match the canonical"),
+        # Blocker 2 — complete identity must match the active configuration.
+        (
+            "config-version",
+            replace(_identity(), rollout_config_version="cfg-v2"),
+            RELEASE_SHA,
+            "correct",
+            "config_version",
+        ),
+        (
+            "basis-points",
+            replace(_identity(), rollout_basis_points=600),
+            RELEASE_SHA,
+            "correct",
+            "basis_points",
+        ),
+        (
+            "salt-version",
+            replace(_identity(), salt_version="salt-v2"),
+            RELEASE_SHA,
+            "correct",
+            "salt_version",
+        ),
+        (
+            "eligibility-policy",
+            replace(_identity(), eligibility_policy_version="elig-v2"),
+            RELEASE_SHA,
+            "correct",
+            "eligibility_policy_version",
+        ),
+        (
+            "fallback-runtime",
+            replace(_identity(), approved_fallback_runtime="v2"),
+            RELEASE_SHA,
+            "correct",
+            "approved_fallback_runtime",
+        ),
+        (
+            "manifest-version",
+            replace(_identity(), activation_manifest_version="pr7c-activation-v0"),
+            RELEASE_SHA,
+            "correct",
+            "unsupported activation_manifest_version",
+        ),
+        (
+            "approver-unbounded",
+            replace(_identity(), approver_reference="ops with spaces"),
+            RELEASE_SHA,
+            "correct",
+            "approver_reference",
+        ),
+        (
+            "approved-at-invalid",
+            replace(_identity(), approved_at="2026-08-27"),
+            RELEASE_SHA,
+            "correct",
+            "approved_at",
+        ),
+    ],
+)
+def test_activation_negative_matrix(cid, identity, running, sha_mode, match) -> None:
+    manifest = _manifest_for(identity, sha=sha_mode)
+    with pytest.raises(RolloutActivationError, match=match):
+        activate_rollout_control(_config(500), release_sha=running, manifest=manifest)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Gap 1 — model/prompt approval identity must be real and match active config
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_activation_config_model_approval_unconfigured_fails() -> None:
+    with pytest.raises(RolloutActivationError, match="model_approval_id"):
+        activate_rollout_control(
+            _config(500, model_approval_id="unconfigured"),
+            release_sha=RELEASE_SHA,
+            manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA)),
+        )
+
+
+def test_activation_model_approval_mismatch_fails() -> None:
+    with pytest.raises(RolloutActivationError, match="model_approval_id"):
+        activate_rollout_control(
+            _config(500, model_approval_id="model:other-v1"),
+            release_sha=RELEASE_SHA,
+            manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA)),
+        )
+
+
+def test_activation_prompt_contract_mismatch_fails() -> None:
+    with pytest.raises(RolloutActivationError, match="prompt_contract_version"):
+        activate_rollout_control(
+            _config(500, prompt_contract_version="pc-other"),
+            release_sha=RELEASE_SHA,
+            manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA)),
+        )
+
+
+def test_activation_identity_model_placeholder_fails() -> None:
+    with pytest.raises(RolloutActivationError, match="model_approval_id"):
+        activate_rollout_control(
+            _config(500),
+            release_sha=RELEASE_SHA,
+            manifest=_approved(
+                replace(
+                    _identity(bps=500, release_sha=RELEASE_SHA), model_approval_id="REPLACE_WITH_X"
+                )
+            ),
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Gap 1 — positive acceptance: fresh approved identities (incl. promotion-only
+# via the real deployment boundary, never via runtime apply)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_activation_positive_five_percent() -> None:
+    events: list[RolloutAuditEvent] = []
+    control = activate_rollout_control(
+        _config(500),
+        release_sha=RELEASE_SHA,
+        manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA, approver="ops:9")),
+        audit_sink=events.append,
+    )
+    assert control.config.basis_points == 500
+    assert events[0].release_sha == RELEASE_SHA
+    assert events[0].approver_reference == "ops:9"
+    assert events[0].new_basis_points == 500
+
+
+def test_activation_positive_ten_percent_via_fresh_boundary() -> None:
+    # A brand-new approved identity at 1000 bps is accepted through the real
+    # activation boundary (the ONLY promotion path). The runtime apply path
+    # rejects the same increase.
+    events: list[RolloutAuditEvent] = []
+    control = activate_rollout_control(
+        _config(1000),
+        release_sha=RELEASE_SHA,
+        manifest=_approved(_identity(bps=1000, release_sha=RELEASE_SHA, approver="ops:10")),
+        audit_sink=events.append,
+    )
+    assert control.config.basis_points == 1000
+    assert events[0].new_basis_points == 1000
+    # The same increase cannot be reached through runtime apply.
+    with pytest.raises(ValueError, match="new approved activation manifest"):
+        control.apply(
+            _config(2000, version="cfg-v2"),
+            reason=RolloutChangeReason.APPROVED_PROMOTION,
+            approver_reference="ops:11",
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Gap 1 — Real production composition activation path
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -277,15 +492,19 @@ class _FakeSettings:
     agent_v2_rollout_config_version: str = "pr7c-default-v1"
     agent_v2_eligibility_policy_version: str = "pr7c-eligibility-v1"
     agent_v2_new_conversation_fallback_runtime: str = "v1"
+    agent_v2_model_approval_id: str = ""
+    agent_v2_prompt_contract_version: str = ""
     release_sha: str = ""
 
 
-def _settings(*, basis_points: int, release_sha: str = "") -> _FakeSettings:
+def _settings(*, basis_points: int, release_sha: str = RELEASE_SHA) -> _FakeSettings:
     settings = _FakeSettings()
     settings.agent_v2_new_conversation_rollout_basis_points = basis_points
     settings.agent_v2_rollout_salt = "x" * 32
     settings.agent_v2_rollout_salt_version = "salt-v1"
     settings.agent_v2_rollout_config_version = "cfg-v1"
+    settings.agent_v2_model_approval_id = "model:deepseek-v4"
+    settings.agent_v2_prompt_contract_version = "pc-v2"
     settings.release_sha = release_sha
     return settings
 
@@ -298,7 +517,7 @@ def test_composition_zero_rollout_activates_without_manifest() -> None:
 def test_composition_nonzero_without_manifest_fails_closed() -> None:
     with pytest.raises(RolloutActivationError):
         build_rollout_control_from_settings(
-            _settings(basis_points=500, release_sha="deploy-sha"),
+            _settings(basis_points=500, release_sha=RELEASE_SHA),
             manifest=None,
             audit_sink=None,
         )
@@ -309,7 +528,7 @@ def test_composition_environment_restart_zero_to_five_percent_cannot_skip_audit(
     # NOT silently start serving v2; the activation boundary is enforced.
     with pytest.raises(RolloutActivationError):
         build_rollout_control_from_settings(
-            _settings(basis_points=500, release_sha="deploy-sha"),
+            _settings(basis_points=500, release_sha=RELEASE_SHA),
             manifest=None,
             audit_sink=None,
         )
@@ -318,22 +537,22 @@ def test_composition_environment_restart_zero_to_five_percent_cannot_skip_audit(
 def test_composition_nonzero_with_approved_manifest_activates_and_audits() -> None:
     events: list[RolloutAuditEvent] = []
     control = build_rollout_control_from_settings(
-        _settings(basis_points=500, release_sha="deploy-sha"),
-        manifest=_approved_manifest(_identity(bps=500, release_sha="deploy-sha", approver="ops:9")),
+        _settings(basis_points=500, release_sha=RELEASE_SHA),
+        manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA, approver="ops:9")),
         audit_sink=events.append,
     )
     assert control.config.basis_points == 500
     assert len(events) == 1
-    assert events[0].release_sha == "deploy-sha"
-    assert events[0].operator_reference == "ops:9"
+    assert events[0].release_sha == RELEASE_SHA
+    assert events[0].approver_reference == "ops:9"
     assert events[0].new_basis_points == 500
 
 
 def test_composition_release_sha_mismatch_fails_closed() -> None:
-    with pytest.raises(RolloutActivationError, match="release_sha"):
+    with pytest.raises(RolloutActivationError, match="does not match deployed"):
         build_rollout_control_from_settings(
-            _settings(basis_points=500, release_sha="deploy-sha"),
-            manifest=_approved_manifest(_identity(bps=500, release_sha="wrong-sha")),
+            _settings(basis_points=500, release_sha=RELEASE_SHA),
+            manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA_B)),
             audit_sink=None,
         )
 
@@ -341,8 +560,8 @@ def test_composition_release_sha_mismatch_fails_closed() -> None:
 def test_composition_audit_evidence_omits_secret_salt() -> None:
     events: list[RolloutAuditEvent] = []
     build_rollout_control_from_settings(
-        _settings(basis_points=500, release_sha="deploy-sha"),
-        manifest=_approved_manifest(_identity(bps=500, release_sha="deploy-sha")),
+        _settings(basis_points=500, release_sha=RELEASE_SHA),
+        manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA)),
         audit_sink=events.append,
     )
     assert SALT.decode() not in repr(events[0])
