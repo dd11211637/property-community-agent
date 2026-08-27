@@ -9,6 +9,7 @@ from property_agent.agent.application.conversation_service import ConversationSe
 from property_agent.agent.application.facade import AgentRuntimeFacadeImpl
 from property_agent.agent.application.runner import AgentSessionRunner
 from property_agent.agent.model_gateway import DeterministicModelGateway
+from property_agent.agent.model_release import actual_model_release_identity
 from property_agent.agent.observed_boundaries import (
     ObservedPlanner,
     ObservedSpecialist,
@@ -103,13 +104,20 @@ def build_rollout_control_from_settings(
     *,
     manifest,
     audit_sink=None,
+    model_release_identity=None,
 ) -> RolloutControl:
     """Real production activation boundary built from validated settings.
 
     Delegates to ``activate_rollout_control`` so a non-zero rollout can only become
-    active when an ``APPROVED`` activation manifest matches the deployed release.
-    This is the single place configuration turns into an active rollout control.
+    active when an ``APPROVED`` activation manifest matches the deployed release AND
+    the ACTUAL running model/provider/prompt release identity (Blocker 1). This is the
+    single place configuration turns into an active rollout control.
+
+    The model/prompt approval identity is derived from the shared production
+    ``ModelReleaseIdentity`` (server-owned), never from operator env, so a deployment
+    cannot self-approve a rollout by supplying matching-looking operator strings.
     """
+    actual = model_release_identity or actual_model_release_identity()
     config = RolloutConfig(
         basis_points=settings.agent_v2_new_conversation_rollout_basis_points,
         secret_salt=settings.agent_v2_rollout_salt.encode(),
@@ -117,14 +125,15 @@ def build_rollout_control_from_settings(
         config_version=settings.agent_v2_rollout_config_version,
         eligibility_policy_version=settings.agent_v2_eligibility_policy_version,
         fallback_runtime=settings.agent_v2_new_conversation_fallback_runtime,
-        model_approval_id=settings.agent_v2_model_approval_id or "unconfigured",
-        prompt_contract_version=settings.agent_v2_prompt_contract_version or "unconfigured",
+        model_approval_id=actual.model_release_evidence_reference,
+        prompt_contract_version=actual.prompt_contract_version,
     )
     return activate_rollout_control(
         config,
         release_sha=settings.release_sha or None,
         manifest=manifest,
         audit_sink=audit_sink,
+        model_release_identity=actual,
     )
 
 

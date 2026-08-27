@@ -9,7 +9,14 @@
     "model_approval_id": "REPLACE_WITH_MODEL_APPROVAL_ID",
     "prompt_contract_version": "REPLACE_WITH_PROMPT_CONTRACT_VERSION",
     "approver_reference": "REPLACE_WITH_BOUNDED_APPROVER_REFERENCE",
-    "approved_at": "REPLACE_WITH_ISO_UTC_TIMESTAMP"
+    "approved_at": "REPLACE_WITH_ISO_UTC_TIMESTAMP",
+    "activation_manifest_version": "pr7c-activation-v1",
+    "provider_class": "deepseek",
+    "model": "REPLACE_WITH_DEEPSEEK_MODEL",
+    "provider_config_version": "deepseek-bounded-retry-v1",
+    "model_release_evidence_reference": "REPLACE_WITH_MODEL_RELEASE_EVIDENCE_REFERENCE",
+    "previous_rollout_basis_points": 0,
+    "previous_rollout_config_version": "pr7c-baseline-zero"
   },
   "status": "pending",
   "manifest_sha256": ""

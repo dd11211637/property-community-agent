@@ -244,14 +244,17 @@ class RolloutControl:
     def record_activation(self, identity: RolloutReleaseIdentity) -> RolloutAuditEvent:
         """Emit the audit transition for an approved non-zero activation.
 
-        The transition is recorded from the implicit zero baseline to the approved
-        non-zero identity, binding it to the exact ``release_sha`` and bounded
-        ``approver_reference`` from the deployment manifest.
+        The transition is recorded from the approved transition's ``previous_*`` facts
+        to its target (``rollout_basis_points`` / ``rollout_config_version``), never
+        synthesized as zero. The previous/target facts live inside the canonical
+        manifest SHA-256 payload, so the digest binds them. A first-canary transition
+        is represented explicitly by a manifest whose ``previous_rollout_basis_points``
+        is ``0`` and ``previous_rollout_config_version`` is ``pr7c-baseline-zero``.
         """
         event = RolloutAuditEvent(
-            old_basis_points=0,
+            old_basis_points=identity.previous_rollout_basis_points,
             new_basis_points=identity.rollout_basis_points,
-            old_config_version=ROLLOUT_BASELINE_CONFIG_VERSION,
+            old_config_version=identity.previous_rollout_config_version,
             new_config_version=identity.rollout_config_version,
             reason=RolloutChangeReason.APPROVED_PROMOTION,
             approver_reference=identity.approver_reference,

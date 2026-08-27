@@ -29,8 +29,6 @@ The server-owned configuration is:
 | `AGENT_V2_NEW_CONVERSATION_FALLBACK_RUNTIME` | Safe ineligible-new fallback | `v1` |
 | `AGENT_V2_EMERGENCY_STOP` | Stops future v2 assignment | `false` |
 | `AGENT_V2_MODEL_CONFIG_APPROVED` | Explicit approved provider/model/prompt fact | `false` |
-| `AGENT_V2_MODEL_APPROVAL_ID` | Real bounded model approval identifier (server-owned) | empty |
-| `AGENT_V2_PROMPT_CONTRACT_VERSION` | Real bounded prompt contract version (server-owned) | empty |
 | `RELEASE_SHA` | Exact 40-hex deployed Git commit SHA verified at startup | empty |
 | `ROLLOUT_ACTIVATION_MANIFEST_PATH` | Path to the deployment-provided activation manifest | `config/rollout_activation_manifest.json` |
 
@@ -66,28 +64,45 @@ at a non-zero rollout without a fully verified approved manifest fails closed �
 audit/release identity can never be silently bypassed. A rollout of zero basis points needs no
 manifest and is returned as-is.
 
+The model/provider/prompt approval identity is **not** operator-supplied. It is derived from the
+single shared production contract `property_agent.agent.model_release.ModelReleaseIdentity`
+(`provider_class`, `model` from `settings.deepseek_model`, `provider_config_version`,
+`prompt_contract_version`, and the real `model_release_evidence_reference`). PR7-B certification
+metadata consumes the same source of truth, so there is exactly one model-configuration authority.
+
 The boundary enforces five independent controls on every non-zero activation:
 
 1. **Exact release SHA (both sides).** The deployed `RELEASE_SHA` AND the manifest
    `identity.release_sha` must each be an exact 40-hex lowercase Git commit identity, and they
    must match exactly. Missing, abbreviated, or mismatched SHAs fail closed.
-2. **Complete identity match.** Every field of `RolloutReleaseIdentity` must match the active
-   `RolloutConfig` exactly: `rollout_config_version`, `rollout_basis_points`, `salt_version`,
-   `eligibility_policy_version`, and `approved_fallback_runtime`. The
-   `activation_manifest_version` must be a supported version; `approver_reference` must be a
-   bounded opaque identifier; `approved_at` must be a valid UTC ISO-8601 timestamp; and the
-   model/prompt approval identities must be *real* (bounded, non-placeholder) and equal to the
-   active server-owned `AGENT_V2_MODEL_APPROVAL_ID` / `AGENT_V2_PROMPT_CONTRACT_VERSION`.
+2. **Complete identity match + actual model binding.** Every field of `RolloutReleaseIdentity`
+   must match the active `RolloutConfig` exactly: `rollout_config_version`, `rollout_basis_points`,
+   `salt_version`, `eligibility_policy_version`, and `approved_fallback_runtime`. The
+   `activation_manifest_version` must be a *supplied* supported version (a missing version is not
+   silently defaulted); `approver_reference` must be a bounded opaque identifier and must not be a
+   placeholder/`unconfigured` value; `approved_at` must be a valid UTC ISO-8601 timestamp. The
+   manifest's `provider_class`, `model`, `provider_config_version`, `prompt_contract_version`, and
+   `model_approval_id` (the real model/release evidence reference) are verified against the
+   **actual running** `ModelReleaseIdentity` — not against operator env — so a deployment cannot
+   self-approve a rollout by supplying matching-looking operator strings while the real model or
+   provider differs. A non-zero rollout therefore remains fail-closed until the protected
+   real-model baseline approval records a real `model_release_evidence_reference`.
 3. **SHA-256 integrity.** `manifest_sha256` must be the lowercase 64-hex SHA-256 of the
-   canonical approval payload (see digest generation below). Any empty, malformed, or mismatched
-   digest fails closed.
+   canonical approval payload (see digest generation below). The payload now also binds the
+   actual model/provider/prompt facts and the explicit approved transition identity
+   (`previous_rollout_basis_points`, `previous_rollout_config_version`), so the digest changes
+   whenever those facts change. Any empty, malformed, or mismatched digest fails closed.
 4. **No in-process promotion.** Runtime `RolloutControl.apply` may only *decrease* basis points
    (rollback). An increase is rejected with `ValueError`; there is no `promotion_approved`
    bypass. A higher rollout becomes active only through a brand-new `APPROVED` activation
    manifest crossing the real deployment boundary.
-5. **Attributable audit.** Activation and rollback both emit a `RolloutAuditEvent` bound to the
-   exact `release_sha`, a bounded `approver_reference`, and a bounded `change_reference`
-   (no PII). The secret salt is never part of the manifest identity or the audit evidence.
+5. **Attributable, truthful audit.** Activation and rollback both emit a `RolloutAuditEvent`
+   bound to the exact `release_sha`, a bounded `approver_reference`, and a bounded `change_reference`
+   (no PII). `record_activation` emits the approved transition's **actual** previous/target
+   basis points and config version (`previous_rollout_basis_points` / `previous_rollout_config_version`
+   → target); it never synthesizes a previous state of zero except for a manifest that explicitly
+   represents the initial zero → first-canary transition. The secret salt is never part of the
+   manifest identity or the audit evidence.
 
 ### Operator digest generation
 

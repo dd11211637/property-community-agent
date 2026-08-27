@@ -21,8 +21,16 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 
+from property_agent.agent.model_release import (
+    REAL_MODEL_RELEASE_EVIDENCE_REFERENCE,
+    actual_model_release_identity,
+)
+from property_agent.agent.model_release import (
+    ModelReleaseIdentity as _ActualModelReleaseIdentity,
+)
 from property_agent.agent.runtime_rollout import (
     _OPERATOR_REFERENCE,
+    ROLLOUT_BASELINE_CONFIG_VERSION,
     AuditSink,
     RolloutConfig,
     RolloutControl,
@@ -61,6 +69,20 @@ class RolloutReleaseIdentity:
 
     Every field is server-owned and bounded. The secret rollout salt is NOT
     included here: it must never enter logs, metrics, or audit evidence.
+
+    The actual running model/provider/prompt facts (``provider_class``, ``model``,
+    ``provider_config_version``, ``prompt_contract_version``) are bound against the
+    shared production ``ModelReleaseIdentity`` so a rollout is authorized only when the
+    manifest matches the *real* running release, never an operator-supplied string.
+
+    ``model_approval_id`` is the real approved model/release evidence reference and
+    must equal the actual ``ModelReleaseIdentity.model_release_evidence_reference``.
+
+    The transition identity (``previous_*`` / target) is the explicit approved
+    rollout transition. The previous/target facts live inside the canonical manifest
+    SHA-256 payload so the digest binds them. ``record_activation`` emits exactly
+    these, and never synthesizes a previous state of zero except for a manifest that
+    explicitly represents the initial zero -> first-canary transition.
     """
 
     release_sha: str
@@ -74,6 +96,15 @@ class RolloutReleaseIdentity:
     approver_reference: str
     approved_at: str
     activation_manifest_version: str = ROLLOUT_ACTIVATION_MANIFEST_VERSION
+    # Actual running model/provider/prompt release facts (bound to ModelReleaseIdentity).
+    provider_class: str = "deepseek"
+    model: str = ""
+    provider_config_version: str = "deepseek-bounded-retry-v1"
+    # Real approved model/release evidence reference (must equal the actual identity).
+    model_release_evidence_reference: str = REAL_MODEL_RELEASE_EVIDENCE_REFERENCE
+    # Explicit approved transition identity (previous -> target rollout).
+    previous_rollout_basis_points: int = 0
+    previous_rollout_config_version: str = ROLLOUT_BASELINE_CONFIG_VERSION
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,8 +132,20 @@ def parse_rollout_activation_manifest(data: dict) -> RolloutActivationManifest:
         prompt_contract_version=str(raw.get("prompt_contract_version", "")),
         approver_reference=str(raw.get("approver_reference", "")),
         approved_at=str(raw.get("approved_at", "")),
-        activation_manifest_version=str(
-            raw.get("activation_manifest_version", ROLLOUT_ACTIVATION_MANIFEST_VERSION)
+        # Hardening B: an APPROVED manifest must supply an explicit version. Do NOT
+        # silently treat a missing version as the current supported version.
+        activation_manifest_version=str(raw.get("activation_manifest_version", "")),
+        provider_class=str(raw.get("provider_class", "deepseek")),
+        model=str(raw.get("model", "")),
+        provider_config_version=str(
+            raw.get("provider_config_version", "deepseek-bounded-retry-v1")
+        ),
+        model_release_evidence_reference=str(
+            raw.get("model_release_evidence_reference", REAL_MODEL_RELEASE_EVIDENCE_REFERENCE)
+        ),
+        previous_rollout_basis_points=int(raw.get("previous_rollout_basis_points", 0)),
+        previous_rollout_config_version=str(
+            raw.get("previous_rollout_config_version", ROLLOUT_BASELINE_CONFIG_VERSION)
         ),
     )
     status = RolloutActivationManifestStatus(str(data.get("status", "pending")))
@@ -166,6 +209,12 @@ def _canonical_approval_payload(manifest: RolloutActivationManifest) -> str:
             "approver_reference": identity.approver_reference,
             "approved_at": identity.approved_at,
             "activation_manifest_version": identity.activation_manifest_version,
+            "provider_class": identity.provider_class,
+            "model": identity.model,
+            "provider_config_version": identity.provider_config_version,
+            "model_release_evidence_reference": identity.model_release_evidence_reference,
+            "previous_rollout_basis_points": identity.previous_rollout_basis_points,
+            "previous_rollout_config_version": identity.previous_rollout_config_version,
         },
         "status": manifest.status.value,
     }
@@ -219,8 +268,16 @@ def _validate_release_identity(
     verify_manifest_integrity(manifest)
 
 
-def _validate_activation_identity(config: RolloutConfig, identity: RolloutReleaseIdentity) -> None:
-    """Fail closed on Blocker 2: full identity match vs the active configuration."""
+def _validate_activation_config_match(
+    config: RolloutConfig, identity: RolloutReleaseIdentity
+) -> None:
+    """Fail closed on full identity match vs the active server-owned configuration.
+
+    Covers config_version, basis_points, salt_version, eligibility_policy_version,
+    approved_fallback_runtime, supported activation_manifest_version, bounded
+    approver_reference (Hardening A: no placeholder/unconfigured), valid UTC
+    approved_at, and a real model/prompt id on the active config.
+    """
     _require(
         identity.rollout_config_version == config.config_version,
         f"activation manifest config_version {identity.rollout_config_version!r} "
@@ -254,18 +311,21 @@ def _validate_activation_identity(config: RolloutConfig, identity: RolloutReleas
         _OPERATOR_REFERENCE.fullmatch(identity.approver_reference),
         "manifest approver_reference must be a bounded opaque identifier",
     )
+    # Hardening A — reject committed placeholder / unconfigured approver values even
+    # though they satisfy the bounded-opaque regex.
+    _require(
+        not identity.approver_reference.upper().startswith(_PLACEHOLDER_PREFIX),
+        "manifest approver_reference must not be a placeholder value",
+    )
+    _require(
+        identity.approver_reference != _UNCONFIGURED_APPROVAL,
+        "manifest approver_reference must not be unconfigured",
+    )
     _require(
         _valid_utc(identity.approved_at),
         "manifest approved_at must be a valid UTC ISO-8601 timestamp",
     )
-    _require(
-        _is_real_approval_id(identity.model_approval_id),
-        "manifest model_approval_id must be a real bounded approval identifier",
-    )
-    _require(
-        _is_real_approval_id(identity.prompt_contract_version),
-        "manifest prompt_contract_version must be a real bounded approval identifier",
-    )
+    # Defense in depth: the active config itself must carry a real model/prompt id.
     _require(
         _is_real_approval_id(config.model_approval_id),
         "active config model_approval_id must be a real server-owned approval id",
@@ -274,16 +334,60 @@ def _validate_activation_identity(config: RolloutConfig, identity: RolloutReleas
         _is_real_approval_id(config.prompt_contract_version),
         "active config prompt_contract_version must be a real server-owned approval id",
     )
+
+
+def _validate_activation_model_release(
+    identity: RolloutReleaseIdentity, *, model_release_identity: _ActualModelReleaseIdentity
+) -> None:
+    """Fail closed on Blocker 1: bind to the ACTUAL running model/provider/prompt release.
+
+    The manifest's provider/model/provider-config/prompt-contract facts and the real
+    approved model/release evidence reference are verified against the shared production
+    ``ModelReleaseIdentity`` -- the *real running* release -- not against operator env
+    strings. A deployment cannot make rollout eligible merely by supplying
+    matching-looking operator values while the actual model/provider differs.
+    """
     _require(
-        identity.model_approval_id == config.model_approval_id,
-        f"manifest model_approval_id {identity.model_approval_id!r} "
-        f"does not match active {config.model_approval_id!r}",
+        identity.provider_class == model_release_identity.provider_class,
+        f"activation manifest provider_class {identity.provider_class!r} "
+        f"does not match actual {model_release_identity.provider_class!r}",
     )
     _require(
-        identity.prompt_contract_version == config.prompt_contract_version,
-        f"manifest prompt_contract_version {identity.prompt_contract_version!r} "
-        f"does not match active {config.prompt_contract_version!r}",
+        identity.model == model_release_identity.model,
+        f"activation manifest model {identity.model!r} "
+        f"does not match actual configured model {model_release_identity.model!r}",
     )
+    _require(
+        identity.provider_config_version == model_release_identity.provider_config_version,
+        f"activation manifest provider_config_version {identity.provider_config_version!r} "
+        f"does not match actual {model_release_identity.provider_config_version!r}",
+    )
+    _require(
+        identity.prompt_contract_version == model_release_identity.prompt_contract_version,
+        f"activation manifest prompt_contract_version {identity.prompt_contract_version!r} "
+        f"does not match actual {model_release_identity.prompt_contract_version!r}",
+    )
+    _require(
+        _is_real_approval_id(identity.model_approval_id),
+        "manifest model_approval_id must be a real bounded approval identifier",
+    )
+    _require(
+        identity.model_approval_id == model_release_identity.model_release_evidence_reference,
+        f"activation manifest model_approval_id {identity.model_approval_id!r} "
+        f"does not match the actual approved model/release evidence reference "
+        f"{model_release_identity.model_release_evidence_reference!r}",
+    )
+
+
+def _validate_activation_identity(
+    config: RolloutConfig,
+    identity: RolloutReleaseIdentity,
+    *,
+    model_release_identity: _ActualModelReleaseIdentity,
+) -> None:
+    """Fail closed on Blocker 2 (config match) and Blocker 1 (actual model binding)."""
+    _validate_activation_config_match(config, identity)
+    _validate_activation_model_release(identity, model_release_identity=model_release_identity)
 
 
 def activate_rollout_control(
@@ -292,6 +396,7 @@ def activate_rollout_control(
     release_sha: str | None,
     manifest: RolloutActivationManifest | None,
     audit_sink: AuditSink | None = None,
+    model_release_identity: _ActualModelReleaseIdentity | None = None,
 ) -> RolloutControl:
     """Production rollout activation boundary.
 
@@ -305,7 +410,15 @@ def activate_rollout_control(
       (Blocker 3);
     * complete ``RolloutReleaseIdentity`` matches the active configuration
       field-by-field, with a bounded ``approver_reference``, a valid UTC
-      ``approved_at``, and real model/prompt approval identities (Blocker 2).
+      ``approved_at``, and real model/prompt approval identities (Blocker 2);
+    * provider/model/provider-config/prompt-contract facts and the real approved
+      model/release evidence reference match the ACTUAL running ``ModelReleaseIdentity``
+      (Blocker 1 — no self-referential operator string).
+
+    ``model_release_identity`` is the actual running release identity; when omitted it
+    defaults to ``actual_model_release_identity()``. Today that reference is ``PENDING``,
+    so any non-zero rollout remains fail-closed until the protected real-model baseline
+    approval records a real reference.
 
     Otherwise this fails closed by raising ``RolloutActivationError``. A fresh
     process starting directly at a non-zero rollout therefore cannot silently
@@ -320,7 +433,8 @@ def activate_rollout_control(
         )
     running_sha = release_sha or ""
     _validate_release_identity(manifest.identity, manifest, running_sha=running_sha)
-    _validate_activation_identity(config, manifest.identity)
+    identity = model_release_identity or actual_model_release_identity()
+    _validate_activation_identity(config, manifest.identity, model_release_identity=identity)
     control.record_activation(manifest.identity)
     return control
 

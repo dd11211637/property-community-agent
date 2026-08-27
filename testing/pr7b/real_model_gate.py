@@ -22,6 +22,10 @@ from property_agent.agent.memory_contracts import (
     RetrievedMemory,
 )
 from property_agent.agent.model_contracts import ModelGatewayError
+from property_agent.agent.model_release import (
+    PROMPT_CONTRACT_VERSION,
+    PROVIDER_CONFIG_VERSION,
+)
 from property_agent.agent.observability import AgentObservability
 from property_agent.agent.observed_boundaries import ObservedModelGateway
 from property_agent.agent.orchestration import Plan
@@ -43,8 +47,8 @@ from testing.pr7b.evidence import (
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATASET = ROOT / "tests/agent/data/pr7b_real_model_holdout_v1.json"
 DEFAULT_APPROVAL_MANIFEST = ROOT / "config/pr7b_real_model_baseline_approval.json"
-PROMPT_CONTRACT_VERSION = "semantic-planner-pr5-v1"
-PROVIDER_CONFIG_VERSION = "deepseek-bounded-retry-v1"
+# Consume the SINGLE shared production release-metadata contract (PR7-C Blocker 1):
+# the provider/prompt facts are server-owned and never redefined in testing/.
 _TRUSTED_PARAMETERS = frozenset(
     {
         "actor_id",

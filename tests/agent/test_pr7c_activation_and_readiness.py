@@ -13,8 +13,13 @@ import pytest
 
 from property_agent.agent.adapters.api.schemas import SendMessageRequest
 from property_agent.agent.application.composition import build_rollout_control_from_settings
+from property_agent.agent.model_release import (
+    ModelReleaseIdentity,
+    actual_model_release_identity,
+)
 from property_agent.agent.observability import AgentObservability
 from property_agent.agent.runtime_rollout import (
+    ROLLOUT_BASELINE_CONFIG_VERSION,
     EligibilityReason,
     RolloutActivationError,
     RolloutActivationManifest,
@@ -52,8 +57,8 @@ def _config(
     *,
     version: str = "cfg-v1",
     salt: bytes = SALT,
-    model_approval_id: str = "model:deepseek-v4",
-    prompt_contract_version: str = "pc-v2",
+    model_approval_id: str = "real-model:approved-baseline-v1",
+    prompt_contract_version: str = "semantic-planner-pr5-v1",
 ):
     return RolloutConfig(
         basis_points=basis_points,
@@ -87,10 +92,27 @@ def _identity(
         salt_version="salt-v1",
         eligibility_policy_version="pr7c-eligibility-v1",
         approved_fallback_runtime="v1",
-        model_approval_id="model:deepseek-v4",
-        prompt_contract_version="pc-v2",
+        model_approval_id="real-model:approved-baseline-v1",
+        prompt_contract_version="semantic-planner-pr5-v1",
         approver_reference=approver,
         approved_at="2026-08-27T00:00:00+00:00",
+        provider_class="deepseek",
+        model="deepseek-v4-flash",
+        provider_config_version="deepseek-bounded-retry-v1",
+        model_release_evidence_reference="real-model:approved-baseline-v1",
+        previous_rollout_basis_points=0,
+        previous_rollout_config_version=ROLLOUT_BASELINE_CONFIG_VERSION,
+    )
+
+
+def _real_actual() -> ModelReleaseIdentity:
+    """The ACTUAL running model/provider/prompt release identity (approved state)."""
+    return ModelReleaseIdentity(
+        provider_class="deepseek",
+        model="deepseek-v4-flash",
+        provider_config_version="deepseek-bounded-retry-v1",
+        prompt_contract_version="semantic-planner-pr5-v1",
+        model_release_evidence_reference="real-model:approved-baseline-v1",
     )
 
 
@@ -156,6 +178,7 @@ def test_nonzero_activation_requires_approved_manifest_and_emits_audit() -> None
         _config(500),
         release_sha=RELEASE_SHA,
         manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA)),
+        model_release_identity=_real_actual(),
         audit_sink=events.append,
     )
     assert control.config.basis_points == 500
@@ -176,6 +199,7 @@ def test_activation_audit_carries_exact_release_sha_and_bounded_approver() -> No
         _config(500),
         release_sha=RELEASE_SHA,
         manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA, approver="approver:ops-77")),
+        model_release_identity=_real_actual(),
         audit_sink=events.append,
     )
     assert events[0].release_sha == RELEASE_SHA
@@ -220,6 +244,7 @@ def test_rollback_records_required_evidence_and_changes_future_only() -> None:
         _config(500),
         release_sha=RELEASE_SHA,
         manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA, approver="ops:1")),
+        model_release_identity=_real_actual(),
         audit_sink=events.append,
     )
     rollback = control.rollback_to_zero(
@@ -244,6 +269,7 @@ def test_rollout_increase_requires_new_activation_not_runtime_apply() -> None:
         _config(500),
         release_sha=RELEASE_SHA,
         manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA)),
+        model_release_identity=_real_actual(),
     )
     # Runtime apply can ONLY decrease (rollback); an increase is rejected and is
     # NOT accessible through any in-process promotion flag.
@@ -390,51 +416,250 @@ def test_parse_manifest_roundtrip_and_secret_salt_absent() -> None:
 def test_activation_negative_matrix(cid, identity, running, sha_mode, match) -> None:
     manifest = _manifest_for(identity, sha=sha_mode)
     with pytest.raises(RolloutActivationError, match=match):
-        activate_rollout_control(_config(500), release_sha=running, manifest=manifest)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Gap 1 — model/prompt approval identity must be real and match active config
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-def test_activation_config_model_approval_unconfigured_fails() -> None:
-    with pytest.raises(RolloutActivationError, match="model_approval_id"):
         activate_rollout_control(
-            _config(500, model_approval_id="unconfigured"),
-            release_sha=RELEASE_SHA,
-            manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA)),
+            _config(500),
+            release_sha=running,
+            manifest=manifest,
+            model_release_identity=_real_actual(),
         )
 
 
-def test_activation_model_approval_mismatch_fails() -> None:
-    with pytest.raises(RolloutActivationError, match="model_approval_id"):
+# ═══════════════════════════════════════════════════════════════════════════
+# Blocker 1 — bind rollout approval to the ACTUAL model/provider/prompt release
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_blocker1_actual_model_must_match_approved_manifest() -> None:
+    # Approved-looking manifest, but the ACTUAL running DeepSeek model differs from
+    # what the manifest claims. Binding to the actual ModelReleaseIdentity rejects.
+    actual = replace(_real_actual(), model="deepseek-v4-pro")
+    with pytest.raises(RolloutActivationError, match="model"):
         activate_rollout_control(
-            _config(500, model_approval_id="model:other-v1"),
+            _config(500),
             release_sha=RELEASE_SHA,
             manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA)),
+            model_release_identity=actual,
         )
 
 
-def test_activation_prompt_contract_mismatch_fails() -> None:
+def test_blocker1_wrong_provider_config_version_rejected() -> None:
+    actual = replace(_real_actual(), provider_config_version="deepseek-bounded-retry-v2")
+    with pytest.raises(RolloutActivationError, match="provider_config_version"):
+        activate_rollout_control(
+            _config(500),
+            release_sha=RELEASE_SHA,
+            manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA)),
+            model_release_identity=actual,
+        )
+
+
+def test_blocker1_wrong_prompt_contract_rejected() -> None:
+    actual = replace(_real_actual(), prompt_contract_version="semantic-planner-pr5-v2")
     with pytest.raises(RolloutActivationError, match="prompt_contract_version"):
         activate_rollout_control(
-            _config(500, prompt_contract_version="pc-other"),
+            _config(500),
             release_sha=RELEASE_SHA,
             manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA)),
+            model_release_identity=actual,
         )
 
 
-def test_activation_identity_model_placeholder_fails() -> None:
+def test_blocker1_duplicate_looking_strings_without_real_evidence_rejected() -> None:
+    # The manifest carries a real-looking model_approval_id, and would "match" an
+    # operator-supplied string, but the ACTUAL approved model/release evidence
+    # reference is PENDING (no real approval artifact exists). Binding to the actual
+    # identity must reject — matching-looking strings alone cannot authorize rollout.
+    identity = replace(
+        _identity(bps=500, release_sha=RELEASE_SHA), model_approval_id="real-model:looks-approved"
+    )
     with pytest.raises(RolloutActivationError, match="model_approval_id"):
+        activate_rollout_control(
+            _config(500),
+            release_sha=RELEASE_SHA,
+            manifest=_approved(identity),
+            model_release_identity=actual_model_release_identity(),
+        )
+
+
+def test_blocker1_actual_release_identity_match_proceeds() -> None:
+    # When the approved manifest matches the ACTUAL running model/provider/prompt
+    # release identity and a real evidence reference exists, activation proceeds.
+    events: list[RolloutAuditEvent] = []
+    control = activate_rollout_control(
+        _config(500),
+        release_sha=RELEASE_SHA,
+        manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA)),
+        model_release_identity=_real_actual(),
+        audit_sink=events.append,
+    )
+    assert control.config.basis_points == 500
+    assert events[0].new_basis_points == 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Blocker 2 — activation audit must represent the real approved transition
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_blocker2_initial_zero_to_five_hundred_records_previous() -> None:
+    identity = replace(
+        _identity(bps=500, release_sha=RELEASE_SHA),
+        previous_rollout_basis_points=0,
+        previous_rollout_config_version=ROLLOUT_BASELINE_CONFIG_VERSION,
+    )
+    events: list[RolloutAuditEvent] = []
+    activate_rollout_control(
+        _config(500),
+        release_sha=RELEASE_SHA,
+        manifest=_approved(identity),
+        model_release_identity=_real_actual(),
+        audit_sink=events.append,
+    )
+    assert events[0].old_basis_points == 0
+    assert events[0].new_basis_points == 500
+    assert events[0].old_config_version == ROLLOUT_BASELINE_CONFIG_VERSION
+    assert events[0].new_config_version == "cfg-v1"
+
+
+def test_blocker2_promotion_five_hundred_to_twenty_five_hundred() -> None:
+    identity = replace(
+        _identity(bps=2500, release_sha=RELEASE_SHA, config_version="r2-config"),
+        previous_rollout_basis_points=500,
+        previous_rollout_config_version="r1-config",
+    )
+    events: list[RolloutAuditEvent] = []
+    activate_rollout_control(
+        _config(2500, version="r2-config"),
+        release_sha=RELEASE_SHA,
+        manifest=_approved(identity),
+        model_release_identity=_real_actual(),
+        audit_sink=events.append,
+    )
+    assert events[0].old_basis_points == 500
+    assert events[0].new_basis_points == 2500
+    assert events[0].old_config_version == "r1-config"
+    assert events[0].new_config_version == "r2-config"
+
+
+def test_blocker2_promotion_twenty_five_hundred_to_fifty_percent() -> None:
+    identity = replace(
+        _identity(bps=5000, release_sha=RELEASE_SHA, config_version="r3-config"),
+        previous_rollout_basis_points=2500,
+        previous_rollout_config_version="r2-config",
+    )
+    events: list[RolloutAuditEvent] = []
+    activate_rollout_control(
+        _config(5000, version="r3-config"),
+        release_sha=RELEASE_SHA,
+        manifest=_approved(identity),
+        model_release_identity=_real_actual(),
+        audit_sink=events.append,
+    )
+    assert events[0].old_basis_points == 2500
+    assert events[0].new_basis_points == 5000
+    assert events[0].old_config_version == "r2-config"
+    assert events[0].new_config_version == "r3-config"
+
+
+def test_blocker2_twenty_five_percent_reports_real_previous_not_zero() -> None:
+    # A 25% (2500 bps) promotion must report its real previous state (500), never a
+    # fabricated old=0. The implementation uses the manifest's previous facts.
+    identity = replace(
+        _identity(bps=2500, release_sha=RELEASE_SHA, config_version="r2-config"),
+        previous_rollout_basis_points=500,
+        previous_rollout_config_version="r1-config",
+    )
+    events: list[RolloutAuditEvent] = []
+    activate_rollout_control(
+        _config(2500, version="r2-config"),
+        release_sha=RELEASE_SHA,
+        manifest=_approved(identity),
+        model_release_identity=_real_actual(),
+        audit_sink=events.append,
+    )
+    assert events[0].old_basis_points == 500
+    assert events[0].old_basis_points != 0
+
+
+def test_blocker2_digest_changes_with_previous_state() -> None:
+    base = _identity(bps=500, release_sha=RELEASE_SHA)
+    initial = replace(
+        base,
+        previous_rollout_basis_points=0,
+        previous_rollout_config_version=ROLLOUT_BASELINE_CONFIG_VERSION,
+    )
+    promoted = replace(
+        base, previous_rollout_basis_points=500, previous_rollout_config_version="r1-config"
+    )
+    digest_initial = compute_manifest_sha256(
+        RolloutActivationManifest(identity=initial, status=APPROVED)
+    )
+    digest_promoted = compute_manifest_sha256(
+        RolloutActivationManifest(identity=promoted, status=APPROVED)
+    )
+    assert digest_initial != digest_promoted
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Small hardening — approver placeholder + explicit manifest version
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_hardening_approver_placeholder_rejected() -> None:
+    with pytest.raises(RolloutActivationError, match="approver_reference"):
         activate_rollout_control(
             _config(500),
             release_sha=RELEASE_SHA,
             manifest=_approved(
                 replace(
-                    _identity(bps=500, release_sha=RELEASE_SHA), model_approval_id="REPLACE_WITH_X"
+                    _identity(bps=500, release_sha=RELEASE_SHA),
+                    approver_reference="REPLACE_WITH_BOUNDED_APPROVER_REFERENCE",
                 )
             ),
+            model_release_identity=_real_actual(),
+        )
+
+
+def test_hardening_approver_unconfigured_rejected() -> None:
+    with pytest.raises(RolloutActivationError, match="approver_reference"):
+        activate_rollout_control(
+            _config(500),
+            release_sha=RELEASE_SHA,
+            manifest=_approved(
+                replace(
+                    _identity(bps=500, release_sha=RELEASE_SHA),
+                    approver_reference="unconfigured",
+                )
+            ),
+            model_release_identity=_real_actual(),
+        )
+
+
+def test_hardening_explicit_manifest_version_required_for_approved() -> None:
+    # An APPROVED manifest with no explicit activation_manifest_version must fail;
+    # a missing version is not silently treated as the current supported version.
+    identity = replace(_identity(bps=500, release_sha=RELEASE_SHA), activation_manifest_version="")
+    with pytest.raises(RolloutActivationError, match="activation_manifest_version"):
+        activate_rollout_control(
+            _config(500),
+            release_sha=RELEASE_SHA,
+            manifest=_approved(identity),
+            model_release_identity=_real_actual(),
+        )
+
+
+def test_hardening_pending_manifest_without_version_stays_non_operational() -> None:
+    # A PENDING example manifest may omit the version and remain non-operational.
+    identity = replace(_identity(), activation_manifest_version="")
+    manifest = RolloutActivationManifest(
+        identity=identity, status=RolloutActivationManifestStatus.PENDING
+    )
+    with pytest.raises(RolloutActivationError):
+        activate_rollout_control(
+            _config(500),
+            release_sha=RELEASE_SHA,
+            manifest=manifest,
+            model_release_identity=_real_actual(),
         )
 
 
@@ -450,6 +675,7 @@ def test_activation_positive_five_percent() -> None:
         _config(500),
         release_sha=RELEASE_SHA,
         manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA, approver="ops:9")),
+        model_release_identity=_real_actual(),
         audit_sink=events.append,
     )
     assert control.config.basis_points == 500
@@ -467,6 +693,7 @@ def test_activation_positive_ten_percent_via_fresh_boundary() -> None:
         _config(1000),
         release_sha=RELEASE_SHA,
         manifest=_approved(_identity(bps=1000, release_sha=RELEASE_SHA, approver="ops:10")),
+        model_release_identity=_real_actual(),
         audit_sink=events.append,
     )
     assert control.config.basis_points == 1000
@@ -492,8 +719,6 @@ class _FakeSettings:
     agent_v2_rollout_config_version: str = "pr7c-default-v1"
     agent_v2_eligibility_policy_version: str = "pr7c-eligibility-v1"
     agent_v2_new_conversation_fallback_runtime: str = "v1"
-    agent_v2_model_approval_id: str = ""
-    agent_v2_prompt_contract_version: str = ""
     release_sha: str = ""
 
 
@@ -503,8 +728,6 @@ def _settings(*, basis_points: int, release_sha: str = RELEASE_SHA) -> _FakeSett
     settings.agent_v2_rollout_salt = "x" * 32
     settings.agent_v2_rollout_salt_version = "salt-v1"
     settings.agent_v2_rollout_config_version = "cfg-v1"
-    settings.agent_v2_model_approval_id = "model:deepseek-v4"
-    settings.agent_v2_prompt_contract_version = "pc-v2"
     settings.release_sha = release_sha
     return settings
 
@@ -540,6 +763,7 @@ def test_composition_nonzero_with_approved_manifest_activates_and_audits() -> No
         _settings(basis_points=500, release_sha=RELEASE_SHA),
         manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA, approver="ops:9")),
         audit_sink=events.append,
+        model_release_identity=_real_actual(),
     )
     assert control.config.basis_points == 500
     assert len(events) == 1
@@ -563,6 +787,7 @@ def test_composition_audit_evidence_omits_secret_salt() -> None:
         _settings(basis_points=500, release_sha=RELEASE_SHA),
         manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA)),
         audit_sink=events.append,
+        model_release_identity=_real_actual(),
     )
     assert SALT.decode() not in repr(events[0])
     observability = AgentObservability.in_memory()
