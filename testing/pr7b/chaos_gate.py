@@ -471,6 +471,7 @@ def _run_fault_campaign(
                     path = Path(temp) / f"{case}-{index}.json"
                     os.environ["PR7B_CHAOS_CASE_ID"] = case
                     os.environ["PR7B_CHAOS_RECEIPT_PATH"] = str(path)
+                    os.environ["PR7B_CHAOS_TARGET_NODE_ID"] = node
                     node_results, counts, notes = run_pytest_targets(
                         ROOT,
                         [node],
@@ -501,6 +502,7 @@ _CAMPAIGN_ENV_NAMES = (
     "PR7B_CHAOS_CAMPAIGN_ID",
     "PR7B_CHAOS_CASE_ID",
     "PR7B_CHAOS_RECEIPT_PATH",
+    "PR7B_CHAOS_TARGET_NODE_ID",
 )
 
 
