@@ -127,7 +127,10 @@ coverage is claimed and pool sizing is unchanged.
   its exact-window telemetry signal to pass. Every campaign uses a new bounded opaque
   `chaos_campaign_id`; the same ID is injected into fault-test processes, attached to PR7-A
   spans (never metric labels), stored in GateEvidence, and required by the collector query and
-  response. Same-SHA signals carrying another ID cannot satisfy a drill. C12 additionally runs
+  response. A pytest support plugin wraps each exact fault node with that existing production
+  span seam and returns a bounded campaign/case/node receipt; full telemetry evidence is the
+  intersection of complete local receipts and same-ID collector signals. Same-SHA signals
+  carrying another ID cannot satisfy a drill. C12 additionally runs
   the authoritative Runner post-engine guard and proves a stale candidate cannot publish an
   accepted head or become Memory Writer input; the existing PostgreSQL stale-fence test remains
   the business-mutation assertion.

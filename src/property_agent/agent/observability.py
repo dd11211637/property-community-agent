@@ -35,6 +35,7 @@ _TRACE_ATTRIBUTE_KEYS = frozenset(
         "http.request.method",
         "service.version",
         "certification.campaign.id",
+        "certification.chaos.case",
         "runtime",
         "operation",
         "outcome",

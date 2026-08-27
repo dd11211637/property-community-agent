@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
+import tempfile
+from collections import Counter
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -306,17 +309,10 @@ def evaluate(
     if not _CAMPAIGN_ID.fullmatch(campaign_id):
         raise ValueError("chaos campaign ID must be 32 lowercase hexadecimal characters")
     selected = frozenset(DRILL_MANIFEST) if full else SAFE_DRILLS
-    targets = _selected_targets(selected, full=full)
-    previous_campaign_id = os.environ.get("PR7B_CHAOS_CAMPAIGN_ID")
-    os.environ["PR7B_CHAOS_CAMPAIGN_ID"] = campaign_id
-    try:
-        target_results, counts, limitations = run_pytest_targets(ROOT, targets)
-    finally:
-        if previous_campaign_id is None:
-            os.environ.pop("PR7B_CHAOS_CAMPAIGN_ID", None)
-        else:
-            os.environ["PR7B_CHAOS_CAMPAIGN_ID"] = previous_campaign_id
-    telemetry_cases = (
+    target_results, counts, limitations, receipt_cases, receipts = _run_fault_campaign(
+        selected, full=full, campaign_id=campaign_id
+    )
+    remote_cases = (
         _chaos_observability_cases(
             server_observability_url,
             release_sha=release_sha,
@@ -326,8 +322,13 @@ def evaluate(
         if full
         else selected
     )
+    telemetry_cases = receipt_cases.intersection(remote_cases)
     drills = derive_drill_evidence(
-        target_results, selected=selected, telemetry_cases=telemetry_cases, full=full
+        target_results,
+        selected=selected,
+        telemetry_cases=telemetry_cases,
+        full=full,
+        campaign_receipts=receipts,
     )
     status = derive_gate_status(drills, selected=selected, full=full, dirty=dirty)
     if dirty:
@@ -349,6 +350,7 @@ def evaluate(
         configuration={
             "campaign": campaign,
             "chaos_campaign_id": campaign_id,
+            "campaign_receipts": receipts,
             "fault_profile_version": "pr7b-chaos-v2",
             "drills": drills,
         },
@@ -373,7 +375,9 @@ def derive_drill_evidence(
     selected: frozenset[str],
     telemetry_cases: frozenset[str],
     full: bool,
+    campaign_receipts: dict[str, list[str]] | None = None,
 ) -> dict[str, dict[str, Any]]:
+    campaign_receipts = campaign_receipts or {}
     evidence: dict[str, dict[str, Any]] = {}
     for case, definition in DRILL_MANIFEST.items():
         nodes = list(definition["pytest_node_ids"])
@@ -411,6 +415,7 @@ def derive_drill_evidence(
             **assertion_evidence,
             "telemetry_evidence": {
                 "required_signal": definition["required_telemetry"],
+                "campaign_bound_pytest_nodes": campaign_receipts.get(case, []),
                 "status": "PASS" if case in telemetry_cases and case in selected else "NOT_RUN",
             },
             "status": status,
@@ -444,6 +449,79 @@ def _selected_targets(selected: frozenset[str], *, full: bool) -> list[str]:
         if full:
             targets.extend(definition.get("full_pytest_node_ids", []))
     return targets
+
+
+def _run_fault_campaign(
+    selected: frozenset[str], *, full: bool, campaign_id: str
+) -> tuple[dict[str, str], dict[str, int], tuple[str, ...], frozenset[str], dict[str, list[str]]]:
+    results: dict[str, str] = {}
+    totals: Counter[str] = Counter()
+    limitations: list[str] = []
+    receipts: dict[str, list[str]] = {}
+    previous = {name: os.environ.get(name) for name in _CAMPAIGN_ENV_NAMES}
+    os.environ["PR7B_CHAOS_CAMPAIGN_ID"] = campaign_id
+    try:
+        with tempfile.TemporaryDirectory(prefix="pr7b-chaos-receipts-") as temp:
+            for case in sorted(selected):
+                nodes = list(DRILL_MANIFEST[case]["pytest_node_ids"])
+                if full:
+                    nodes.extend(DRILL_MANIFEST[case].get("full_pytest_node_ids", []))
+                receipts[case] = []
+                for index, node in enumerate(nodes):
+                    path = Path(temp) / f"{case}-{index}.json"
+                    os.environ["PR7B_CHAOS_CASE_ID"] = case
+                    os.environ["PR7B_CHAOS_RECEIPT_PATH"] = str(path)
+                    node_results, counts, notes = run_pytest_targets(
+                        ROOT,
+                        [node],
+                        extra_args=("-p", "testing.pr7b.chaos_pytest_plugin"),
+                    )
+                    results.update(node_results)
+                    totals.update(counts)
+                    limitations.extend(notes)
+                    if _valid_campaign_receipt(path, campaign_id, case, node):
+                        receipts[case].append(node)
+                    elif node_results.get(node) == "PASS":
+                        limitations.append(f"{node}: campaign-bound span receipt unavailable")
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+    receipt_cases = frozenset(
+        case
+        for case in selected
+        if set(receipts.get(case, ())) == set(_case_targets(case, full=full))
+    )
+    return results, dict(totals), tuple(limitations), receipt_cases, receipts
+
+
+_CAMPAIGN_ENV_NAMES = (
+    "PR7B_CHAOS_CAMPAIGN_ID",
+    "PR7B_CHAOS_CASE_ID",
+    "PR7B_CHAOS_RECEIPT_PATH",
+)
+
+
+def _case_targets(case: str, *, full: bool) -> list[str]:
+    nodes = list(DRILL_MANIFEST[case]["pytest_node_ids"])
+    if full:
+        nodes.extend(DRILL_MANIFEST[case].get("full_pytest_node_ids", []))
+    return nodes
+
+
+def _valid_campaign_receipt(path: Path, campaign_id: str, case: str, node: str) -> bool:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return value == {
+        "campaign_id": campaign_id,
+        "case_id": case,
+        "pytest_node_id": node,
+        "span_name": "chaos.drill",
+    }
 
 
 def _node_execution_status(statuses: list[str], selected: bool) -> str:
