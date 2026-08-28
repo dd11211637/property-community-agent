@@ -1,0 +1,16 @@
+.card { display: grid; gap: var(--space-3); height: 100%; }
+.compact { gap: var(--space-2); padding: var(--space-4); }
+.agent { border-left: 3px solid var(--color-brand); background: #f9fcfa; }
+.context { background: #f7f5ef; box-shadow: none; }
+.topline { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.eyebrow { color: var(--color-ink-soft); font-size: .73rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.title { margin: 0; font-size: 1rem; line-height: 1.35; }
+.summary { margin: 0; color: var(--color-ink-soft); font-size: .88rem; line-height: 1.6; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 14px; color: var(--color-ink-soft); font-size: .78rem; }
+.meta span { display: inline-flex; align-items: center; gap: 5px; }
+.amount { margin: 0; font-size: 1.7rem; font-weight: 760; letter-spacing: -.03em; }
+.items { display: flex; flex-wrap: wrap; gap: 6px; }
+.progress { height: 7px; overflow: hidden; border-radius: 999px; background: var(--color-surface-muted); }
+.progress span { display: block; height: 100%; border-radius: inherit; background: var(--color-brand); }
+.avatar { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 50%; color: white; background: var(--color-brand); font-weight: 800; }
+.identity { display: flex; align-items: center; gap: var(--space-3); }
