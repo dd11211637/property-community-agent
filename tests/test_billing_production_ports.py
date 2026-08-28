@@ -29,6 +29,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from property_agent.agent.application.confirm_params import derive_confirmation_params
 from property_agent.agent.application.confirmation_provider import prepare_confirmation
 from property_agent.agent.capabilities.adapters.billing import BillingConsultAdapter
 from property_agent.agent.capabilities.catalog import default_capability_registry
@@ -54,7 +55,6 @@ from property_agent.billing.infrastructure.orm_models import (
 )
 from property_agent.billing.infrastructure.unit_of_work import SqlAlchemyBillingUnitOfWork
 from property_agent.platform.application.approval_service import ApprovalService
-from property_agent.platform.application.confirm_params import derive_confirmation_params
 from property_agent.platform.application.hashing import canonical_hash
 from property_agent.platform.context import RequestContext
 from property_agent.platform.infrastructure.orm_models import (

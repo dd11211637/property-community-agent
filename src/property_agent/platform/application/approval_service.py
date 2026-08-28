@@ -25,8 +25,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from property_agent.agent.infrastructure.models import AgentActionApprovalModel
 from property_agent.platform.application.hashing import canonical_hash
+from property_agent.platform.infrastructure.approval_models import AgentActionApprovalModel
 
 # 确认有效期：与既有 ConfirmationService 的 5 分钟 TTL 对齐（PF-04）。
 DEFAULT_APPROVAL_TTL_MINUTES = 5

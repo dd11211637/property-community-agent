@@ -24,13 +24,18 @@ lease 与 checkpoint CAS 分工不同：
 import logging
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+
+from property_agent.platform.infrastructure.agent_fence import (
+    Lease,
+    StaleAgentRunError,
+    assert_run_fence,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,37 +49,6 @@ if TYPE_CHECKING:
 DEFAULT_LEASE_SECONDS = 30
 
 SessionFactory = Callable[[], Session]
-
-
-@dataclass(frozen=True)
-class Lease:
-    """一次 run 持有的 lease 快照（trusted runtime context 携带）。
-
-    ``run_id`` + ``fence`` 必须原样传给业务写 UoW 的 ``assert_run_fence``，
-    供其在 mutation 前校验当前 lease 仍属于本次 run。lease 过期或被抢占后，
-    旧 worker 的业务写 100% 被拒绝（``StaleAgentRun``）。
-    """
-
-    thread_id: str
-    run_id: UUID
-    fence: int
-    lease_until: datetime
-
-
-class StaleAgentRunError(RuntimeError):
-    """当前 worker 的 lease 已过期或被抢占，禁止执行任何业务 mutation。
-
-    HTTP 409。触发场景：lease TTL 到期未续期、被另一 run 抢占、fence 不匹配。
-    业务 UoW 在 mutation 前调用 ``assert_run_fence`` 检测到此情况必须立即抛出，
-    不允许继续 commit。
-    """
-
-    status_code = 409
-
-    def __init__(self, thread_id: str, *, reason: str = "lease expired or preempted") -> None:
-        self.thread_id = thread_id
-        self.reason = reason
-        super().__init__(f"stale agent run for conversation {thread_id}: {reason}")
 
 
 def _utcnow() -> datetime:
@@ -290,47 +264,6 @@ class RunLeaseService:
             )
         finally:
             session.close()
-
-
-def assert_run_fence(session: Session, lease: Lease) -> None:
-    """在业务写 UoW 同一 session 内校验当前 lease 仍属于本次 run。
-
-    使用 ``UPDATE … SET updated_at = updated_at … RETURNING 1`` 作为行锁
-    （跨方言兼容：PostgreSQL 和 SQLite 都支持），确保：
-    * lease 行存在且 ``owner_run_id == lease.run_id``；
-    * ``fence == lease.fence``（旧 worker 凭旧 fence 被拒绝）；
-    * ``lease_until > now()``（lease 未过期）。
-
-    0 行返回即抛 ``StaleAgentRunError``，业务 UoW 必须回滚，不允许继续 mutation。
-    行锁防止校验后 lease 被抢占（acquire/renew/release 都会等待此锁释放）。
-
-    此函数必须在业务 mutation **之前**调用（通常在 ``PlatformConfirmationPort.consume``
-    内，覆盖所有受控写路径）。
-    """
-    statement = text(
-        """
-        UPDATE agent_run_leases
-        SET updated_at = updated_at
-        WHERE thread_id = :thread_id
-          AND owner_run_id = :owner_run_id
-          AND fence = :fence
-          AND lease_until >= :now
-        RETURNING 1
-        """
-    )
-    row = session.execute(
-        statement,
-        {
-            "thread_id": lease.thread_id,
-            "owner_run_id": str(lease.run_id),
-            "fence": lease.fence,
-            "now": _normalize(_utcnow()),
-        },
-    ).first()
-    if row is None:
-        raise StaleAgentRunError(
-            lease.thread_id, reason="fence check failed (expired, preempted, or mismatched)"
-        )
 
 
 class LeaseHeartbeat:
