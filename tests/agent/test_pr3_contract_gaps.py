@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 
+from property_agent.agent.application.confirm_params import derive_confirmation_params
 from property_agent.agent.application.domain_continuation import prepare_start_state
 from property_agent.agent.capabilities.adapters.inspection import (
     InspectionAdapter,
@@ -46,7 +47,6 @@ from property_agent.inspection.adapters.api.dependencies import to_inspection_co
 from property_agent.inspection.domain.enums import EventRiskLevel, EventType
 from property_agent.inspection.domain.errors import BusinessError as InspectionBusinessError
 from property_agent.platform.application.agent_write_authority import consume_agent_write
-from property_agent.platform.application.confirm_params import derive_confirmation_params
 from property_agent.platform.context import AgentLeaseContext, ExecutionSource, RequestContext
 from property_agent.platform.domain.exceptions import TrustedExecutionOriginError
 

@@ -2,9 +2,9 @@
 
 from typing import Any
 
+from property_agent.agent.application.confirm_params import derive_confirmation_params
 from property_agent.agent.state import GraphState
 from property_agent.platform.application.approval_service import ApprovalService
-from property_agent.platform.application.confirm_params import derive_confirmation_params
 from property_agent.platform.application.confirmation_service import ConfirmationService
 
 

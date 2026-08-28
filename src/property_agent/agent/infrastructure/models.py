@@ -31,6 +31,9 @@ from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
+from property_agent.platform.infrastructure.approval_models import (
+    AgentActionApprovalModel as AgentActionApprovalModel,
+)
 from property_agent.platform.infrastructure.orm_models import Base
 
 # 会话生命周期
@@ -220,65 +223,6 @@ class AgentRunLeaseModel(Base):
         default=func.now(),
         onupdate=func.now(),
         comment="最后更新时间",
-    )
-
-
-class AgentActionApprovalModel(Base):
-    """受控写操作的审批记录 — P0 原子性（deep-research-report.md §Approval 原子化）。
-
-    生命周期 PENDING → APPROVED → CONSUMED（REJECTED / EXPIRED 为终态）。
-    与业务 mutation / 审计 / Outbox **同事务**消费：``consume`` 必须在业务写
-    的同一个 Session/UnitOfWork 内完成，要么全部提交，要么全部回滚，杜绝
-    "已确认但未落库" 或 "已落库但未确认" 的中间态。
-    """
-
-    __tablename__ = "agent_action_approvals"
-    __table_args__ = (
-        Index("ix_agent_action_approvals_conversation", "conversation_id"),
-        Index("ix_agent_action_approvals_actor", "actor_id"),
-        # 同一会话 + 同一动作 + 同一参数指纹，至多一个开放（PENDING/APPROVED）审批，
-        # 重复确认不会凭空产生第二个业务对象。
-        Index(
-            "ux_agent_approval_open_action",
-            "conversation_id",
-            "action",
-            "params_hash",
-            unique=True,
-            sqlite_where=sa_text("status IN ('PENDING', 'APPROVED')"),
-            postgresql_where=sa_text("status IN ('PENDING', 'APPROVED')"),
-        ),
-    )
-
-    id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), primary_key=True, default=uuid4, comment="审批记录ID"
-    )
-    conversation_id: Mapped[str] = mapped_column(
-        String(64), nullable=False, comment="稳定会话标识（= thread_id）"
-    )
-    actor_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), nullable=False, comment="发起/确认操作的人"
-    )
-    action: Mapped[str] = mapped_column(String(128), nullable=False, comment="动作类型")
-    params_hash: Mapped[str] = mapped_column(
-        String(64), nullable=False, comment="参数指纹（canonical_hash）"
-    )
-    status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="PENDING", comment="审批状态"
-    )
-    expires_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, comment="确认有效期起点"
-    )
-    approved_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), comment="审批通过时间"
-    )
-    consumed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), comment="业务消费时间"
-    )
-    version: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=1, comment="行版本，乐观锁"
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=func.now(), comment="创建时间"
     )
 
 

@@ -1,4 +1,4 @@
-"""服务端确认参数构造 —— 把"当前待确认动作"映射为 (action, parameters)。
+"""Agent 服务端确认参数构造 —— 把"当前待确认动作"映射为 (action, parameters)。
 
 ``confirmation_token_provider`` 用本模块按 ``pending_action['tool']`` 决定
 ``(action, parameters)``，保持与业务 Service 的 ``canonical_hash(asdict(command))``
