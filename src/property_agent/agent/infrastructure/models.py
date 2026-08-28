@@ -44,6 +44,12 @@ class ConversationModel(Base):
     __table_args__ = (
         Index("ix_agent_conversations_actor", "actor_id"),
         Index("ix_agent_conversations_community_status", "community_id", "status"),
+        Index(
+            "ix_agent_conversations_runtime_drain_status",
+            "runtime_version",
+            "v1_drain_state",
+            "status",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
@@ -98,6 +104,12 @@ class ConversationModel(Base):
         default="v1",
         comment="钉住的 runtime 版本（v1 legacy）；LangGraph 切换后用于分钟级回退",
     )
+    v1_drain_state: Mapped[str | None] = mapped_column(
+        String(24), comment="PR7-E 受控 drain 结果；NULL 表示未执行 drain 动作"
+    )
+    v1_drain_policy_version: Mapped[str | None] = mapped_column(String(64))
+    v1_drain_idempotency_key: Mapped[str | None] = mapped_column(String(128), unique=True)
+    v1_drained_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AgentCheckpointModel(Base):
