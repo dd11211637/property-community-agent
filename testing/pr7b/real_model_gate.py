@@ -33,7 +33,7 @@ from property_agent.agent.model_release_approval import (
     RETRY_POLICY_VERSION,
     primary_provider_ready,
     provider_config_fingerprint,
-    verify_approval_evidence,
+    verify_baseline_approval_file,
 )
 from property_agent.agent.observability import AgentObservability
 from property_agent.agent.observed_boundaries import ObservedModelGateway
@@ -428,27 +428,20 @@ def _load_approved_baseline(
     *,
     approval_manifest: Path = DEFAULT_APPROVAL_MANIFEST,
     root: Path = ROOT,
+    approval_authority=None,
 ) -> dict[str, float]:
     # Consume the SINGLE shared production approval-validation contract: APPROVED
     # status + bounded artifact path + exact artifact digest are all verified here,
     # exactly as PR7-C rollout activation verifies them. PENDING / missing / digest
     # mismatch / malformed manifests all yield a non-approved result.
-    try:
-        approval = json.loads(approval_manifest.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise BaselineIdentityError("approved baseline identity unavailable") from exc
-    artifact_path = approval.get("artifact_path")
-    if not isinstance(artifact_path, str):
-        raise BaselineIdentityError("approved baseline identity is incomplete")
-    expected_path = (root / artifact_path).resolve()
-    artifact_bytes = expected_path.read_bytes() if expected_path.is_file() else None
-    verified = verify_approval_evidence(approval, artifact_bytes=artifact_bytes)
+    verified = verify_baseline_approval_file(
+        root,
+        approval_manifest,
+        approval_authority=approval_authority,
+    )
     if verified is None:
-        raise BaselineIdentityError(
-            "approved baseline identity is not verified "
-            f"(approval_manifest_version={approval.get('approval_manifest_version')!r}, "
-            f"approval_status={approval.get('approval_status')!r})"
-        )
+        raise BaselineIdentityError("approved baseline identity is not verified")
+    expected_path = (root / verified.artifact_path).resolve()
     if path.resolve() != expected_path or not expected_path.is_file():
         raise BaselineIdentityError("approved baseline artifact path mismatch")
     try:

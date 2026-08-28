@@ -98,6 +98,11 @@ class Settings(BaseSettings):
     # only becomes active when this manifest is APPROVED and matches the deployed
     # release. Absent or invalid → fail closed at zero. Never committed as APPROVED.
     rollout_activation_manifest_path: str = "config/rollout_activation_manifest.json"
+    # Public Ed25519 trust root for an approval authority that is operationally
+    # independent from the deployment operator. The private key is never supplied
+    # to this process. Empty defaults keep every non-zero rollout fail-closed.
+    agent_approval_authority_id: str = ""
+    agent_approval_authority_public_key_base64: str = ""
 
     # ── OpenTelemetry 可观测性（PR7-A） ──────────────────────────
     otel_enabled: bool = True

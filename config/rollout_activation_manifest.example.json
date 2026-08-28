@@ -21,5 +21,8 @@
     "previous_rollout_config_version": "pr7c-baseline-zero"
   },
   "status": "pending",
-  "manifest_sha256": ""
+  "manifest_sha256": "",
+  "approval_authority_id": "",
+  "approval_signature_version": "",
+  "approval_signature": ""
 }

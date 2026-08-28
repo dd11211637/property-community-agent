@@ -6,6 +6,7 @@ review are closed without weakening the existing canary invariants.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from dataclasses import replace
@@ -14,9 +15,15 @@ from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from property_agent.agent.adapters.api.schemas import SendMessageRequest
 from property_agent.agent.application.composition import build_rollout_control_from_settings
+from property_agent.agent.approval_authority import (
+    APPROVAL_SIGNATURE_VERSION,
+    TrustedApprovalAuthority,
+)
 from property_agent.agent.model_gateway import (
     DeterministicModelGateway,
     FallbackModelGateway,
@@ -32,6 +39,7 @@ from property_agent.agent.model_release_approval import (
     PRIMARY_PROVIDER,
     PROVIDER_RESPONSE_CONFIG_VERSION,
     RETRY_POLICY_VERSION,
+    baseline_approval_signature_payload,
     effective_provider_config,
     primary_provider_ready,
     provider_config_fingerprint,
@@ -50,10 +58,13 @@ from property_agent.agent.runtime_rollout import (
     RolloutConfig,
     RolloutControl,
     RolloutReleaseIdentity,
-    activate_rollout_control,
+    approval_signature_payload,
     compute_manifest_sha256,
     load_rollout_activation_manifest,
     parse_rollout_activation_manifest,
+)
+from property_agent.agent.runtime_rollout import (
+    activate_rollout_control as _production_activate_rollout_control,
 )
 from property_agent.agent.runtime_version import (
     DEFAULT_READINESS_TTL_SECONDS,
@@ -75,6 +86,15 @@ RELEASE_SHA_B = "f00dcafe00000000000000000000000000000000"
 FINGERPRINT = "a1a1" * 16
 
 APPROVED = RolloutActivationManifestStatus.APPROVED
+_APPROVAL_PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(b"a" * 32)
+_APPROVAL_PUBLIC_KEY = _APPROVAL_PRIVATE_KEY.public_key().public_bytes(
+    encoding=serialization.Encoding.Raw,
+    format=serialization.PublicFormat.Raw,
+)
+APPROVAL_AUTHORITY = TrustedApprovalAuthority(
+    authority_id="release-board:test",
+    public_key_base64=base64.b64encode(_APPROVAL_PUBLIC_KEY).decode("ascii"),
+)
 
 
 def _config(
@@ -147,7 +167,13 @@ def _real_actual() -> ModelReleaseIdentity:
 
 
 def _manifest_for(identity: RolloutReleaseIdentity, *, sha: str = "correct"):
-    base = RolloutActivationManifest(identity=identity, status=APPROVED, manifest_sha256="")
+    base = RolloutActivationManifest(
+        identity=identity,
+        status=APPROVED,
+        manifest_sha256="",
+        approval_authority_id=APPROVAL_AUTHORITY.authority_id,
+        approval_signature_version=APPROVAL_SIGNATURE_VERSION,
+    )
     if sha == "correct":
         digest = compute_manifest_sha256(base)
     elif sha == "empty":
@@ -156,11 +182,30 @@ def _manifest_for(identity: RolloutReleaseIdentity, *, sha: str = "correct"):
         digest = "zzz-not-a-hex-digest"
     else:  # mismatch: valid 64-hex but not the canonical digest
         digest = "0" * 64
-    return RolloutActivationManifest(identity=identity, status=APPROVED, manifest_sha256=digest)
+    unsigned = replace(base, manifest_sha256=digest)
+    signature = base64.b64encode(
+        _APPROVAL_PRIVATE_KEY.sign(approval_signature_payload(unsigned))
+    ).decode("ascii")
+    return replace(unsigned, approval_signature=signature)
 
 
 def _approved(identity: RolloutReleaseIdentity, *, sha: str = "correct"):
     return _manifest_for(identity, sha=sha)
+
+
+def activate_rollout_control(*args, **kwargs):
+    kwargs.setdefault("approval_authority", APPROVAL_AUTHORITY)
+    return _production_activate_rollout_control(*args, **kwargs)
+
+
+def _sign_baseline_approval(approval: dict) -> dict:
+    signed = {
+        **approval,
+        "approval_authority_id": APPROVAL_AUTHORITY.authority_id,
+        "approval_signature_version": APPROVAL_SIGNATURE_VERSION,
+    }
+    signature = _APPROVAL_PRIVATE_KEY.sign(baseline_approval_signature_payload(signed))
+    return {**signed, "approval_signature": base64.b64encode(signature).decode("ascii")}
 
 
 class _Clock:
@@ -221,6 +266,30 @@ def test_nonzero_activation_requires_approved_manifest_and_emits_audit() -> None
     assert event.release_sha == RELEASE_SHA
     assert event.approver_reference == "ops:42"
     assert not hasattr(event, "secret_salt")
+
+
+def test_nonzero_activation_rejects_operator_digest_without_authority_signature() -> None:
+    signed = _approved(_identity())
+    operator_only = replace(signed, approval_signature="")
+    with pytest.raises(RolloutActivationError, match="trusted approval authority"):
+        activate_rollout_control(
+            _config(500),
+            release_sha=RELEASE_SHA,
+            manifest=operator_only,
+            model_release_identity=_real_actual(),
+        )
+
+
+def test_nonzero_activation_rejects_forged_authority_or_signature() -> None:
+    signed = _approved(_identity())
+    forged = replace(signed, approval_signature=base64.b64encode(b"x" * 64).decode("ascii"))
+    with pytest.raises(RolloutActivationError, match="trusted approval authority"):
+        activate_rollout_control(
+            _config(500),
+            release_sha=RELEASE_SHA,
+            manifest=forged,
+            model_release_identity=_real_actual(),
+        )
 
 
 def test_activation_audit_carries_exact_release_sha_and_bounded_approver() -> None:
@@ -642,19 +711,43 @@ def test_gov_d_digest_mismatch_fails_closed() -> None:
     assert verify_approval_evidence(approval, artifact_bytes=b'{"x": 1}') is None
 
 
+def test_gov_d_operator_digest_without_authority_signature_fails_closed() -> None:
+    artifact = b'{"baseline": "operator-generated"}'
+    approval = {
+        "approval_manifest_version": BASELINE_APPROVAL_MANIFEST_VERSION,
+        "approval_status": "APPROVED",
+        "artifact_path": "config/approved_baseline_v1.json",
+        "artifact_sha256": hashlib.sha256(artifact).hexdigest(),
+    }
+    assert (
+        verify_approval_evidence(
+            approval,
+            artifact_bytes=artifact,
+            approval_authority=APPROVAL_AUTHORITY,
+        )
+        is None
+    )
+
+
 def test_gov_e_verified_approval_generates_evidence_reference(tmp_path) -> None:
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     artifact = config_dir / "approved_baseline_v1.json"
     artifact.write_bytes(b'{"baseline_version": "v1"}')
     digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
-    approval = {
-        "approval_manifest_version": BASELINE_APPROVAL_MANIFEST_VERSION,
-        "approval_status": "APPROVED",
-        "artifact_path": "config/approved_baseline_v1.json",
-        "artifact_sha256": digest,
-    }
-    verified = verify_approval_evidence(approval, artifact_bytes=artifact.read_bytes())
+    approval = _sign_baseline_approval(
+        {
+            "approval_manifest_version": BASELINE_APPROVAL_MANIFEST_VERSION,
+            "approval_status": "APPROVED",
+            "artifact_path": "config/approved_baseline_v1.json",
+            "artifact_sha256": digest,
+        }
+    )
+    verified = verify_approval_evidence(
+        approval,
+        artifact_bytes=artifact.read_bytes(),
+        approval_authority=APPROVAL_AUTHORITY,
+    )
     assert verified is not None
     assert verified.artifact_sha256 == digest
     assert verified.evidence_reference == f"pr7b-real-model:{digest}"
@@ -662,7 +755,10 @@ def test_gov_e_verified_approval_generates_evidence_reference(tmp_path) -> None:
     (config_dir / "pr7b_real_model_baseline_approval.json").write_text(
         json.dumps(approval), encoding="utf-8"
     )
-    committed = verify_committed_baseline_approval(repo_root=tmp_path)
+    committed = verify_committed_baseline_approval(
+        repo_root=tmp_path,
+        approval_authority=APPROVAL_AUTHORITY,
+    )
     assert committed is not None
     assert committed.evidence_reference == f"pr7b-real-model:{digest}"
 
@@ -1117,6 +1213,8 @@ class _FakeSettings:
     agent_v2_eligibility_policy_version: str = "pr7c-eligibility-v1"
     agent_v2_new_conversation_fallback_runtime: str = "v1"
     release_sha: str = ""
+    agent_approval_authority_id: str = APPROVAL_AUTHORITY.authority_id
+    agent_approval_authority_public_key_base64: str = APPROVAL_AUTHORITY.public_key_base64
 
 
 def _settings(*, basis_points: int, release_sha: str = RELEASE_SHA) -> _FakeSettings:

@@ -31,6 +31,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from property_agent.agent.approval_authority import (
+    TrustedApprovalAuthority,
+    configured_approval_authority,
+    verify_approval_signature,
+)
+
 # The one protected real-model baseline approval manifest version we accept.
 BASELINE_APPROVAL_MANIFEST_VERSION = "pr7b-real-model-baseline-approval-v1"
 # Canonical baseline approval file (committed; today approval_status=PENDING).
@@ -94,6 +100,7 @@ def verify_approval_evidence(
     approval: dict[str, Any],
     *,
     artifact_bytes: bytes | None,
+    approval_authority: TrustedApprovalAuthority | None = None,
 ) -> VerifiedApprovalEvidence | None:
     """Pure validator: APPROVED approval + verified artifact digest.
 
@@ -126,6 +133,20 @@ def verify_approval_evidence(
     actual = hashlib.sha256(artifact_bytes).hexdigest()
     if actual != expected:
         return None
+    authority = approval_authority
+    if authority is None:
+        from property_agent.config import settings
+
+        authority = configured_approval_authority(settings)
+    payload = baseline_approval_signature_payload(approval)
+    if not verify_approval_signature(
+        payload,
+        authority_id=str(approval.get("approval_authority_id", "")),
+        signature_version=str(approval.get("approval_signature_version", "")),
+        signature_base64=str(approval.get("approval_signature", "")),
+        authority=authority,
+    ):
+        return None
     return VerifiedApprovalEvidence(
         approval_manifest_version=str(approval["approval_manifest_version"]),
         artifact_path=str(artifact_path),
@@ -136,6 +157,8 @@ def verify_approval_evidence(
 
 def verify_committed_baseline_approval(
     repo_root: Path | None = None,
+    *,
+    approval_authority: TrustedApprovalAuthority | None = None,
 ) -> VerifiedApprovalEvidence | None:
     """Load + verify the committed baseline approval manifest against its artifact.
 
@@ -144,14 +167,49 @@ def verify_committed_baseline_approval(
     Any I/O / parse failure is a non-approval, never a raise.
     """
     root = repo_root or _repo_root()
-    approval_path = root / COMMITTED_BASELINE_APPROVAL_PATH
+    return verify_baseline_approval_file(
+        root,
+        root / COMMITTED_BASELINE_APPROVAL_PATH,
+        approval_authority=approval_authority,
+    )
+
+
+def verify_baseline_approval_file(
+    root: Path,
+    approval_path: Path,
+    *,
+    approval_authority: TrustedApprovalAuthority | None = None,
+) -> VerifiedApprovalEvidence | None:
+    """Verify one protected config manifest and its bounded artifact."""
     try:
-        approval = json.loads(approval_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        config_root = (root / "config").resolve()
+        resolved_approval = approval_path.resolve()
+        if not resolved_approval.is_relative_to(config_root) or not resolved_approval.is_file():
+            return None
+        approval = json.loads(resolved_approval.read_text(encoding="utf-8"))
+    except (OSError, RuntimeError, ValueError):
         return None
     artifact_path = approval.get("artifact_path")
     artifact_bytes = _read_bounded_config_artifact(root, artifact_path)
-    return verify_approval_evidence(approval, artifact_bytes=artifact_bytes)
+    return verify_approval_evidence(
+        approval,
+        artifact_bytes=artifact_bytes,
+        approval_authority=approval_authority,
+    )
+
+
+def baseline_approval_signature_payload(approval: dict[str, Any]) -> bytes:
+    """Canonical signed baseline approval fields; excludes the signature itself."""
+    payload = {
+        "approval_manifest_version": approval.get("approval_manifest_version", ""),
+        "approval_status": approval.get("approval_status", ""),
+        "artifact_path": approval.get("artifact_path", ""),
+        "artifact_sha256": approval.get("artifact_sha256", ""),
+        "approval_authority_id": approval.get("approval_authority_id", ""),
+        "approval_signature_version": approval.get("approval_signature_version", ""),
+    }
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return serialized.encode("utf-8")
 
 
 def _read_bounded_config_artifact(root: Path, artifact_path: Any) -> bytes | None:

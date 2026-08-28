@@ -1,14 +1,4 @@
-"""PR7-C rollout activation boundary: manifest, release identity, SHA-256 integrity.
-
-This module is the ONLY production path through which a non-zero rollout may
-become active. It validates the deployment-provided ``RolloutActivationManifest``
-against the running release and the active server-owned configuration, failing
-closed on any mismatch (Blockers 1, 2, 3).
-
-The runtime assignment/control logic (``RolloutControl``, ``RolloutConfig``,
-``decide_assignment``) lives in ``runtime_rollout`` and imports this boundary
-through a facade, so public import paths are preserved.
-"""
+"""Fail-closed PR7-C non-zero rollout activation boundary."""
 
 from __future__ import annotations
 
@@ -21,6 +11,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 
+from property_agent.agent.approval_authority import (
+    TrustedApprovalAuthority,
+    configured_approval_authority,
+    verify_approval_signature,
+)
 from property_agent.agent.model_release import (
     ModelReleaseIdentity as _ActualModelReleaseIdentity,
 )
@@ -66,16 +61,7 @@ class RolloutActivationManifestStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class RolloutReleaseIdentity:
-    """Canonical, auditable rollout release/config identity.
-
-    Every field is server-owned and bounded; the secret rollout salt is NEVER here.
-    ``primary_provider``/``model``/``provider_config_version``/``provider_config_fingerprint``/
-    ``fallback_policy_version``/``prompt_contract_version`` are bound against the shared
-    ``ModelReleaseIdentity`` (the certified contract). ``model_release_evidence_reference`` and
-    ``model_approval_id`` must both equal the SAME verified evidence reference (single approval
-    authority). The ``previous_*``/target transition facts live inside the canonical SHA-256
-    payload so the digest binds them; ``record_activation`` emits exactly these.
-    """
+    """Canonical release/config identity; secrets are deliberately excluded."""
 
     release_sha: str
     rollout_config_version: str
@@ -109,6 +95,9 @@ class RolloutActivationManifest:
     identity: RolloutReleaseIdentity
     status: RolloutActivationManifestStatus
     manifest_sha256: str = ""
+    approval_authority_id: str = ""
+    approval_signature_version: str = ""
+    approval_signature: str = ""
 
 
 def parse_rollout_activation_manifest(data: dict) -> RolloutActivationManifest:
@@ -146,6 +135,9 @@ def parse_rollout_activation_manifest(data: dict) -> RolloutActivationManifest:
         identity=identity,
         status=status,
         manifest_sha256=str(data.get("manifest_sha256", "")),
+        approval_authority_id=str(data.get("approval_authority_id", "")),
+        approval_signature_version=str(data.get("approval_signature_version", "")),
+        approval_signature=str(data.get("approval_signature", "")),
     )
 
 
@@ -216,6 +208,8 @@ def _canonical_approval_payload(manifest: RolloutActivationManifest) -> str:
             "previous_rollout_config_version": identity.previous_rollout_config_version,
         },
         "status": manifest.status.value,
+        "approval_authority_id": manifest.approval_authority_id,
+        "approval_signature_version": manifest.approval_signature_version,
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
@@ -223,6 +217,11 @@ def _canonical_approval_payload(manifest: RolloutActivationManifest) -> str:
 def compute_manifest_sha256(manifest: RolloutActivationManifest) -> str:
     """SHA-256 of the canonical approval payload (deployment-side digest tool)."""
     return hashlib.sha256(_canonical_approval_payload(manifest).encode("utf-8")).hexdigest()
+
+
+def approval_signature_payload(manifest: RolloutActivationManifest) -> bytes:
+    """Canonical bytes signed by the independent approval authority."""
+    return _canonical_approval_payload(manifest).encode("utf-8")
 
 
 def verify_manifest_integrity(manifest: RolloutActivationManifest) -> None:
@@ -236,6 +235,25 @@ def verify_manifest_integrity(manifest: RolloutActivationManifest) -> None:
     if not hmac.compare_digest(expected, digest):
         raise RolloutActivationError(
             "rollout activation manifest_sha256 does not match the canonical approval payload"
+        )
+
+
+def verify_manifest_approval_authority(
+    manifest: RolloutActivationManifest,
+    *,
+    authority: TrustedApprovalAuthority,
+) -> None:
+    """Reject operator self-approval; require an independently signed payload."""
+    payload = approval_signature_payload(manifest)
+    if not verify_approval_signature(
+        payload,
+        authority_id=manifest.approval_authority_id,
+        signature_version=manifest.approval_signature_version,
+        signature_base64=manifest.approval_signature,
+        authority=authority,
+    ):
+        raise RolloutActivationError(
+            "rollout activation requires a valid signature from the trusted approval authority"
         )
 
 
@@ -432,35 +450,13 @@ def activate_rollout_control(
     manifest: RolloutActivationManifest | None,
     audit_sink: AuditSink | None = None,
     model_release_identity: _ActualModelReleaseIdentity | None = None,
+    approval_authority: TrustedApprovalAuthority | None = None,
 ) -> RolloutControl:
-    """Production rollout activation boundary.
+    """Activate only an exact, signed, certified non-zero release identity.
 
-    The ONLY path through which a non-zero rollout may become active. A rollout of
-    zero basis points needs no activation identity and is returned as-is. Any
-    non-zero rollout MUST be backed by an ``APPROVED`` manifest whose:
-
-    * deployed ``release_sha`` AND manifest ``identity.release_sha`` are both
-      exact 40-hex Git commit identities and match exactly (Blocker 1);
-    * ``manifest_sha256`` is the SHA-256 of the canonical approval payload
-      (Blocker 3);
-    * complete ``RolloutReleaseIdentity`` matches the active configuration
-      field-by-field, with a bounded ``approver_reference``, a valid UTC
-      ``approved_at``, and real model/prompt approval identities (Blocker 2);
-    * provider/model/provider-config/prompt-contract facts, the effective
-      provider-config fingerprint, and the real verified model/release evidence
-      reference match the ACTUAL running ``ModelReleaseIdentity`` (Blocker 1 — no
-      self-referential operator string, no un-verified PENDING equality, no forged
-      evidence reference).
-
-    ``model_release_identity`` is the actual running release identity; when omitted it
-    defaults to ``actual_model_release_identity()``. The evidence reference is derived
-    from the protected real-model baseline approval artifact; while that baseline is
-    PENDING the reference is empty, so any non-zero rollout remains fail-closed until
-    the protected real-model baseline approval records verified evidence.
-
-    Otherwise this fails closed by raising ``RolloutActivationError``. A fresh
-    process starting directly at a non-zero rollout therefore cannot silently
-    bypass the audit/release identity.
+    Zero remains available without approval. Non-zero requires an independently
+    signed manifest, exact release/config/provider identity, verified baseline
+    evidence, provider readiness, and canonical payload integrity.
     """
     control = RolloutControl(config, audit_sink=audit_sink)
     if config.basis_points == 0:
@@ -471,6 +467,11 @@ def activate_rollout_control(
         )
     running_sha = release_sha or ""
     _validate_release_identity(manifest.identity, manifest, running_sha=running_sha)
+    if approval_authority is None:
+        from property_agent.config import settings
+
+        approval_authority = configured_approval_authority(settings)
+    verify_manifest_approval_authority(manifest, authority=approval_authority)
     identity = model_release_identity or actual_model_release_identity()
     _validate_activation_identity(config, manifest.identity, model_release_identity=identity)
     control.record_activation(manifest.identity)
@@ -483,8 +484,10 @@ __all__ = [
     "RolloutActivationManifestStatus",
     "RolloutReleaseIdentity",
     "activate_rollout_control",
+    "approval_signature_payload",
     "compute_manifest_sha256",
     "load_rollout_activation_manifest",
     "parse_rollout_activation_manifest",
     "verify_manifest_integrity",
+    "verify_manifest_approval_authority",
 ]

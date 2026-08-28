@@ -31,6 +31,8 @@ The server-owned configuration is:
 | `AGENT_V2_MODEL_CONFIG_APPROVED` | Explicit approved provider/model/prompt fact | `false` |
 | `RELEASE_SHA` | Exact 40-hex deployed Git commit SHA verified at startup | empty |
 | `ROLLOUT_ACTIVATION_MANIFEST_PATH` | Path to the deployment-provided activation manifest | `config/rollout_activation_manifest.json` |
+| `AGENT_APPROVAL_AUTHORITY_ID` | Trusted independent release-board identity | empty |
+| `AGENT_APPROVAL_AUTHORITY_PUBLIC_KEY_BASE64` | Pinned Ed25519 public key; never private signing material | empty |
 
 The salt is never returned, logged, placed in telemetry, or committed. Nonzero configuration
 fails closed when the salt is too short, the official v2 engine/saver is unavailable, the
@@ -58,7 +60,8 @@ Memory.
 ## Activation audit (production rollout change control)
 
 A non-zero rollout can become active **only** through the `activate_rollout_control` boundary,
-and only when a deployment-provided `RolloutActivationManifest` is `APPROVED` and its complete
+and only when a deployment-provided `RolloutActivationManifest` is `APPROVED`, is signed by the
+separately controlled trusted approval authority, and its complete
 identity is verified against the running configuration. A fresh process that starts directly
 at a non-zero rollout without a fully verified approved manifest fails closed — the
 audit/release identity can never be silently bypassed. A rollout of zero basis points needs no
@@ -119,11 +122,14 @@ The boundary enforces five independent controls on every non-zero activation:
    evidence reference (a single approval authority; the manifest's evidence field is hashed into the
    digest AND validated against the actual release). A non-zero rollout
    therefore remains fail-closed while `REAL_MODEL_BASELINE_APPROVAL=PENDING`.
-3. **SHA-256 integrity.** `manifest_sha256` must be the lowercase 64-hex SHA-256 of the
+3. **Integrity plus approval authority.** `manifest_sha256` must be the lowercase 64-hex SHA-256 of the
    canonical approval payload (see digest generation below). The payload now also binds the
    actual model/provider/prompt facts and the explicit approved transition identity
    (`previous_rollout_basis_points`, `previous_rollout_config_version`), so the digest changes
-   whenever those facts change. Any empty, malformed, or mismatched digest fails closed.
+   whenever those facts change. Any empty, malformed, or mismatched digest fails closed. SHA-256
+   alone is not approval: the canonical payload must also carry a valid Ed25519 signature matching
+   the pinned authority id/public key. The manifest cannot select its own trust root, and an
+   unconfigured authority fails closed.
 4. **No in-process promotion.** Runtime `RolloutControl.apply` may only *decrease* basis points
    (rollback). An increase is rejected with `ValueError`; there is no `promotion_approved`
    bypass. A higher rollout becomes active only through a brand-new `APPROVED` activation
@@ -136,9 +142,9 @@ The boundary enforces five independent controls on every non-zero activation:
    represents the initial zero → first-canary transition. The secret salt is never part of the
    manifest identity or the audit evidence.
 
-### Operator digest generation
+### Approval payload generation
 
-The deployment operator computes `manifest_sha256` from the manifest's immutable payload
+The deployment operator may compute `manifest_sha256` from the manifest's immutable payload
 (`identity` + `status`), **excluding** `manifest_sha256` itself. The canonical serialization is
 deterministic JSON with sorted keys and compact separators
 (`json.dumps(payload, sort_keys=True, separators=(",", ":"))`), hashed with SHA-256. In code:
@@ -149,8 +155,14 @@ from property_agent.agent.runtime_rollout import (
     parse_rollout_activation_manifest,
 )
 manifest = parse_rollout_activation_manifest(json.load(open(path)))
-manifest.manifest_sha256 = compute_manifest_sha256(manifest)  # operator-side signing
+manifest.manifest_sha256 = compute_manifest_sha256(manifest)  # integrity only, not approval
 ```
+
+The independent approval system signs `approval_signature_payload(manifest)` with its Ed25519
+private key and supplies `approval_authority_id`, `approval_signature_version=ed25519-v1`, and
+the base64 signature. The deployment process accepts no private key. Production verifies that
+signature against its separately provisioned public trust root. PR7-B baseline approval consumes
+the same authority verifier, so an operator cannot self-approve either certification or rollout.
 
 The secret rollout salt is deliberately absent from the payload, so digest generation never
 requires the salt. The example manifest (`config/rollout_activation_manifest.example.json`) is

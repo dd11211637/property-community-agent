@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from property_agent.agent.application.conversation_service import ConversationService
 from property_agent.agent.application.facade import AgentRuntimeFacadeImpl
 from property_agent.agent.application.runner import AgentSessionRunner
+from property_agent.agent.approval_authority import configured_approval_authority
 from property_agent.agent.model_gateway import DeterministicModelGateway
 from property_agent.agent.model_release import actual_model_release_identity
 from property_agent.agent.observed_boundaries import (
@@ -134,6 +135,7 @@ def build_rollout_control_from_settings(
         manifest=manifest,
         audit_sink=audit_sink,
         model_release_identity=actual,
+        approval_authority=configured_approval_authority(settings),
     )
 
 

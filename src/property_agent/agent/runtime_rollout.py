@@ -365,9 +365,11 @@ from property_agent.agent.runtime_rollout_activation import (  # noqa: E402
     RolloutActivationManifestStatus,
     RolloutReleaseIdentity,
     activate_rollout_control,
+    approval_signature_payload,
     compute_manifest_sha256,
     load_rollout_activation_manifest,
     parse_rollout_activation_manifest,
+    verify_manifest_approval_authority,
     verify_manifest_integrity,
 )
 
@@ -385,9 +387,11 @@ __all__ = [
     "RuntimeAssignment",
     "RuntimeEligibility",
     "activate_rollout_control",
+    "approval_signature_payload",
     "compute_manifest_sha256",
     "decide_assignment",
     "load_rollout_activation_manifest",
     "parse_rollout_activation_manifest",
     "verify_manifest_integrity",
+    "verify_manifest_approval_authority",
 ]
