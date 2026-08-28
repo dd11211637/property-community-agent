@@ -91,6 +91,8 @@ jobs:
         if: inputs.gate == 'all' || inputs.gate == 'memory'
         continue-on-error: true
         run: |
+          python -m testing.real_memory_embedding_closure --output artifacts/real-memory-embedding.json
+          python -c "import json; assert json.load(open('artifacts/real-memory-embedding.json'))['status'] == 'PASS'"
           python -m testing.pr7b.memory_gate --sha "${{ inputs.release_sha }}" --server-observability-url "$PR7B_OTEL_SUMMARY_URL" --maintenance-window-id "$PR7B_MEMORY_WINDOW_ID" --maintenance-window-version "$PR7B_MEMORY_WINDOW_VERSION" --output artifacts/memory.json
           python -c "import json; assert json.load(open('artifacts/memory.json'))['status'] == 'PASS'"
       - name: Full 30m plus 10m R0 load profile

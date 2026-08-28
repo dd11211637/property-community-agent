@@ -113,8 +113,8 @@ def _build_async_database_url(sync_url: str) -> str:
     """
     if sync_url.startswith("postgresql+psycopg://"):
         return sync_url.replace("postgresql+psycopg://", "postgresql+psycopg_async://", 1)
-    if sync_url.startswith("sqlite://"):
-        return sync_url.replace("sqlite://", "sqlite+aiosqlite://", 1)
+    if sync_url.startswith(("sqlite://", "sqlite+pysqlite://")):
+        return f"sqlite+aiosqlite://{sync_url.partition('://')[2]}"
     return sync_url
 
 

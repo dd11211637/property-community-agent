@@ -8,8 +8,10 @@ environment variables in production.
 
 from __future__ import annotations
 
+from typing import Literal
 from urllib.parse import urlparse
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEVELOPMENT_JWT_SECRET = "dev-secret-change-in-production-32chars-min"
@@ -62,10 +64,10 @@ class Settings(BaseSettings):
     deepseek_total_timeout_seconds: float = 6.0
 
     # ── Provider-neutral long-term-memory embeddings ────────────
-    memory_embedding_base_url: str = "https://api.openai.com/v1"
+    memory_embedding_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     memory_embedding_api_key: str = ""
-    memory_embedding_model: str = "text-embedding-3-small"
-    memory_embedding_version: str = "1"
+    memory_embedding_model: Literal["text-embedding-v4"] = "text-embedding-v4"
+    memory_embedding_version: str = "bailian-v4-1536-v1"
     memory_embedding_dimensions: int = 1536
     memory_embedding_timeout_seconds: float = 6.0
 
@@ -112,6 +114,13 @@ class Settings(BaseSettings):
     release_sha: str = ""
     deployment_environment: str = ""
     certification_write_enabled: bool = False
+
+    @field_validator("memory_embedding_dimensions")
+    @classmethod
+    def _fixed_memory_embedding_dimensions(cls, value: int) -> int:
+        if value != 1536:
+            raise ValueError("must match the fixed pgvector schema (1536)")
+        return value
 
     def validate_runtime_security(self) -> None:
         """Reject development credentials when the production profile is selected."""
