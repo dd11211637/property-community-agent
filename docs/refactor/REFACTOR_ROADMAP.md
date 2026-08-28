@@ -21,7 +21,7 @@ MUST NOT be pulled into an earlier stage merely because it is convenient.
 | PR4 | LangGraph runtime foundation | **DONE / MERGED / VERIFIED** |
 | PR5 | Supervisor and stateless specialists | **DONE / MERGED / VERIFIED** |
 | PR6 | Long-term memory | **DONE / MERGED / VERIFIED** |
-| PR7 | Productionization and runtime drain | Planned (Stage Contract established) |
+| PR7 | Productionization and runtime drain | **CODE IMPLEMENTED / MERGE AND PRODUCTION GATES PENDING** |
 
 ## 3. PR1 — Correctness substrate
 
@@ -268,7 +268,14 @@ of business truth.
 
 ## 9. PR7 — Productionization and runtime drain
 
-**Status:** Planned (Stage Contract established)
+**Status:** **CODE IMPLEMENTED / MERGE AND PRODUCTION GATES PENDING**
+
+The PR7-C through PR7-F implementation stack is reviewable, but it is not yet merged to
+`main`. Code Owner approval, ordered merges, and post-merge CI remain mandatory. The
+public v2 rollout is still zero, R0-R5 production evidence is not complete, no production
+v1 drain has run, and `LegacyGraphEngine` remains available. See
+[`AGENT_REFACTOR_CODE_CLOSEOUT.md`](AGENT_REFACTOR_CODE_CLOSEOUT.md) for exact heads and
+current gates.
 
 **Stage Contract:**
 [`stages/PR7_PRODUCTIONIZATION_RUNTIME_DRAIN.md`](stages/PR7_PRODUCTIONIZATION_RUNTIME_DRAIN.md)
