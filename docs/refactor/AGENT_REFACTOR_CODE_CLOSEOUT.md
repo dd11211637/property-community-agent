@@ -21,8 +21,8 @@ merged in order and post-merge CI passes on `main`.
 | --- | --- | --- | --- |
 | PR7-C | #27 | `696e130378002b9955aed28cfcebfb4199a908ee` | Ready; exact-head CI passed; Code Owner approval pending |
 | PR7-D | #28 | `f32f6f66ad91dfe27592ecf3d9db91af1061e642` | Draft stacked on PR7-C; exact-head CI passed |
-| PR7-E | #29 | `e48fe41a98d210c3a69c5f517c8fe2f06b091edc` | Draft stacked on PR7-D; exact-head CI rerun pending after schema-drift repair |
-| PR7-F | #30 | `0a03d29d8fe630ba9173c7c5f6c361f7570b107f` | Draft stacked on PR7-E; exact-head CI pending |
+| PR7-E | #29 | `e48fe41a98d210c3a69c5f517c8fe2f06b091edc` | Draft stacked on PR7-D; exact-head CI passed after schema-drift repair |
+| PR7-F | #30 | `0a03d29d8fe630ba9173c7c5f6c361f7570b107f` | Draft stacked on PR7-E; exact-head CI passed |
 
 The stack must merge C to D to E to F. After each parent merge, the child must be based
 on the latest `main`, its effective diff and exact head must be reviewed again, and all
@@ -46,15 +46,15 @@ artifacts under `testing/`, `config/`, and `docs/`.
 
 ## Evidence and external gates
 
-- PR7-C exact-head GitHub Quality Gates passed backend, PostgreSQL zero-skip, frontend,
-  and browser E2E.
-- PR7-D exact-head GitHub Quality Gates passed the same four jobs.
+- PR7-C exact-head GitHub Quality Gates run `33139072627` passed backend, PostgreSQL
+  zero-skip, frontend, and browser E2E.
+- PR7-D exact-head GitHub Quality Gates run `33139354054` passed the same four jobs.
 - PR7-E local focused verification passed after declaring the migration index in ORM
-  metadata; its new exact-head GitHub rerun is required.
+  metadata; exact-head GitHub Quality Gates run `33140234496` then passed all four jobs.
 - PR7-F local verification passed Ruff, format, structure, compileall, pip check, diff
   check, 942 pytest tests, frontend lint, 30 frontend tests, and frontend build. The 35
   locally skipped PostgreSQL-dependent tests are not counted as PASS; GitHub zero-skip
-  PostgreSQL CI is required.
+  PostgreSQL CI and all other Quality Gates passed in run `33140250492`.
 - PR7-F's static scanner and PENDING example both return `PENDING`, as required while
   v1/Legacy dependencies and real production evidence remain.
 
