@@ -44,6 +44,12 @@ class ConversationModel(Base):
     __table_args__ = (
         Index("ix_agent_conversations_actor", "actor_id"),
         Index("ix_agent_conversations_community_status", "community_id", "status"),
+        Index(
+            "ix_agent_conversations_runtime_drain_status",
+            "runtime_version",
+            "v1_drain_state",
+            "status",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(
