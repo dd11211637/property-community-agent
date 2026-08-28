@@ -17,6 +17,31 @@ reads both from protected environment variables. It never accepts or receives th
 approval system's private signing key. Missing or mismatched trust-root configuration keeps the
 baseline and every downstream promotion decision non-approved.
 
+## Initial real-model baseline bootstrap
+
+The formal gate intentionally requires an already approved comparison artifact, so it
+cannot create the first baseline. Run the bounded bootstrap from a clean exact-SHA checkout
+with the real DeepSeek credential:
+
+```powershell
+python -m testing.pr7b.real_model_baseline_bootstrap --sha <full-sha> --output docs/evidence/pr7b-real-model-baseline-bootstrap.json
+```
+
+Only a bootstrap `PASS` writes
+`config/pr7b_real_model_approved_baseline_v1.json`. The result is a candidate, not
+`REAL_MODEL_GATE=PASS`. Put its exact SHA-256 into the still-`PENDING` approval manifest.
+An independent authority can then sign the canonical payload with a private key stored
+outside the repository:
+
+```powershell
+python -m testing.pr7b.sign_baseline_approval --private-key-file C:\secure\approval-key.pem --authority-id <trusted-authority-id>
+```
+
+The signer refuses repository-local keys and only changes `PENDING` to `APPROVED` after
+producing a real Ed25519 signature. Configure the matching authority ID and public key in
+the protected environment, verify the production trust chain, and only then run the formal
+gate.
+
 The protected `PR7-B protected certification` workflow checks out the requested SHA,
 rejects a moved or dirty checkout, runs against the `pr7b-certification` GitHub Environment,
 and uploads immutable artifacts. Missing credentials produce `NOT_RUN`; they never select

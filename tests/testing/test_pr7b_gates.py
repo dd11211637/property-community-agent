@@ -36,6 +36,10 @@ from testing.pr7b.chaos_gate import derive_gate_status as chaos_gate_status
 from testing.pr7b.chaos_signals import matching_signals
 from testing.pr7b.evidence import GateEvidence, GateStatus, write_evidence
 from testing.pr7b.load_gate import LoadProfile, _server_observability_metrics, execute
+from testing.pr7b.real_model_baseline_bootstrap import (
+    build_bootstrap_hard_gates,
+    write_candidate_baseline,
+)
 from testing.pr7b.real_model_gate import (
     DEFAULT_DATASET,
     BaselineIdentityError,
@@ -44,6 +48,7 @@ from testing.pr7b.real_model_gate import (
     build_model_hard_gates,
     load_cases,
 )
+from testing.pr7b.sign_baseline_approval import prepare_signed_manifest
 
 _APPROVAL_PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(b"b" * 32)
 _APPROVAL_PUBLIC_KEY = _APPROVAL_PRIVATE_KEY.public_key().public_bytes(
@@ -198,6 +203,100 @@ def test_planner_holdout_hard_gates_cannot_claim_duplicate_write_evidence():
     gates = build_model_hard_gates(counts, 100, 1.0, regression)
     assert "duplicate_committed_mutation_zero" not in gates
     assert "duplicate_committed_write_zero" not in gates
+
+
+def test_real_model_bootstrap_uses_absolute_requirements_without_regression_gates():
+    counts = Counter(
+        {
+            "valid_structured_response": 98,
+            "plan_valid": 98,
+            "handover_correct": 100,
+        }
+    )
+    gates = build_bootstrap_hard_gates(counts, 100)
+    assert all(gates.values())
+    assert not any("delta" in name for name in gates)
+
+
+def test_real_model_bootstrap_rejects_any_unsafe_selection():
+    counts = Counter(
+        {
+            "valid_structured_response": 100,
+            "plan_valid": 100,
+            "unsafe_capability_selection": 1,
+        }
+    )
+    gates = build_bootstrap_hard_gates(counts, 100)
+    assert gates["unsafe_capability_selection_zero"] is False
+
+
+def test_real_model_bootstrap_writes_only_canonical_aggregate_metrics(tmp_path: Path):
+    candidate = tmp_path / "candidate.json"
+    digest = write_candidate_baseline(
+        candidate,
+        {
+            "task_completion_rate": 0.91,
+            "clarification_error_rate": 0.02,
+            "handover_error_rate": 0.01,
+            "unsafe_capability_selection_rate": 0.0,
+            "provider_attempts": 100,
+        },
+    )
+    document = json.loads(candidate.read_text(encoding="utf-8"))
+    assert set(document) == {"baseline_version", "metrics"}
+    assert set(document["metrics"]) == {
+        "task_completion_rate",
+        "clarification_error_rate",
+        "handover_error_rate",
+        "unsafe_capability_selection_rate",
+    }
+    assert hashlib.sha256(candidate.read_bytes()).hexdigest() == digest
+
+
+def test_independent_signer_binds_canonical_candidate_and_external_key(tmp_path: Path):
+    root = tmp_path / "repo"
+    config = root / "config"
+    config.mkdir(parents=True)
+    artifact = config / "pr7b_real_model_approved_baseline_v1.json"
+    artifact.write_text("{}\n", encoding="utf-8")
+    manifest = config / "pr7b_real_model_baseline_approval.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "approval_manifest_version": "pr7b-real-model-baseline-approval-v1",
+                "approval_status": "PENDING",
+                "artifact_path": "config/pr7b_real_model_approved_baseline_v1.json",
+                "artifact_sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+                "approval_authority_id": "",
+                "approval_signature_version": "",
+                "approval_signature": "",
+            }
+        ),
+        encoding="utf-8",
+    )
+    key = Ed25519PrivateKey.generate()
+    key_path = tmp_path / "approval-key.pem"
+    key_path.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    signed = prepare_signed_manifest(root, manifest, key_path, "release-board:test")
+    assert signed["approval_status"] == "APPROVED"
+    assert signed["approval_signature_version"] == APPROVAL_SIGNATURE_VERSION
+    assert signed["approval_signature"]
+
+
+def test_independent_signer_rejects_private_key_inside_repository(tmp_path: Path):
+    root = tmp_path / "repo"
+    config = root / "config"
+    config.mkdir(parents=True)
+    manifest = config / "pr7b_real_model_baseline_approval.json"
+    key_path = root / "approval-key.pem"
+    with pytest.raises(ValueError, match="outside the repository"):
+        prepare_signed_manifest(root, manifest, key_path, "release-board:test")
 
 
 def test_unexpected_dangerous_write_is_unsafe_even_with_expected_read_selected():

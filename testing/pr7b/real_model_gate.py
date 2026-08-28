@@ -141,24 +141,11 @@ def evaluate(
     except BaselineIdentityError as exc:
         return _not_run(started, release_sha, version, dataset, str(exc))
 
-    observability = AgentObservability.in_memory()
-    gateway = ObservedModelGateway(build_model_gateway(observability), observability)
-    counts: Counter[str] = Counter()
-    category_failures: Counter[str] = Counter()
-    for case in cases:
-        before = len(observability.points)
-        try:
-            plan = _plan_case(gateway, case)
-        except ModelGatewayError:
-            _score_provider_attempt(observability.points[before:], counts)
-            counts["task_failure"] += 1
-            category_failures[case["category"]] += 1
-            continue
-        points = observability.points[before:]
-        _score_case(case, plan, points, counts, category_failures)
+    counts, category_failures = run_real_model_holdout(cases)
 
     total = len(cases)
     valid_rate = counts["valid_structured_response"] / total
+    absolute_metrics = _absolute_metrics(counts, total)
     regression_metrics = _non_regression_metrics(counts, total, baseline)
     hard_gates = build_model_hard_gates(counts, total, valid_rate, regression_metrics)
     status = GateStatus.PASS if all(hard_gates.values()) else GateStatus.FAIL
@@ -207,11 +194,39 @@ def evaluate(
             "provider_attempts": counts["provider_attempt"],
             "provider_failures": counts["provider_failure"],
             "fallback_used": counts["fallback_used"],
+            **absolute_metrics,
             **regression_metrics,
         },
         hard_gates=hard_gates,
         limitations=("the approved comparison artifact contains aggregate metrics only",),
     )
+
+
+def run_real_model_holdout(
+    cases: list[dict[str, Any]],
+) -> tuple[Counter[str], Counter[str]]:
+    """Execute the configured production planner path and apply the shared scorer."""
+    observability = AgentObservability.in_memory()
+    gateway = ObservedModelGateway(build_model_gateway(observability), observability)
+    counts: Counter[str] = Counter()
+    category_failures: Counter[str] = Counter()
+    for case in cases:
+        before = len(observability.points)
+        try:
+            plan = _plan_case(gateway, case)
+        except ModelGatewayError:
+            _score_provider_attempt(observability.points[before:], counts)
+            counts["task_failure"] += 1
+            category_failures[case["category"]] += 1
+            continue
+        _score_case(
+            case,
+            plan,
+            observability.points[before:],
+            counts,
+            category_failures,
+        )
+    return counts, category_failures
 
 
 def build_model_hard_gates(
@@ -465,25 +480,34 @@ def _load_approved_baseline(
 def _non_regression_metrics(
     counts: Counter[str], total: int, baseline: dict[str, float]
 ) -> dict[str, float]:
-    task_completion = counts["selection_correct"] / total
-    clarification_error = (
-        counts["unnecessary_clarification"] + counts["missed_clarification"]
-    ) / total
-    handover_error = (total - counts["handover_correct"]) / total
-    unsafe_selection = counts["unsafe_capability_selection"] / total
+    measured = _absolute_metrics(counts, total)
+    task_completion = measured["task_completion_rate"]
+    clarification_error = measured["clarification_error_rate"]
+    handover_error = measured["handover_error_rate"]
+    unsafe_selection = measured["unsafe_capability_selection_rate"]
     return {
-        "task_completion_rate": task_completion,
         "task_completion_absolute_delta": (task_completion - baseline["task_completion_rate"]),
-        "clarification_error_rate": clarification_error,
         "clarification_error_absolute_delta": (
             clarification_error - baseline["clarification_error_rate"]
         ),
-        "handover_error_rate": handover_error,
         "handover_error_absolute_delta": handover_error - baseline["handover_error_rate"],
         "unsafe_selection_rate": unsafe_selection,
         "unsafe_selection_absolute_delta": (
             unsafe_selection - baseline["unsafe_capability_selection_rate"]
         ),
+    }
+
+
+def _absolute_metrics(counts: Counter[str], total: int) -> dict[str, float]:
+    """Compute the canonical aggregate baseline metrics from shared score counts."""
+    return {
+        "task_completion_rate": counts["selection_correct"] / total,
+        "clarification_error_rate": (
+            counts["unnecessary_clarification"] + counts["missed_clarification"]
+        )
+        / total,
+        "handover_error_rate": (total - counts["handover_correct"]) / total,
+        "unsafe_capability_selection_rate": counts["unsafe_capability_selection"] / total,
     }
 
 
