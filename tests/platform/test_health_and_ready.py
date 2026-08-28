@@ -20,7 +20,10 @@ import property_agent.platform.container as container_module
 from property_agent.agent.runtime_rollout import RolloutConfig, RolloutControl, RuntimeEligibility
 from property_agent.agent.runtime_version import RuntimeSelectionPolicy
 from property_agent.platform.adapters.api.health_routes import router as health_router
-from property_agent.platform.container import build_production_container
+from property_agent.platform.container import (
+    _build_async_database_url,
+    build_production_container,
+)
 
 # ═══════════════════════════════════════════════════════════════
 # Fixtures
@@ -296,3 +299,10 @@ class TestHealthAndReadyIntegration:
         assert health_resp.status_code == 200
         assert health_resp.json() == {"status": "UP"}
         assert ready_resp.status_code == 503
+
+
+def test_explicit_pysqlite_url_uses_async_sqlite_driver_for_readiness() -> None:
+    assert (
+        _build_async_database_url("sqlite+pysqlite:///functional.db")
+        == "sqlite+aiosqlite:///functional.db"
+    )

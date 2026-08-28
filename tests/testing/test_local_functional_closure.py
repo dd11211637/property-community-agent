@@ -35,4 +35,6 @@ def test_local_functional_closure_generates_all_non_external_inputs(tmp_path: Pa
     report = json.loads(output.read_text(encoding="utf-8"))
     assert report["status"] == "PASS"
     assert all(report["generated_inputs"].values())
+    assert report["readiness"]["status"] == "READY"
+    assert report["readiness"]["components"]["database"] == "UP"
     assert report["load_harness_smoke"]["status"] == "PASS"

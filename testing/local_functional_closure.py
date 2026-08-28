@@ -53,15 +53,12 @@ def _configure_ephemeral_environment(database_path: Path, release_sha: str) -> N
 
 def _build_local_app() -> Any:
     from property_agent.main import create_app
-    from property_agent.platform.container import build_production_container
     from property_agent.platform.infrastructure.database import init_db
     from testing.seeds.seed_demo import seed
 
     init_db()
     seed()
-    app = create_app()
-    build_production_container(app)
-    return app
+    return create_app()
 
 
 def _login_for_load(client: TestClient) -> tuple[str, str]:
@@ -105,18 +102,15 @@ def run_local_closure() -> dict[str, Any]:
     with TemporaryDirectory(prefix="property-agent-local-closure-") as directory:
         _configure_ephemeral_environment(Path(directory) / "functional.db", release_sha)
         app = _build_local_app()
-        client = TestClient(app)
-        try:
+        with TestClient(app) as client:
             from testing.e2e_api_smoke import run as run_api_smoke
 
+            readiness_response = client.get("/ready")
+            readiness_response.raise_for_status()
+            readiness = readiness_response.json()
             api_result = run_api_smoke("http://local.generated", client=client)
             token, house_id = _login_for_load(client)
             load_evidence = asyncio.run(_run_load_smoke(app, token, house_id))
-        finally:
-            client.close()
-            from property_agent.platform.infrastructure.database import dispose_engine
-
-            dispose_engine()
 
     load_status = load_evidence.status.value
     return {
@@ -131,6 +125,7 @@ def run_local_closure() -> dict[str, Any]:
             "release_sha": True,
             "in_process_url": True,
         },
+        "readiness": readiness,
         "api_smoke": api_result,
         "load_harness_smoke": {
             "status": load_status,
