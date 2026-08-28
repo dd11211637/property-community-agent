@@ -11,6 +11,12 @@ gates, and limitations. Raw prompts, raw Memory, credentials, confirmation mater
 idempotency keys, and PII are rejected from evidence fields. `PASS`, `FAIL`, and `NOT_RUN`
 are distinct. Evidence from an older SHA is stale as soon as branch HEAD moves.
 
+The protected GitHub Environment must provide the public verification trust root as
+`AGENT_APPROVAL_AUTHORITY_ID` and `AGENT_APPROVAL_AUTHORITY_PUBLIC_KEY_BASE64`. The workflow
+reads both from protected environment variables. It never accepts or receives the independent
+approval system's private signing key. Missing or mismatched trust-root configuration keeps the
+baseline and every downstream promotion decision non-approved.
+
 The protected `PR7-B protected certification` workflow checks out the requested SHA,
 rejects a moved or dirty checkout, runs against the `pr7b-certification` GitHub Environment,
 and uploads immutable artifacts. Missing credentials produce `NOT_RUN`; they never select

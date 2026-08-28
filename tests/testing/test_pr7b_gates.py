@@ -56,6 +56,19 @@ APPROVAL_AUTHORITY = TrustedApprovalAuthority(
 )
 
 
+def test_protected_workflow_wires_independent_approval_trust_root():
+    workflow = (
+        Path(__file__).resolve().parents[2] / ".github" / "workflows" / "pr7b-certification.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "AGENT_APPROVAL_AUTHORITY_ID: ${{ vars.AGENT_APPROVAL_AUTHORITY_ID }}" in workflow
+    assert (
+        "AGENT_APPROVAL_AUTHORITY_PUBLIC_KEY_BASE64: "
+        "${{ vars.AGENT_APPROVAL_AUTHORITY_PUBLIC_KEY_BASE64 }}"
+    ) in workflow
+    assert "APPROVAL_AUTHORITY_PRIVATE_KEY" not in workflow
+
+
 def _signed_approval(artifact_path: str, artifact_sha256: str) -> dict[str, str]:
     approval = {
         "approval_manifest_version": "pr7b-real-model-baseline-approval-v1",
