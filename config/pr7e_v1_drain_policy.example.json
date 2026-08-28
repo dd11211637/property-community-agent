@@ -1,0 +1,10 @@
+{
+  "schema_version": "pr7e-v1-drain-policy-v1",
+  "policy_version": "PENDING",
+  "max_inactive_seconds": 2592000,
+  "max_actions": 10,
+  "approved_at": "",
+  "approval_authority_id": "",
+  "approval_signature_version": "",
+  "approval_signature": ""
+}
