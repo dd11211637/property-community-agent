@@ -34,6 +34,16 @@
 结束时销毁，令牌和 secret 不进入报告。缺少 `DEEPSEEK_API_KEY` 或
 `MEMORY_EMBEDDING_API_KEY` 只会把对应真实外部 provider gate 标成 `NOT_RUN`。
 
+真实百炼 `text-embedding-v4` Memory 闭环固定使用 OpenAI-compatible API 和 1536 维：
+
+```powershell
+.\.venv\Scripts\python.exe -m testing.real_memory_embedding_closure --output <report.json>
+```
+
+该命令只读取 `MEMORY_EMBEDDING_API_KEY`（兼容已有 `DASHSCOPE_API_KEY`），自动创建并
+销毁隔离的 pgvector PostgreSQL，执行 provider API、维度、临时向量写入、Memory 创建、
+embedding、scope-safe retrieval 和重启检索。密钥不存在时只把该外部门禁标记为 `NOT_RUN`。
+
 ```powershell
 .\scripts\compose.ps1 Reset
 .\scripts\compose.ps1 Up
