@@ -21,7 +21,7 @@ MUST NOT be pulled into an earlier stage merely because it is convenient.
 | PR4 | LangGraph runtime foundation | **DONE / MERGED / VERIFIED** |
 | PR5 | Supervisor and stateless specialists | **DONE / MERGED / VERIFIED** |
 | PR6 | Long-term memory | **DONE / MERGED / VERIFIED** |
-| PR7 | Productionization and runtime drain | **CODE IMPLEMENTED / MERGE AND PRODUCTION GATES PENDING** |
+| PR7 | Productionization and runtime drain | **CODE COMPLETE / PRODUCTION GATES PENDING** |
 
 ## 3. PR1 — Correctness substrate
 
@@ -268,12 +268,13 @@ of business truth.
 
 ## 9. PR7 — Productionization and runtime drain
 
-**Status:** **CODE IMPLEMENTED / MERGE AND PRODUCTION GATES PENDING**
+**Status:** **CODE COMPLETE / PRODUCTION GATES PENDING**
 
-The PR7-C through PR7-F implementation stack is reviewable, but it is not yet merged to
-`main`. Code Owner approval, ordered merges, and post-merge CI remain mandatory. The
-public v2 rollout is still zero, R0-R5 production evidence is not complete, no production
-v1 drain has run, and `LegacyGraphEngine` remains available. See
+PR7-A through PR7-F and the final architecture closure are merged to `main`; exact-main
+post-merge Quality Gates passed at audited code commit
+`f16acb0ca89a94444911a9797e4eeed1005e5a6b`. This completes the implementation, not the
+production migration. Public v2 rollout is still zero, R0-R5 production evidence is not
+complete, no production v1 drain has run, and `LegacyGraphEngine` remains available. See
 [`AGENT_REFACTOR_CODE_CLOSEOUT.md`](AGENT_REFACTOR_CODE_CLOSEOUT.md) for exact heads and
 current gates.
 

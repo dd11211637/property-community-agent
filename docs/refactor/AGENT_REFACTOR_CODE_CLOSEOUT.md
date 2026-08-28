@@ -1,63 +1,74 @@
 # Agent refactor code closeout
 
-## Status at 2026-08-28
+## Final code status at 2026-08-28
 
-This report records the reviewable PR7 implementation stack. It does not certify a
-production migration or replace exact-head GitHub checks and independent approval.
+This report certifies the Agent Refactor code implementation against audited `main`
+commit `f16acb0ca89a94444911a9797e4eeed1005e5a6b`. It does not certify production
+migration, public rollout, v1 drain, or Legacy runtime retirement.
 
 ```text
-AGENT_REFACTOR_CODE_COMPLETE = NO
+AGENT_REFACTOR_CODE_COMPLETE = YES
 PRODUCTION_MIGRATION_COMPLETE = NO
 PUBLIC_V2_ROLLOUT = 0_PERCENT
 LEGACY_RUNTIME_RETAINED = YES
+CODE_BLOCKER_OR_HIGH = NONE
 ```
 
-`AGENT_REFACTOR_CODE_COMPLETE` remains `NO` until PR7-C, PR7-D, PR7-E, and PR7-F are
-merged in order and post-merge CI passes on `main`.
+## PR1-PR7 code status
 
-## Ordered implementation stack
+PR1 through PR6 remain `DONE / MERGED / VERIFIED` as recorded in the Roadmap. PR7's
+code slices and final architecture correction are merged and verified:
 
-| Stage | PR | Exact branch head | Current status |
+| Slice | Merged PR | Main merge commit | Code status |
 | --- | --- | --- | --- |
-| PR7-C | #27 | `696e130378002b9955aed28cfcebfb4199a908ee` | Ready; exact-head CI passed; Code Owner approval pending |
-| PR7-D | #28 | `f32f6f66ad91dfe27592ecf3d9db91af1061e642` | Draft stacked on PR7-C; exact-head CI passed |
-| PR7-E | #29 | `e48fe41a98d210c3a69c5f517c8fe2f06b091edc` | Draft stacked on PR7-D; exact-head CI passed after schema-drift repair |
-| PR7-F | #30 | `0a03d29d8fe630ba9173c7c5f6c361f7570b107f` | Draft stacked on PR7-E; exact-head CI passed |
+| PR7-A | #25 | `ff6718c` | Merged and verified |
+| PR7-B | #26 | `50e3315` | Merged; protected production certification remains incomplete |
+| PR7-C | #27 | `0a9c36c` | Merged; public rollout remains 0% |
+| PR7-D | #32 | `638dc51` | Merged; no production promotion performed |
+| PR7-E | #33 | `ed21781` | Merged; no production drain performed |
+| PR7-F | #34 | `151208b` | Merged; Legacy runtime retained |
+| Code closeout | #35 | `5b57ab0` | Merged |
+| Final architecture closure | #36 | `f16acb0` | Merged and post-merge verified |
 
-The stack must merge C to D to E to F. After each parent merge, the child must be based
-on the latest `main`, its effective diff and exact head must be reviewed again, and all
-required checks and independent approval must pass. History rewrite and protection-rule
-bypass are prohibited.
+Recovery PRs #32-#34 superseded the earlier stacked PR state. Historical Draft or
+unmerged descriptions for PR7-C through PR7-F are not current repository facts.
 
-## Implemented boundaries
+## Architecture conclusion
 
-- PR7-C provides fail-closed, signed approval and zero-percent canary controls.
-- PR7-D provides versioned rollout evidence, promotion gates, rollback receipts, and a
-  validation CLI; it does not activate rollout.
-- PR7-E provides the canonical drain classifier, database inventory, signed policy, and
-  dry-run-first bounded executor; it does not drain production conversations or delete
-  checkpoints/history.
-- PR7-F provides static, dynamic, database, R5, rollback, and human-approval retirement
-  interlocks; it does not remove `LegacyGraphEngine` or change the v1 fallback.
+The final audit found no remaining code-level blocker or HIGH issue against the North
+Star boundaries. `RuntimeContext`, typed `AgentState`, Capability Registry/Policy/
+Executor, Application Service write authority, LangGraph lifecycle ownership,
+Supervisor/stateless specialists, Memory non-authority, accepted-head fencing, approval,
+idempotency, checkpoint recovery, runtime pinning, and fail-closed rollout/drain/
+retirement controls remain covered by production paths and contract tests.
 
-Production code lives under `src/` and the PR7-E Alembic migration. Tests live under
-`tests/`. Operator CLIs, PENDING examples, and operational documentation are support
-artifacts under `testing/`, `config/`, and `docs/`.
+The audit found and fixed one real dependency-direction defect: Platform application
+code imported Agent-owned confirmation, approval persistence, and fencing definitions.
+PR #36 moved confirmation derivation to the Agent application layer and made approval
+persistence plus business-write fencing Platform-owned. Existing Agent import paths are
+identity-compatible re-exports, and a structural test prevents the reverse dependency
+from returning. No public API, tool name, response shape, database schema, authority
+boundary, or fallback behavior changed.
 
-## Evidence and external gates
+## Verification evidence
 
-- PR7-C exact-head GitHub Quality Gates run `33139072627` passed backend, PostgreSQL
-  zero-skip, frontend, and browser E2E.
-- PR7-D exact-head GitHub Quality Gates run `33139354054` passed the same four jobs.
-- PR7-E local focused verification passed after declaring the migration index in ORM
-  metadata; exact-head GitHub Quality Gates run `33140234496` then passed all four jobs.
-- PR7-F local verification passed Ruff, format, structure, compileall, pip check, diff
-  check, 942 pytest tests, frontend lint, 30 frontend tests, and frontend build. The 35
-  locally skipped PostgreSQL-dependent tests are not counted as PASS; GitHub zero-skip
-  PostgreSQL CI and all other Quality Gates passed in run `33140250492`.
-- PR7-F's static scanner and PENDING example both return `PENDING`, as required while
-  v1/Legacy dependencies and real production evidence remain.
+- Local final-closure verification passed Ruff lint/format, structure, compile/import,
+  dependency, and OpenAPI drift checks.
+- The complete local backend suite passed `944` tests. Its `35` PostgreSQL-dependent
+  skips were recorded as skips and were not counted as PASS.
+- Deterministic Agent evaluation, governed Memory value evaluation, PR7-B focused smoke,
+  safe-chaos, and adversarial gates passed on the clean closure commit.
+- Frontend lint, all `30` frontend tests, and production build passed locally.
+- PR #36 exact-head Quality Gates run `33145400021` passed backend, PostgreSQL
+  zero-skip, frontend, and Compose browser E2E jobs.
+- Post-merge `main` Quality Gates run `33146976240` passed the same four jobs on exact
+  audited commit `f16acb0ca89a94444911a9797e4eeed1005e5a6b`.
 
-Real R0-R5 observations, representative production traffic, SLO windows, rollback
-exercise evidence, production drain, retirement approval, and Code Owner approval are
-external gates. None is synthesized or inferred from local/CI success.
+## Remaining production closure gates
+
+Real configured-model and Memory production evidence, representative load and traffic,
+production SLO windows, full chaos/adversarial observations, rollback exercise, R0-R5
+promotion approvals, v1 inventory/drain, stable static/dynamic/database retirement
+interlocks, retention approval, and explicit Legacy retirement approval remain external
+production gates. Missing evidence remains `NOT_RUN` or `PENDING`; it is not synthesized
+from code, local tests, or CI.
