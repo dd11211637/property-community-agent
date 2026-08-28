@@ -18,7 +18,10 @@ from property_agent.agent.approval_authority import (
     APPROVAL_SIGNATURE_VERSION,
     TrustedApprovalAuthority,
 )
-from property_agent.agent.model_release_approval import baseline_approval_signature_payload
+from property_agent.agent.model_release_approval import (
+    baseline_approval_signature_payload,
+    verify_committed_baseline_approval,
+)
 from testing.pr7b import memory_gate
 from testing.pr7b.adversarial_gate import DATASET as ADVERSARIAL_DATASET
 from testing.pr7b.adversarial_gate import derive_case_evidence
@@ -59,6 +62,10 @@ APPROVAL_AUTHORITY = TrustedApprovalAuthority(
     authority_id="release-board:test",
     public_key_base64=base64.b64encode(_APPROVAL_PUBLIC_KEY).decode("ascii"),
 )
+COMMITTED_APPROVAL_AUTHORITY = TrustedApprovalAuthority(
+    authority_id="release-approval:dd11211637",
+    public_key_base64="M23MrwqAabieU1J80I+PQmwFg4P6HbeTfrbYBziH2kU=",
+)
 
 
 def test_protected_workflow_wires_independent_approval_trust_root():
@@ -72,6 +79,20 @@ def test_protected_workflow_wires_independent_approval_trust_root():
         "${{ vars.AGENT_APPROVAL_AUTHORITY_PUBLIC_KEY_BASE64 }}"
     ) in workflow
     assert "APPROVAL_AUTHORITY_PRIVATE_KEY" not in workflow
+
+
+def test_committed_real_model_baseline_has_valid_independent_signature():
+    root = Path(__file__).resolve().parents[2]
+    verified = verify_committed_baseline_approval(
+        repo_root=root,
+        approval_authority=COMMITTED_APPROVAL_AUTHORITY,
+    )
+    assert verified is not None
+    assert verified.artifact_path == "config/pr7b_real_model_approved_baseline_v1.json"
+    assert (
+        verified.artifact_sha256
+        == "6c333325bec512438609f75335f3586e30d6aa4c4bece671c19af3ec26b0d1b1"
+    )
 
 
 def _signed_approval(artifact_path: str, artifact_sha256: str) -> dict[str, str]:
@@ -283,7 +304,19 @@ def test_independent_signer_binds_canonical_candidate_and_external_key(tmp_path:
             serialization.NoEncryption(),
         )
     )
-    signed = prepare_signed_manifest(root, manifest, key_path, "release-board:test")
+    public_key_base64 = base64.b64encode(
+        key.public_key().public_bytes(
+            serialization.Encoding.Raw,
+            serialization.PublicFormat.Raw,
+        )
+    ).decode("ascii")
+    signed = prepare_signed_manifest(
+        root,
+        manifest,
+        key_path,
+        "release-board:test",
+        public_key_base64,
+    )
     assert signed["approval_status"] == "APPROVED"
     assert signed["approval_signature_version"] == APPROVAL_SIGNATURE_VERSION
     assert signed["approval_signature"]
@@ -296,7 +329,95 @@ def test_independent_signer_rejects_private_key_inside_repository(tmp_path: Path
     manifest = config / "pr7b_real_model_baseline_approval.json"
     key_path = root / "approval-key.pem"
     with pytest.raises(ValueError, match="outside the repository"):
-        prepare_signed_manifest(root, manifest, key_path, "release-board:test")
+        prepare_signed_manifest(
+            root,
+            manifest,
+            key_path,
+            "release-board:test",
+            APPROVAL_AUTHORITY.public_key_base64,
+        )
+
+
+def test_independent_signer_rejects_mismatched_public_trust_root(tmp_path: Path):
+    root = tmp_path / "repo"
+    config = root / "config"
+    config.mkdir(parents=True)
+    artifact = config / "pr7b_real_model_approved_baseline_v1.json"
+    artifact.write_text("{}\n", encoding="utf-8")
+    manifest = config / "pr7b_real_model_baseline_approval.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "approval_manifest_version": "pr7b-real-model-baseline-approval-v1",
+                "approval_status": "PENDING",
+                "artifact_path": "config/pr7b_real_model_approved_baseline_v1.json",
+                "artifact_sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+                "approval_authority_id": "",
+                "approval_signature_version": "",
+                "approval_signature": "",
+            }
+        ),
+        encoding="utf-8",
+    )
+    key = Ed25519PrivateKey.generate()
+    key_path = tmp_path / "approval-key.pem"
+    key_path.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    with pytest.raises(ValueError, match="does not match"):
+        prepare_signed_manifest(
+            root,
+            manifest,
+            key_path,
+            "release-board:test",
+            APPROVAL_AUTHORITY.public_key_base64,
+        )
+
+
+def test_independent_signer_accepts_external_raw_ed25519_seed(tmp_path: Path):
+    root = tmp_path / "repo"
+    config = root / "config"
+    config.mkdir(parents=True)
+    artifact = config / "pr7b_real_model_approved_baseline_v1.json"
+    artifact.write_text("{}\n", encoding="utf-8")
+    manifest = config / "pr7b_real_model_baseline_approval.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "approval_manifest_version": "pr7b-real-model-baseline-approval-v1",
+                "approval_status": "PENDING",
+                "artifact_path": "config/pr7b_real_model_approved_baseline_v1.json",
+                "artifact_sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+                "approval_authority_id": "",
+                "approval_signature_version": "",
+                "approval_signature": "",
+            }
+        ),
+        encoding="utf-8",
+    )
+    seed = b"c" * 32
+    key = Ed25519PrivateKey.from_private_bytes(seed)
+    key_path = tmp_path / "approval-private.key"
+    key_path.write_bytes(seed)
+    public_key_base64 = base64.b64encode(
+        key.public_key().public_bytes(
+            serialization.Encoding.Raw,
+            serialization.PublicFormat.Raw,
+        )
+    ).decode("ascii")
+    signed = prepare_signed_manifest(
+        root,
+        manifest,
+        key_path,
+        "release-board:test",
+        public_key_base64,
+    )
+    assert signed["approval_status"] == "APPROVED"
+    assert signed["approval_signature"]
 
 
 def test_unexpected_dangerous_write_is_unsafe_even_with_expected_read_selected():

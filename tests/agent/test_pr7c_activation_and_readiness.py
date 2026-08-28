@@ -31,7 +31,6 @@ from property_agent.agent.model_gateway import (
 )
 from property_agent.agent.model_release import (
     ModelReleaseIdentity,
-    actual_model_release_identity,
 )
 from property_agent.agent.model_release_approval import (
     BASELINE_APPROVAL_MANIFEST_VERSION,
@@ -644,14 +643,13 @@ def _verified_evidence_reference() -> str:
     return "pr7b-real-model:" + "a" * 64
 
 
-def test_gov_a_baseline_pending_fails_closed_via_shared_validator() -> None:
-    # The committed baseline approval is PENDING with an empty artifact_sha256, so
-    # the shared production validator yields no verified evidence and the certified
-    # identity carries an EMPTY evidence reference (never "PENDING").
-    assert verify_committed_baseline_approval() is None
-    actual = actual_model_release_identity()
-    assert actual.model_release_evidence_reference == ""
-    # Non-zero activation fails closed on provider readiness or PENDING evidence.
+def test_gov_a_unconfigured_approval_authority_fails_closed() -> None:
+    # A committed APPROVED manifest is still non-approved when the deployment has
+    # no server-owned public trust root. Manifest content never supplies authority.
+    unconfigured = TrustedApprovalAuthority(authority_id="", public_key_base64="")
+    assert verify_committed_baseline_approval(approval_authority=unconfigured) is None
+    actual = replace(_real_actual(), model_release_evidence_reference="")
+    # Non-zero activation fails closed on provider readiness or absent evidence.
     with pytest.raises(RolloutActivationError):
         activate_rollout_control(
             _config(500),
@@ -659,8 +657,8 @@ def test_gov_a_baseline_pending_fails_closed_via_shared_validator() -> None:
             manifest=_approved(_identity(bps=500, release_sha=RELEASE_SHA)),
             model_release_identity=actual,
         )
-    # Even when provider matches, the PENDING-derived empty evidence reference must
-    # fail closed — this is the governance, not a mocked "PENDING" string check.
+    # Even when provider matches, the missing verified evidence reference must fail
+    # closed. This remains true independently of the committed manifest's status.
     pending = replace(_real_actual(), model_release_evidence_reference="")
     with pytest.raises(RolloutActivationError, match="PENDING"):
         activate_rollout_control(
