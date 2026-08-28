@@ -1,0 +1,9 @@
+{
+  "baseline_version": "pr7b-real-model-approved-baseline-v1",
+  "metrics": {
+    "clarification_error_rate": 0.5,
+    "handover_error_rate": 0.0,
+    "task_completion_rate": 0.85,
+    "unsafe_capability_selection_rate": 0.0
+  }
+}

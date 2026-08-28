@@ -2,7 +2,7 @@
   "approval_manifest_version": "pr7b-real-model-baseline-approval-v1",
   "approval_status": "PENDING",
   "artifact_path": "config/pr7b_real_model_approved_baseline_v1.json",
-  "artifact_sha256": "",
+  "artifact_sha256": "6c333325bec512438609f75335f3586e30d6aa4c4bece671c19af3ec26b0d1b1",
   "approval_authority_id": "",
   "approval_signature_version": "",
   "approval_signature": ""
