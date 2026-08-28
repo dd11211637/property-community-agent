@@ -369,6 +369,15 @@ class AgentObservability:
                 "decision_class": assignment.decision_class.value,
             },
         )
+        if assignment.runtime_version == "v1":
+            self.count(
+                "agent_new_v1_assignment_total",
+                attributes={
+                    "reason": assignment.eligibility_reason.value,
+                    "config_version": assignment.config_version,
+                    "decision_class": assignment.decision_class.value,
+                },
+            )
 
     def observe_rollout_audit_event(self, event: RolloutAuditEvent) -> None:
         """Record bounded PR7-C rollout audit transitions (release_sha, no salt)."""

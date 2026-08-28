@@ -1,0 +1,46 @@
+{
+  "schema_version": "pr7f-retirement-evidence-v1",
+  "release_sha": "",
+  "r5_decision": {
+    "status": "PENDING",
+    "stage": "R5",
+    "reasons": ["real production observation not complete"]
+  },
+  "dynamic_zero": {
+    "schema_version": "pr7f-dynamic-zero-v1",
+    "release_sha": "",
+    "rollout_config_version": "",
+    "observation_started_at": "",
+    "observation_ended_at": "",
+    "representative_new_conversation_count": 0,
+    "new_v1_assignment_count": -1,
+    "approval_authority_id": "",
+    "approval_signature_version": "",
+    "approval_signature": ""
+  },
+  "drain_inventory": {
+    "release_sha": "",
+    "database_snapshot": "",
+    "generated_at": "",
+    "classifier_version": "pr7e-v1-drain-classifier-v1",
+    "total_v1": 0,
+    "counts": {"UNKNOWN": 1},
+    "community_counts": {},
+    "oldest_live_created_at": null,
+    "oldest_live_activity_at": null,
+    "complete": false
+  },
+  "retirement_approval": {
+    "schema_version": "pr7f-retirement-approval-v1",
+    "release_sha": "",
+    "rollback_strategy_version": "",
+    "retention_approval_reference": "",
+    "approved_at": "",
+    "approval_authority_id": "",
+    "approval_signature_version": "",
+    "approval_signature": ""
+  },
+  "runtime_switch_violation_count": -1,
+  "unresolved_blocker_count": -1,
+  "rollback_exercised": false
+}
