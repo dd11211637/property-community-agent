@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from collections.abc import Iterator, Mapping
@@ -14,11 +15,26 @@ from opentelemetry.propagate import extract
 from opentelemetry.trace import SpanKind, Status, StatusCode, get_current_span
 
 from property_agent.agent.runtime import RuntimeObservation
+from property_agent.agent.runtime_rollout import RolloutAuditEvent
 from property_agent.agent.telemetry_provider import TelemetryProviders, TelemetryState
 from property_agent.config import Settings
 
+logger = logging.getLogger(__name__)
+
 _METRIC_LABELS = frozenset(
-    {"runtime", "operation", "outcome", "reason", "specialist", "capability", "provider"}
+    {
+        "runtime",
+        "operation",
+        "outcome",
+        "reason",
+        "specialist",
+        "capability",
+        "provider",
+        "config_version",
+        "salt_version",
+        "eligibility_policy_version",
+        "decision_class",
+    }
 )
 _TRACE_TEXT_LIMIT = 128
 _CERTIFICATION_CAMPAIGN = re.compile(r"[a-f0-9]{32}")
@@ -338,6 +354,53 @@ class AgentObservability:
             request_id=request_id,
             runtime_version=runtime_version,
             release_sha=self.release_sha or None,
+        )
+
+    def observe_runtime_assignment(self, assignment: Any) -> None:
+        """Record bounded PR7-C assignment facts without identity, prompts, or salt."""
+        self.count(
+            "agent_runtime_assignment_total",
+            attributes={
+                "runtime": assignment.runtime_version,
+                "reason": assignment.eligibility_reason.value,
+                "config_version": assignment.config_version,
+                "salt_version": assignment.salt_version,
+                "eligibility_policy_version": assignment.eligibility_policy_version,
+                "decision_class": assignment.decision_class.value,
+            },
+        )
+
+    def observe_rollout_audit_event(self, event: RolloutAuditEvent) -> None:
+        """Record bounded PR7-C rollout audit transitions (release_sha, no salt)."""
+        outcome = (
+            "activation"
+            if event.old_basis_points == 0 and event.new_basis_points > 0
+            else "rollback"
+            if event.new_basis_points == 0
+            else "change"
+        )
+        self.count(
+            "agent_rollout_audit_total",
+            attributes={
+                "reason": event.reason.value,
+                "outcome": outcome,
+                "old_basis_points": str(event.old_basis_points),
+                "new_basis_points": str(event.new_basis_points),
+                "config_version": event.new_config_version,
+            },
+        )
+        logger.info(
+            "agent rollout audit old_bps=%s new_bps=%s old_version=%s new_version=%s "
+            "reason=%s approver_ref=%s change_ref=%s release_sha=%s changed_at=%s",
+            event.old_basis_points,
+            event.new_basis_points,
+            event.old_config_version,
+            event.new_config_version,
+            event.reason.value,
+            event.approver_reference,
+            event.change_reference,
+            event.release_sha,
+            event.changed_at,
         )
 
     def shutdown(self) -> None:

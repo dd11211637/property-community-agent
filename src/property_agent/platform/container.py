@@ -43,6 +43,7 @@ from property_agent.agent.model_gateway import (
     FallbackModelGateway,
     ModelGateway,
 )
+from property_agent.agent.model_release_approval import FALLBACK_ENABLED
 from property_agent.agent.read_planner import GatewayReadPlanner
 from property_agent.agent.read_tools import build_read_tools, read_tool_specs
 from property_agent.agent.state import GraphState
@@ -81,10 +82,6 @@ from property_agent.repair.infrastructure.shared_ports import build_shared_ports
 from property_agent.repair.infrastructure.uow import SqlAlchemyRepairUnitOfWork
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Global state — managed by the container lifecycle
-# ---------------------------------------------------------------------------
 
 _async_engine: AsyncEngine | None = None
 _async_session_factory: async_sessionmaker[AsyncSession] | None = None
@@ -588,7 +585,9 @@ def build_model_gateway(observability: Any | None = None) -> ModelGateway:
         total_timeout_seconds=settings.deepseek_total_timeout_seconds,
         observe=observe,
     )
-    return FallbackModelGateway(primary, fallback, observe=observe)
+    if FALLBACK_ENABLED:
+        return FallbackModelGateway(primary, fallback, observe=observe)
+    return primary
 
 
 def resolve_agent_request_context(state: GraphState) -> RequestContext:

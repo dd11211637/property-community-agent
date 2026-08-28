@@ -17,6 +17,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import property_agent.platform.container as container_module
+from property_agent.agent.runtime_rollout import RolloutConfig, RolloutControl, RuntimeEligibility
+from property_agent.agent.runtime_version import RuntimeSelectionPolicy
 from property_agent.platform.adapters.api.health_routes import router as health_router
 from property_agent.platform.container import build_production_container
 
@@ -120,6 +122,8 @@ class TestReadyReadinessSuccess:
             "DISABLED",
             "CONFIGURED_UNKNOWN",
         }
+        assert data["components"]["agent_v2_rollout"]["state"] == "OPTIONAL_ZERO"
+        assert data["components"]["agent_v2_rollout"]["rollout_basis_points"] == 0
 
     def test_ready_response_structure(self, app: FastAPI):
         """GET /ready response should have the correct structure."""
@@ -205,6 +209,31 @@ class TestReadyReadinessFailure:
 
         assert response.status_code == 503
         assert response.json()["detail"]["components"]["accepted_head_store"] == "DOWN"
+
+    def test_ready_fails_when_nonzero_rollout_advertises_unready_v2(self, app: FastAPI):
+        build_production_container(app)
+        app.state.agent_runtime_policy = RuntimeSelectionPolicy(
+            control=RolloutControl(
+                RolloutConfig(
+                    basis_points=500,
+                    secret_salt=b"readiness-rollout-secret-32-bytes",
+                    salt_version="salt-v1",
+                    config_version="config-v1",
+                )
+            ),
+            eligibility=RuntimeEligibility(),
+        )
+        with patch(
+            "property_agent.platform.adapters.api.health_routes.check_database_health",
+            new_callable=AsyncMock,
+            return_value=True,
+        ):
+            response = TestClient(app).get("/ready")
+
+        assert response.status_code == 503
+        rollout = response.json()["detail"]["components"]["agent_v2_rollout"]
+        assert rollout["state"] == "NOT_READY"
+        assert rollout["rollout_basis_points"] == 500
 
     def test_ready_returns_503_when_both_down(self, app: FastAPI):
         """GET /ready should return 503 when both database and services are down."""

@@ -46,6 +46,8 @@ from property_agent.agent.infrastructure.run_lease import (
     StaleAgentRunError,
     assert_run_fence,
 )
+from property_agent.agent.runtime_rollout import RolloutConfig, RolloutControl, RuntimeEligibility
+from property_agent.agent.runtime_version import RuntimeSelectionPolicy
 from property_agent.agent.state import GraphState
 from property_agent.agent.working_state import RepairWorkingState
 from property_agent.platform.application.approval_service import (
@@ -142,14 +144,84 @@ def test_concurrent_double_request_one_wins(run_lease):
     assert len(busy_results) == 1, f"exactly one should get 409, got {results}"
 
 
+def test_concurrent_new_conversation_persists_one_server_owned_runtime_pin(
+    run_lease, session_factory
+):
+    """The lease/creation boundary persists one assignment under a first-turn race."""
+    from property_agent.platform.adapters.api.dependencies import RequestContext
+
+    conversations = ConversationService(session_factory)
+    context = RequestContext(
+        actor_id=uuid4(),
+        community_id=uuid4(),
+        roles=frozenset({"RESIDENT"}),
+        request_id="pr7c-create-race",
+    )
+    policy = RuntimeSelectionPolicy(
+        control=RolloutControl(
+            RolloutConfig(
+                basis_points=10_000,
+                secret_salt=b"server-owned-rollout-secret-32bytes",
+                salt_version="salt-v1",
+                config_version="pr7c-test-v1",
+            )
+        ),
+        eligibility=RuntimeEligibility(
+            v2_engine_available=True,
+            official_saver_available=True,
+            model_config_approved=True,
+        ),
+    )
+    # Establish a fresh accepted-head health snapshot, as the production /ready
+    # probe would, so non-zero assignment is authorized under the freshness gate.
+    policy.observe_accepted_head(available=True)
+    barrier = threading.Barrier(2)
+    results: list[tuple[str, object]] = []
+
+    def attempt() -> None:
+        barrier.wait()
+        try:
+            lease = run_lease.acquire("pr7c-create-race")
+        except AgentSessionError as exc:
+            results.append(("busy", exc.code))
+            return
+        try:
+            selected = policy.select_new(
+                community_id=context.community_id,
+                actor_id=context.actor_id,
+                conversation_id="pr7c-create-race",
+            )
+            snapshot = conversations.start(
+                conversation_id="pr7c-create-race",
+                context=context,
+                runtime_version=selected.value,
+            )
+            results.append(("ok", snapshot.runtime_version))
+            time.sleep(0.2)
+        finally:
+            run_lease.release("pr7c-create-race", lease.run_id)
+
+    threads = [threading.Thread(target=attempt) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert sorted(result[0] for result in results) == ["busy", "ok"]
+    assert conversations.get("pr7c-create-race").runtime_version == "v2"
+
+
 # ── 2. 首次 conversation 创建竞争 → 不 500 ────────────────
 
 
-def test_concurrent_create_pending_does_not_500(approval_service):
+def test_concurrent_create_pending_does_not_500(approval_service, session_factory):
     """两个线程同时为同一 (conv, action, params) create_pending，
-    部分唯一索引 + FOR UPDATE 保证不产生两条 PENDING，不 500。"""
+    部分唯一索引 + SAVEPOINT 恢复保证：两调用都成功、返回同一 approval id、
+    数据库恰好一条 open approval、无 IntegrityError / 500。"""
     actor = uuid4()
     params = {"a": 1}
+    conversation_id = "pg-create-race"
+    action = "CREATE_WORK_ORDER"
     results: list[object] = []
     barrier = threading.Barrier(2)
 
@@ -157,26 +229,154 @@ def test_concurrent_create_pending_does_not_500(approval_service):
         barrier.wait()
         try:
             approval = approval_service.create_pending(
-                conversation_id="pg-create-race",
+                conversation_id=conversation_id,
                 actor_id=actor,
-                action="CREATE_WORK_ORDER",
+                action=action,
                 params=params,
             )
             results.append(("ok", approval.id))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             results.append(("err", type(exc).__name__, str(exc)))
 
-    t1 = threading.Thread(target=attempt)
-    t2 = threading.Thread(target=attempt)
+    threads = [threading.Thread(target=attempt) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    # 两调用都必须成功；不接受 "一 ok + 一 IntegrityError"。
+    assert len(results) == 2, f"both calls must finish, got {results}"
+    assert all(r[0] == "ok" for r in results), (
+        f"no IntegrityError/500 expected; both calls must succeed, got {results}"
+    )
+    ids = {r[1] for r in results if r[0] == "ok"}
+    assert len(ids) == 1, f"both must reuse the same approval id, got {ids}"
+    returned_id = ids.pop()
+
+    # DB 是最终 correctness guard：恰好一条 open approval，且 id == 返回值。
+    from property_agent.agent.infrastructure.models import AgentActionApprovalModel
+
+    params_hash = canonical_hash(params)
+    with session_factory() as session:
+        open_rows = (
+            session.execute(
+                select(AgentActionApprovalModel).where(
+                    AgentActionApprovalModel.conversation_id == conversation_id,
+                    AgentActionApprovalModel.action == action,
+                    AgentActionApprovalModel.params_hash == params_hash,
+                    AgentActionApprovalModel.status.in_(
+                        [ApprovalStatus.PENDING.value, ApprovalStatus.APPROVED.value]
+                    ),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(open_rows) == 1, f"exactly one open approval row expected, got {len(open_rows)}"
+        assert open_rows[0].id == returned_id
+
+
+def test_concurrent_create_pending_caller_session_recovers_without_global_rollback(
+    approval_service, session_factory
+):
+    """caller-provided Session 下的并发重复竞争：用 SAVEPOINT 恢复，绝不调用
+    ``session.rollback()``，调用方事务保持可用。
+
+    A 持有一个未提交的 PENDING INSERT（占用部分唯一索引项），B 的 INSERT 必然
+    阻塞到 A 提交后触发唯一冲突，随后走 SAVEPOINT rollback + re-select 取回 A
+    已提交的同一条 open approval。全程只回滚 SAVEPOINT，不触碰 B 的 outer
+    transaction——B 恢复后仍能 ``sb.commit()``。
+    """
+    actor = uuid4()
+    params = {"a": 1}
+    conversation_id = "pg-caller-race"
+    action = "CREATE_WORK_ORDER"
+    barrier = threading.Barrier(2)
+    a_inserted = threading.Event()
+    results: dict[str, object] = {}
+
+    def a() -> None:
+        barrier.wait()
+        try:
+            with session_factory() as sa:
+                approval = approval_service.create_pending(
+                    conversation_id=conversation_id,
+                    actor_id=actor,
+                    action=action,
+                    params=params,
+                    session=sa,
+                )
+                a_inserted.set()  # A 的未提交 INSERT 已 flush，通知 B 开始
+                time.sleep(0.3)  # 持有未提交 INSERT，让 B 必然撞上唯一索引
+                sa.commit()
+                results["a"] = ("ok", approval.id)
+        except Exception as exc:  # noqa: BLE001
+            results["a"] = ("err", type(exc).__name__, str(exc))
+
+    def b() -> None:
+        barrier.wait()
+        assert a_inserted.wait(timeout=5), "A must flush its INSERT before B races"
+        sb = session_factory()
+        rollback_calls: list[int] = []
+        original_rollback = sb.rollback
+
+        def spy_rollback(*args: object, **kwargs: object) -> object:
+            rollback_calls.append(1)
+            return original_rollback(*args, **kwargs)
+
+        sb.rollback = spy_rollback  # type: ignore[method-assign]
+        try:
+            approval = approval_service.create_pending(
+                conversation_id=conversation_id,
+                actor_id=actor,
+                action=action,
+                params=params,
+                session=sb,
+            )
+            sb.commit()  # outer 事务仍可用：能正常提交（未被全局 rollback）
+            results["b"] = ("ok", approval.id, len(rollback_calls))
+        except Exception as exc:  # noqa: BLE001
+            results["b"] = ("err", type(exc).__name__, str(exc))
+        finally:
+            sb.close()
+
+    t1 = threading.Thread(target=a)
+    t2 = threading.Thread(target=b)
     t1.start()
     t2.start()
-    t1.join(timeout=10)
-    t2.join(timeout=10)
+    t1.join(timeout=15)
+    t2.join(timeout=15)
 
-    # 不应该有 500 / IntegrityError；两个都应该返回同一 approval id（复用）。
-    assert all(r[0] == "ok" for r in results), f"no error expected, got {results}"
-    ids = {r[1] for r in results if r[0] == "ok"}
-    assert len(ids) == 1, f"both should reuse same approval, got {ids}"
+    assert results.get("a", ("err",))[0] == "ok", f"A must succeed, got {results}"
+    assert results.get("b", ("err",))[0] == "ok", f"B must recover, got {results}"
+    assert results["a"][1] == results["b"][1], (
+        f"both must return the same approval id, got {results}"
+    )
+    # 恢复路径没有调用整个 session.rollback()（SAVEPOINT rollback 是独立 SQL）
+    assert results["b"][2] == 0, (
+        f"caller Session.rollback() must not be called during savepoint recovery, "
+        f"got {results['b'][2]} call(s)"
+    )
+
+    from property_agent.agent.infrastructure.models import AgentActionApprovalModel
+
+    params_hash = canonical_hash(params)
+    with session_factory() as session:
+        open_rows = (
+            session.execute(
+                select(AgentActionApprovalModel).where(
+                    AgentActionApprovalModel.conversation_id == conversation_id,
+                    AgentActionApprovalModel.action == action,
+                    AgentActionApprovalModel.params_hash == params_hash,
+                    AgentActionApprovalModel.status.in_(
+                        [ApprovalStatus.PENDING.value, ApprovalStatus.APPROVED.value]
+                    ),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(open_rows) == 1, f"exactly one open approval row expected, got {open_rows}"
 
 
 # ── 3. 双 tab confirm → 业务对象最多一个 ──────────────────

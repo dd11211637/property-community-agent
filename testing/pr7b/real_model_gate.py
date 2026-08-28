@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 from collections import Counter
@@ -22,6 +21,20 @@ from property_agent.agent.memory_contracts import (
     RetrievedMemory,
 )
 from property_agent.agent.model_contracts import ModelGatewayError
+from property_agent.agent.model_release import (
+    PROMPT_CONTRACT_VERSION,
+    PROVIDER_CONFIG_VERSION,
+)
+from property_agent.agent.model_release_approval import (
+    BASELINE_APPROVAL_MANIFEST_VERSION,
+    FALLBACK_POLICY_VERSION,
+    PRIMARY_PROVIDER,
+    PROVIDER_RESPONSE_CONFIG_VERSION,
+    RETRY_POLICY_VERSION,
+    primary_provider_ready,
+    provider_config_fingerprint,
+    verify_baseline_approval_file,
+)
 from property_agent.agent.observability import AgentObservability
 from property_agent.agent.observed_boundaries import ObservedModelGateway
 from property_agent.agent.orchestration import Plan
@@ -43,8 +56,8 @@ from testing.pr7b.evidence import (
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATASET = ROOT / "tests/agent/data/pr7b_real_model_holdout_v1.json"
 DEFAULT_APPROVAL_MANIFEST = ROOT / "config/pr7b_real_model_baseline_approval.json"
-PROMPT_CONTRACT_VERSION = "semantic-planner-pr5-v1"
-PROVIDER_CONFIG_VERSION = "deepseek-bounded-retry-v1"
+# Consume the SINGLE shared production release-metadata contract (PR7-C Blocker 1):
+# the provider/prompt facts are server-owned and never redefined in testing/.
 _TRUSTED_PARAMETERS = frozenset(
     {
         "actor_id",
@@ -162,9 +175,16 @@ def evaluate(
         dataset_sha256=dataset_sha256(dataset),
         configuration={
             "provider": "DeepSeek",
+            "primary_provider": PRIMARY_PROVIDER,
+            "primary_provider_ready": primary_provider_ready(settings),
             "model": settings.deepseek_model,
             "provider_config_version": PROVIDER_CONFIG_VERSION,
+            "provider_config_fingerprint": provider_config_fingerprint(settings),
+            "retry_policy_version": RETRY_POLICY_VERSION,
+            "fallback_policy_version": FALLBACK_POLICY_VERSION,
+            "provider_response_config_version": PROVIDER_RESPONSE_CONFIG_VERSION,
             "prompt_contract_version": PROMPT_CONTRACT_VERSION,
+            "approval_manifest_version": BASELINE_APPROVAL_MANIFEST_VERSION,
             "failure_categories": dict(sorted(category_failures.items())),
             "approved_baseline_sha256": dataset_sha256(approved_baseline),
             "approved_baseline_identity": "pr7b-real-model-approved-baseline-v1",
@@ -389,8 +409,14 @@ def _not_run(
         dataset_sha256=dataset_sha256(dataset),
         configuration={
             "provider": "DeepSeek",
+            "primary_provider": PRIMARY_PROVIDER,
+            "primary_provider_ready": primary_provider_ready(settings),
             "model": settings.deepseek_model,
             "provider_config_version": PROVIDER_CONFIG_VERSION,
+            "provider_config_fingerprint": provider_config_fingerprint(settings),
+            "retry_policy_version": RETRY_POLICY_VERSION,
+            "fallback_policy_version": FALLBACK_POLICY_VERSION,
+            "provider_response_config_version": PROVIDER_RESPONSE_CONFIG_VERSION,
             "prompt_contract_version": PROMPT_CONTRACT_VERSION,
         },
         limitations=(reason,),
@@ -402,25 +428,22 @@ def _load_approved_baseline(
     *,
     approval_manifest: Path = DEFAULT_APPROVAL_MANIFEST,
     root: Path = ROOT,
+    approval_authority=None,
 ) -> dict[str, float]:
-    try:
-        approval = json.loads(approval_manifest.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise BaselineIdentityError("approved baseline identity unavailable") from exc
-    if approval.get("approval_manifest_version") != "pr7b-real-model-baseline-approval-v1":
-        raise BaselineIdentityError("unsupported approved baseline identity version")
-    if approval.get("approval_status") != "APPROVED":
-        raise BaselineIdentityError("approved baseline identity is not approved")
-    artifact_path = approval.get("artifact_path")
-    expected_digest = str(approval.get("artifact_sha256", ""))
-    if not isinstance(artifact_path, str) or len(expected_digest) != 64:
-        raise BaselineIdentityError("approved baseline identity is incomplete")
-    expected_path = (root / artifact_path).resolve()
+    # Consume the SINGLE shared production approval-validation contract: APPROVED
+    # status + bounded artifact path + exact artifact digest are all verified here,
+    # exactly as PR7-C rollout activation verifies them. PENDING / missing / digest
+    # mismatch / malformed manifests all yield a non-approved result.
+    verified = verify_baseline_approval_file(
+        root,
+        approval_manifest,
+        approval_authority=approval_authority,
+    )
+    if verified is None:
+        raise BaselineIdentityError("approved baseline identity is not verified")
+    expected_path = (root / verified.artifact_path).resolve()
     if path.resolve() != expected_path or not expected_path.is_file():
         raise BaselineIdentityError("approved baseline artifact path mismatch")
-    actual_digest = hashlib.sha256(expected_path.read_bytes()).hexdigest()
-    if actual_digest != expected_digest:
-        raise BaselineIdentityError("approved baseline artifact digest mismatch")
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:

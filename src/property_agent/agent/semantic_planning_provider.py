@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from property_agent.agent.model_contracts import ModelGatewayError
+from property_agent.agent.model_release_approval import DEEPSEEK_MAX_ATTEMPTS
 from property_agent.agent.telemetry_contracts import (
     model_schema_failure,
     observe_model_provider_attempt,
@@ -52,7 +53,7 @@ class SemanticPlanningClient:
             raise ModelGatewayError("DeepSeek API key is not configured")
         last_error: Exception | None = None
         deadline = time.monotonic() + self._total_timeout
-        for attempt in range(2):
+        for attempt in range(DEEPSEEK_MAX_ATTEMPTS):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break

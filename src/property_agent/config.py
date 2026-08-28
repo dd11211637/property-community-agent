@@ -80,6 +80,30 @@ class Settings(BaseSettings):
     agent_stream_max_concurrency: int = 16
     agent_stream_shutdown_grace_seconds: float = 15.0
 
+    # ── PR7-C controlled v2 assignment ───────────────────────────
+    # Public rollout remains hard-zero until an explicitly approved config change.
+    agent_v2_new_conversation_rollout_basis_points: int = 0
+    agent_v2_rollout_salt: str = ""
+    agent_v2_rollout_salt_version: str = "unconfigured"
+    agent_v2_rollout_config_version: str = "pr7c-default-v1"
+    agent_v2_eligibility_policy_version: str = "pr7c-eligibility-v1"
+    agent_v2_new_conversation_fallback_runtime: str = "v1"
+    agent_v2_emergency_stop: bool = False
+    agent_v2_model_config_approved: bool = False
+    # Model/prompt approval identity is derived from the shared production
+    # ModelReleaseIdentity (property_agent.agent.model_release), not operator env,
+    # so a rollout is bound to the certified model execution contract and readiness
+    # (PR7-C Blocker 1). "PENDING" (default) keeps any non-zero rollout fail-closed.
+    # Deployment-provided activation manifest (PR7-C Gap 1). A non-zero rollout
+    # only becomes active when this manifest is APPROVED and matches the deployed
+    # release. Absent or invalid → fail closed at zero. Never committed as APPROVED.
+    rollout_activation_manifest_path: str = "config/rollout_activation_manifest.json"
+    # Public Ed25519 trust root for an approval authority that is operationally
+    # independent from the deployment operator. The private key is never supplied
+    # to this process. Empty defaults keep every non-zero rollout fail-closed.
+    agent_approval_authority_id: str = ""
+    agent_approval_authority_public_key_base64: str = ""
+
     # ── OpenTelemetry 可观测性（PR7-A） ──────────────────────────
     otel_enabled: bool = True
     otel_service_name: str = "property-agent"
@@ -150,6 +174,17 @@ class Settings(BaseSettings):
             problems.append("AGENT_STREAM_MAX_CONCURRENCY must be positive")
         if self.agent_stream_shutdown_grace_seconds <= 0:
             problems.append("AGENT_STREAM_SHUTDOWN_GRACE_SECONDS must be positive")
+        if not 0 <= self.agent_v2_new_conversation_rollout_basis_points <= 10_000:
+            problems.append(
+                "AGENT_V2_NEW_CONVERSATION_ROLLOUT_BASIS_POINTS must be between 0 and 10000"
+            )
+        if (
+            self.agent_v2_new_conversation_rollout_basis_points > 0
+            and len(self.agent_v2_rollout_salt.encode()) < 32
+        ):
+            problems.append("non-zero Agent v2 rollout requires a secret salt of 32+ bytes")
+        if self.agent_v2_new_conversation_fallback_runtime != "v1":
+            problems.append("PR7-C new-conversation fallback runtime must remain v1")
 
         if problems:
             raise RuntimeError("Unsafe production configuration: " + "; ".join(problems))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from collections import Counter
@@ -8,9 +9,16 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 
+from property_agent.agent.approval_authority import (
+    APPROVAL_SIGNATURE_VERSION,
+    TrustedApprovalAuthority,
+)
+from property_agent.agent.model_release_approval import baseline_approval_signature_payload
 from testing.pr7b import memory_gate
 from testing.pr7b.adversarial_gate import DATASET as ADVERSARIAL_DATASET
 from testing.pr7b.adversarial_gate import derive_case_evidence
@@ -36,6 +44,30 @@ from testing.pr7b.real_model_gate import (
     build_model_hard_gates,
     load_cases,
 )
+
+_APPROVAL_PRIVATE_KEY = Ed25519PrivateKey.from_private_bytes(b"b" * 32)
+_APPROVAL_PUBLIC_KEY = _APPROVAL_PRIVATE_KEY.public_key().public_bytes(
+    encoding=serialization.Encoding.Raw,
+    format=serialization.PublicFormat.Raw,
+)
+APPROVAL_AUTHORITY = TrustedApprovalAuthority(
+    authority_id="release-board:test",
+    public_key_base64=base64.b64encode(_APPROVAL_PUBLIC_KEY).decode("ascii"),
+)
+
+
+def _signed_approval(artifact_path: str, artifact_sha256: str) -> dict[str, str]:
+    approval = {
+        "approval_manifest_version": "pr7b-real-model-baseline-approval-v1",
+        "approval_status": "APPROVED",
+        "artifact_path": artifact_path,
+        "artifact_sha256": artifact_sha256,
+        "approval_authority_id": APPROVAL_AUTHORITY.authority_id,
+        "approval_signature_version": APPROVAL_SIGNATURE_VERSION,
+    }
+    signature = _APPROVAL_PRIVATE_KEY.sign(baseline_approval_signature_payload(approval))
+    approval["approval_signature"] = base64.b64encode(signature).decode("ascii")
+    return approval
 
 
 def test_real_model_holdout_expands_to_at_least_one_hundred_versioned_cases():
@@ -86,21 +118,18 @@ def test_real_model_comparison_baseline_requires_versioned_aggregate_metrics(tmp
         encoding="utf-8",
     )
     manifest = config / "approval.json"
+    artifact_digest = hashlib.sha256(path.read_bytes()).hexdigest()
     manifest.write_text(
-        json.dumps(
-            {
-                "approval_manifest_version": "pr7b-real-model-baseline-approval-v1",
-                "approval_status": "APPROVED",
-                "artifact_path": "config/approved.json",
-                "artifact_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-            }
-        ),
+        json.dumps(_signed_approval("config/approved.json", artifact_digest)),
         encoding="utf-8",
     )
     assert (
-        _load_approved_baseline(path, approval_manifest=manifest, root=tmp_path)[
-            "task_completion_rate"
-        ]
+        _load_approved_baseline(
+            path,
+            approval_manifest=manifest,
+            root=tmp_path,
+            approval_authority=APPROVAL_AUTHORITY,
+        )["task_completion_rate"]
         == 0.9
     )
 
@@ -124,17 +153,19 @@ def test_arbitrary_alternate_real_model_baseline_is_rejected(tmp_path: Path):
     manifest = config / "approval.json"
     manifest.write_text(
         json.dumps(
-            {
-                "approval_manifest_version": "pr7b-real-model-baseline-approval-v1",
-                "approval_status": "APPROVED",
-                "artifact_path": "config/approved.json",
-                "artifact_sha256": hashlib.sha256(expected.read_bytes()).hexdigest(),
-            }
+            _signed_approval(
+                "config/approved.json", hashlib.sha256(expected.read_bytes()).hexdigest()
+            )
         ),
         encoding="utf-8",
     )
     with pytest.raises(BaselineIdentityError, match="path mismatch"):
-        _load_approved_baseline(alternate, approval_manifest=manifest, root=tmp_path)
+        _load_approved_baseline(
+            alternate,
+            approval_manifest=manifest,
+            root=tmp_path,
+            approval_authority=APPROVAL_AUTHORITY,
+        )
 
 
 def test_planner_holdout_hard_gates_cannot_claim_duplicate_write_evidence():

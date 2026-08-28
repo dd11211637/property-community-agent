@@ -79,6 +79,7 @@ async def ready(request: Request) -> dict:
     db_up = await check_database_health()
     accepted_head_up = await check_accepted_head_store()
     svc_up = are_services_configured()
+    _refresh_rollout_readiness(request, accepted_head_up)
 
     components = {
         "database": "UP" if db_up else "DOWN",
@@ -89,9 +90,11 @@ async def ready(request: Request) -> dict:
         "database_pool": _database_pool_status(request),
         "memory_embedding": _optional_component(request, "agent_memory_embedding_provider"),
         "memory_writer": _optional_component(request, "agent_memory_writer"),
+        "agent_v2_rollout": _runtime_rollout_status(request),
     }
 
-    all_ready = db_up and accepted_head_up and svc_up
+    rollout_ready = bool(components["agent_v2_rollout"].get("ready", False))
+    all_ready = db_up and accepted_head_up and svc_up and rollout_ready
 
     if all_ready:
         return {"status": "READY", "components": components}
@@ -132,3 +135,28 @@ def _database_pool_status(request: Request) -> dict[str, object]:
     if observer is None:
         return {"state": "UNAVAILABLE"}
     return observer.snapshot()
+
+
+def _runtime_rollout_status(request: Request) -> dict[str, str | int | bool]:
+    policy = getattr(request.app.state, "agent_runtime_policy", None)
+    if policy is None:
+        if settings.agent_v2_new_conversation_rollout_basis_points == 0:
+            return {
+                "state": "OPTIONAL_ZERO",
+                "ready": True,
+                "rollout_basis_points": 0,
+                "reason": "rollout_zero",
+            }
+        return {
+            "state": "NOT_READY",
+            "ready": False,
+            "rollout_basis_points": settings.agent_v2_new_conversation_rollout_basis_points,
+            "reason": "runtime_policy_unconfigured",
+        }
+    return policy.readiness()
+
+
+def _refresh_rollout_readiness(request: Request, accepted_head_up: bool) -> None:
+    policy = getattr(request.app.state, "agent_runtime_policy", None)
+    if policy is not None:
+        policy.observe_accepted_head(available=accepted_head_up)

@@ -579,7 +579,11 @@ def test_container_selects_keyword_without_key_and_fallback_with_key(monkeypatch
     assert isinstance(container.build_model_gateway(), DeterministicModelGateway)
 
     monkeypatch.setattr(container.settings, "deepseek_api_key", "configured")
+    monkeypatch.setattr(container, "FALLBACK_ENABLED", True)
     assert isinstance(container.build_model_gateway(), FallbackModelGateway)
+
+    monkeypatch.setattr(container, "FALLBACK_ENABLED", False)
+    assert isinstance(container.build_model_gateway(), DeepSeekModelGateway)
 
 
 def test_agent_context_binds_only_an_authenticated_house(monkeypatch):

@@ -13,6 +13,7 @@ from property_agent.agent.capabilities.catalog import default_capability_registr
 from property_agent.agent.deepseek_parsing import parse_deepseek_analysis
 from property_agent.agent.memory_extraction import MEMORY_WRITER_PROMPT, parse_memory_candidates
 from property_agent.agent.model_contracts import ModelAnalysis, ModelGatewayError
+from property_agent.agent.model_release_approval import DEEPSEEK_MAX_ATTEMPTS
 from property_agent.agent.planning_contracts import PlanProposal, RelevanceJudgment
 from property_agent.agent.semantic_planning_provider import SemanticPlanningClient
 from property_agent.agent.telemetry_contracts import (
@@ -149,7 +150,7 @@ class DeepSeekModelGateway:
 
         last_error: Exception | None = None
         deadline = time.monotonic() + self._total_timeout_seconds
-        for attempt in range(2):
+        for attempt in range(DEEPSEEK_MAX_ATTEMPTS):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
@@ -316,7 +317,7 @@ class DeepSeekModelGateway:
             raise ModelGatewayError("DeepSeek API key is not configured")
         last_error: Exception | None = None
         deadline = time.monotonic() + self._total_timeout_seconds
-        for attempt in range(2):
+        for attempt in range(DEEPSEEK_MAX_ATTEMPTS):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
