@@ -23,6 +23,17 @@
 
 ## 可重复验收
 
+无需预先配置 JWT、账号、house、数据库、release SHA 或本地 URL 的自包含功能闭环：
+
+```powershell
+.\.venv\Scripts\python.exe -m testing.local_functional_closure --output <report.json>
+```
+
+该命令在临时目录创建 SQLite 数据库和随机 JWT secret，装载可重复 demo 数据，并通过
+进程内真实 ASGI 应用执行完整业务 API smoke 和 bounded load-harness smoke。临时数据库在
+结束时销毁，令牌和 secret 不进入报告。缺少 `DEEPSEEK_API_KEY` 或
+`MEMORY_EMBEDDING_API_KEY` 只会把对应真实外部 provider gate 标成 `NOT_RUN`。
+
 ```powershell
 .\scripts\compose.ps1 Reset
 .\scripts\compose.ps1 Up

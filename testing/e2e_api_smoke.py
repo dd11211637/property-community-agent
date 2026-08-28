@@ -40,11 +40,13 @@ class Actor:
 
 
 class DemoApi:
-    def __init__(self, base_url: str) -> None:
-        self.client = httpx.Client(base_url=base_url.rstrip("/"), timeout=20)
+    def __init__(self, base_url: str, *, client: Any | None = None) -> None:
+        self.client = client or httpx.Client(base_url=base_url.rstrip("/"), timeout=20)
+        self._owns_client = client is None
 
     def close(self) -> None:
-        self.client.close()
+        if self._owns_client:
+            self.client.close()
 
     def login(self, username: str) -> Actor:
         response = self.client.post(
@@ -100,8 +102,8 @@ class DemoApi:
         return str(data["token"] if isinstance(data, dict) else data)
 
 
-def run(base_url: str) -> dict[str, Any]:
-    api = DemoApi(base_url)
+def run(base_url: str, *, client: Any | None = None) -> dict[str, Any]:
+    api = DemoApi(base_url, client=client)
     try:
         resident = api.login("zhangsan")
         multi = api.login("lisi")
@@ -217,34 +219,50 @@ def run(base_url: str) -> dict[str, Any]:
                 "total_amount",
             )
         }
+        consultation_parameters = {
+            "subject": "E2E 费用咨询",
+            "description": "请解释本期物业费组成",
+            "bill_id": bill_id,
+        }
+        consultation_token = api.confirmation(
+            resident, "CREATE_CONSULTATION", consultation_parameters
+        )
         consultation = api.request(
             "POST",
             "/api/billing/consultations",
             resident,
-            body={
-                "subject": "E2E 费用咨询",
-                "description": "请解释本期物业费组成",
-                "bill_id": bill_id,
-            },
+            body={**consultation_parameters, "confirmation_token": consultation_token},
             idem=_idem("billing-consult"),
             house=True,
             expected_status=201,
         )
         consultation_id = str(consultation["id"])
         consultation = api.request(
-            "POST", f"/api/billing/consultations/{consultation_id}/submit", resident
+            "POST",
+            f"/api/billing/consultations/{consultation_id}/submit",
+            resident,
+            body={"expected_version": consultation["version"]},
         )
         consultation = api.request(
-            "POST", f"/api/billing/consultations/{consultation_id}/process", finance
+            "POST",
+            f"/api/billing/consultations/{consultation_id}/process",
+            finance,
+            body={"expected_version": consultation["version"]},
         )
         consultation = api.request(
             "POST",
             f"/api/billing/consultations/{consultation_id}/answer",
             finance,
-            body={"answer": "费用由物业费与公共能耗构成，规则版本见账单详情。"},
+            body={
+                "answer": "费用由物业费与公共能耗构成，规则版本见账单详情。",
+                "expected_version": consultation["version"],
+            },
         )
         consultation = api.request(
-            "POST", f"/api/billing/consultations/{consultation_id}/resolve", finance
+            "POST",
+            f"/api/billing/consultations/{consultation_id}/resolve",
+            finance,
+            body={"expected_version": consultation["version"]},
         )
         assert consultation["status"] == "RESOLVED"
         bill_after_consultation = api.request(

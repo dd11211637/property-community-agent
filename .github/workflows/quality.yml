@@ -26,6 +26,8 @@ jobs:
       - name: Verify committed OpenAPI contract is current
         run: python scripts/export_openapi.py && git diff --exit-code -- docs/api/openapi.json
       - run: python -m pytest -rs
+      - name: Self-contained local functional closure
+        run: python -m testing.local_functional_closure --output local-functional-closure.json
       - name: Deterministic agent eval gate (P1)
         run: python testing/agent_harness.py tests/agent/data/controlled_read_cases.json
       - name: Governed Memory paired value gate (PR6)
@@ -43,6 +45,7 @@ jobs:
           path: |
             pr7b-chaos-smoke.json
             pr7b-adversarial.json
+            local-functional-closure.json
           retention-days: 30
 
   postgres:
