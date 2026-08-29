@@ -44,7 +44,7 @@ export type RequestContext = {
 };
 export type RequestDescriptor = {
   authentication: "none" | "required";
-  house: "none" | "required";
+  house: "none" | "optional" | "required";
   decoder: "direct" | "envelope";
   invalidateSessionOn401: boolean;
 };
@@ -122,6 +122,61 @@ export class ApiClient {
     }
   }
 
+  async stream(
+    descriptor: RequestDescriptor,
+    path: string,
+    options: RequestOptions = {},
+  ): Promise<Response> {
+    const context = this.requireContext(descriptor);
+    const controller = new AbortController();
+    let timedOut = false;
+    const timeout = globalThis.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, options.timeoutMs ?? 15_000);
+    const cancel = () => controller.abort();
+    options.signal?.addEventListener("abort", cancel, { once: true });
+    if (options.signal?.aborted) controller.abort();
+    try {
+      const response = await this.fetcher(this.resolveUrl(path), {
+        ...options,
+        body:
+          options.body === undefined ? undefined : JSON.stringify(options.body),
+        headers: this.headers(descriptor, context, options, "text/event-stream"),
+        signal: controller.signal,
+      });
+      if (response.status === 401 && descriptor.invalidateSessionOn401)
+        await this.invalidateAuthenticatedSession();
+      if (!response.ok) {
+        let payload: unknown = null;
+        try {
+          payload = await response.json();
+        } catch {
+          /* The safe HTTP error below does not expose an unstructured body. */
+        }
+        throw this.httpError(response.status, payload);
+      }
+      if (!response.body)
+        throw new ApiError(
+          "invalid-response",
+          response.status,
+          "STREAM_BODY_REQUIRED",
+          "服务未返回可读取的流。",
+        );
+      return response;
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      if (options.signal?.aborted)
+        throw new ApiError("cancelled", 0, "REQUEST_CANCELLED", "请求已取消。");
+      if (timedOut)
+        throw new ApiError("timeout", 0, "REQUEST_TIMEOUT", "服务响应超时，请稍后重试。");
+      throw new ApiError("network", 0, "NETWORK_ERROR", "无法连接服务，请检查网络或稍后重试。");
+    } finally {
+      globalThis.clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", cancel);
+    }
+  }
+
   private requireContext(descriptor: RequestDescriptor): RequestContext {
     const context = this.getContext();
     if (descriptor.authentication === "required" && !context.accessToken) {
@@ -151,9 +206,10 @@ export class ApiClient {
     descriptor: RequestDescriptor,
     context: RequestContext,
     options: RequestOptions,
+    accept = "application/json",
   ): Headers {
     const headers = new Headers(options.headers);
-    headers.set("Accept", "application/json");
+    headers.set("Accept", accept);
     headers.set(
       "X-Request-ID",
       options.requestId ?? `web_v2_${crypto.randomUUID()}`,
@@ -162,8 +218,8 @@ export class ApiClient {
       headers.set("Content-Type", "application/json");
     if (descriptor.authentication === "required")
       headers.set("Authorization", `Bearer ${context.accessToken}`);
-    if (descriptor.house === "required")
-      headers.set("X-Current-House-ID", context.currentHouseId!);
+    if (descriptor.house !== "none" && context.currentHouseId)
+      headers.set("X-Current-House-ID", context.currentHouseId);
     if (options.idempotencyKey)
       headers.set("Idempotency-Key", options.idempotencyKey);
     return headers;
@@ -173,13 +229,8 @@ export class ApiClient {
     descriptor: RequestDescriptor,
     response: Response,
   ): Promise<T> {
-    if (response.status === 401 && descriptor.invalidateSessionOn401) {
-      try {
-        await this.onAuthenticatedUnauthorized();
-      } catch {
-        /* Session invalidation remains best-effort and cannot mask the 401. */
-      }
-    }
+    if (response.status === 401 && descriptor.invalidateSessionOn401)
+      await this.invalidateAuthenticatedSession();
     let payload: unknown;
     try {
       payload = await response.json();
@@ -210,6 +261,14 @@ export class ApiClient {
       return payload as T;
     }
     return this.parseEnvelope<T>(response.status, payload);
+  }
+
+  private async invalidateAuthenticatedSession(): Promise<void> {
+    try {
+      await this.onAuthenticatedUnauthorized();
+    } catch {
+      /* Session invalidation remains best-effort and cannot mask the 401. */
+    }
   }
 
   private parseEnvelope<T>(status: number, payload: unknown): T {

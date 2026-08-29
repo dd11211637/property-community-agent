@@ -3,6 +3,7 @@ import { ApiClient, type RequestDescriptor } from "../../src/api/client";
 
 const business: RequestDescriptor = { authentication: "required", house: "required", decoder: "envelope", invalidateSessionOn401: true };
 const login: RequestDescriptor = { authentication: "none", house: "none", decoder: "direct", invalidateSessionOn401: false };
+const agent: RequestDescriptor = { authentication: "required", house: "optional", decoder: "envelope", invalidateSessionOn401: true };
 function envelope(status: number, success: boolean, data: unknown = null) {
   return new Response(JSON.stringify({ success, data, error: success ? null : { code: `E_${status}`, message: "failed" }, request_id: "request-42" }), { status, headers: { "Content-Type": "application/json" } });
 }
@@ -28,6 +29,31 @@ describe("ApiClient", () => {
     });
     const client = new ApiClient("https://example.test", () => ({ accessToken: "jwt-token", currentHouseId: "house-a" }), fetcher as typeof fetch);
     await client.request(business, "/api/example", { method: "POST", body: {}, requestId: "request-owned", idempotencyKey: "idem-1" });
+  });
+
+  it("sends an optional house when present and permits no-house Agent access", async () => {
+    const fetcher = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("Authorization")).toBe("Bearer token");
+      expect(headers.get("X-Current-House-ID")).toBeNull();
+      return envelope(200, true, []);
+    });
+    const client = new ApiClient("", () => ({ accessToken: "token" }), fetcher as typeof fetch);
+    await client.request(agent, "/api/agent/conversations");
+  });
+
+  it("opens POST SSE with shared auth headers and raw response body", async () => {
+    const fetcher = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("Accept")).toBe("text/event-stream");
+      expect(headers.get("Authorization")).toBe("Bearer token");
+      expect(headers.get("X-Current-House-ID")).toBe("house-a");
+      expect(init?.body).toBe(JSON.stringify({ text: "hello" }));
+      return new Response("event: done\ndata: {}\n\n", { status: 200 });
+    });
+    const client = new ApiClient("", () => ({ accessToken: "token", currentHouseId: "house-a" }), fetcher as typeof fetch);
+    const response = await client.stream(agent, "/api/agent/conversations/c/messages/stream", { method: "POST", body: { text: "hello" } });
+    await expect(response.text()).resolves.toContain("event: done");
   });
 
   it("fails before transport when required auth or house context is absent", async () => {
