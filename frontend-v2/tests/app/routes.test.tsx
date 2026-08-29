@@ -159,6 +159,46 @@ describe("real runtime boundary", () => {
     expect(await screen.findByText("当前真实作用域内没有记录。")).toBeVisible();
     expect(screen.queryByText("卫生间顶部渗水")).not.toBeInTheDocument();
   });
+
+  it("runs the real Agent transport and renders trusted facts without Demo fallback", async () => {
+    const user = userEvent.setup();
+    const store = createInMemorySessionStore(session(["RESIDENT"]));
+    let created = false;
+    const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const headers = new Headers(init?.headers);
+      if (url.endsWith("/messages/stream") && init?.method === "POST") {
+        expect(headers.get("Authorization")).toBe("Bearer token");
+        expect(headers.get("X-Current-House-ID")).toBe("house-a");
+        created = true;
+        const id = url.split("/").at(-3)!;
+        return new Response(
+          `event: message\ndata: {"content":"请以结构化结果为准"}\n\nevent: facts\ndata: {"facts":{"work_order":{"id":"work-1","business_no":"WX-1","status":"PENDING_ASSIGNMENT","location":"厨房","urgency":"NORMAL"}}}\n\nevent: turn\ndata: {"conversation_id":"${id}","status":"ACTIVE","done":true,"facts":{"work_order":{"id":"work-1","business_no":"WX-1","status":"PENDING_ASSIGNMENT","location":"厨房","urgency":"NORMAL"}},"missing_slots":[],"handover_required":false}\n\nevent: done\ndata: {"done":true,"status":"ACTIVE"}\n\n`,
+          { headers: { "Content-Type": "text/event-stream" } },
+        );
+      }
+      if (url.includes("/api/agent/conversations/") && !url.endsWith("/messages")) {
+        if (!created) return new Response(JSON.stringify({ success: false, data: null, error: { code: "NOT_FOUND", message: "missing" }, request_id: "r" }), { status: 404 });
+        const id = url.split("/").at(-1)!;
+        return new Response(JSON.stringify({ success: true, data: { conversation_id: id, status: "ACTIVE", current_house_id: "house-a", handover_required: false, pending_confirmation: null }, error: null, request_id: "r" }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ success: true, data: [], error: null, request_id: "r" }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const services: ApplicationServices = {
+      sessionStore: store,
+      authentication: demoAuthentication,
+      apiClient: new ApiClient("", () => ({ accessToken: "token", currentHouseId: "house-a" }), fetcher),
+      queryClient: client,
+      mode: "real",
+    };
+    render(<MemoryRouter initialEntries={["/agent"]}><AppProviders services={services}><AppRoutes /></AppProviders></MemoryRouter>);
+    expect(await screen.findByRole("heading", { name: "新对话" })).toBeVisible();
+    await user.type(screen.getByLabelText("发送给 Agent"), "厨房漏水");
+    await user.click(screen.getByRole("button", { name: "发送" }));
+    expect(await screen.findByText("WX-1")).toBeVisible();
+    expect(screen.queryByText("卫生间顶部渗水")).not.toBeInTheDocument();
+  });
 });
 
 const scopeAbort = vi.fn();

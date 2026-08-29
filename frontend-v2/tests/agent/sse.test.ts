@@ -40,5 +40,20 @@ describe("parseAgentSse", () => {
     const bytes = new TextEncoder().encode("event: turn\ndata: {bad}\n\n");
     await expect(collect([bytes])).rejects.toMatchObject({ code: "INVALID_SSE_JSON" });
   });
-});
 
+  it("fails an idle stream without imposing a total turn duration", async () => {
+    const pending = new ReadableStream<Uint8Array>({ start() { /* intentionally idle */ } });
+    const consume = async () => {
+      await parseAgentSse(pending, undefined, 1).next();
+    };
+    await expect(consume()).rejects.toMatchObject({ code: "AGENT_STREAM_IDLE_TIMEOUT" });
+  });
+
+  it("cancels a pending read immediately when the caller aborts", async () => {
+    const pending = new ReadableStream<Uint8Array>({ start() { /* intentionally idle */ } });
+    const controller = new AbortController();
+    const result = parseAgentSse(pending, controller.signal).next();
+    controller.abort();
+    await expect(result).rejects.toMatchObject({ code: "REQUEST_CANCELLED" });
+  });
+});

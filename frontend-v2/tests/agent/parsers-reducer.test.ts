@@ -45,5 +45,22 @@ describe("Agent parsers and reducer", () => {
     });
     expect(failed).toMatchObject({ phase: "failed", confirmation: null, uncertain: true });
   });
-});
 
+  it("preserves structured clarification options from the backend", () => {
+    const state = turnReducer(initialTurnState, {
+      type: "event",
+      event: {
+        event: "clarification",
+        originalEvent: "clarification",
+        data: { slot_prompt: { field: "location", label: "位置", prompt: "请选择位置", allow_custom: true, options: [{ label: "地下车库", value: "地下车库" }] } },
+      },
+    });
+    expect(state).toMatchObject({ phase: "clarifying", requestedSlot: "location" });
+    expect(state.slotPrompt?.options[0].value).toBe("地下车库");
+    const notTerminal = turnReducer(state, {
+      type: "event",
+      event: { event: "done", originalEvent: "done", data: { done: false } },
+    });
+    expect(notTerminal.phase).toBe("clarifying");
+  });
+});

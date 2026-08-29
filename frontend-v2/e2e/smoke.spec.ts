@@ -62,6 +62,12 @@ async function installAuthTransport(page: Page) {
     inspectionVersion: 1,
     securityVersion: 1,
     read: false,
+    agentConversationId: "",
+    agentPending: null as null | { summary: string; tool: string; params: Record<string, unknown>; action_hash: string; issued_at: string },
+    agentConflictOnce: true,
+    agentMessages: [] as { id: string; role: string; content: string; intent: string | null; house_id: string | null; created_at: string }[],
+    memory: null as null | { id: string; memory_type: string; content: string; house_id: string | null; source_conversation_id: string | null; version: number; expires_at: null; created_at: string; updated_at: string },
+    memoryConflictOnce: true,
   };
   const envelope = (data: unknown) => ({
     success: true,
@@ -157,6 +163,66 @@ async function installAuthTransport(page: Page) {
     const url = new URL(request.url());
     const path = url.pathname;
     const method = request.method();
+    if (path === "/api/agent/conversations" && method === "GET")
+      return route.fulfill({ json: envelope(state.agentConversationId ? [{ conversation_id: state.agentConversationId, title: "厨房漏水", status: state.agentPending ? "WAITING_CONFIRM" : "ACTIVE", current_house_id: "house-a", last_intent: "repair_create", last_message_at: "2026-08-29T04:00:00Z" }] : []) });
+    if (path === "/api/agent/memories" && method === "GET")
+      return route.fulfill({ json: envelope(state.memory ? [state.memory] : []) });
+    if (path === "/api/agent/memories" && method === "POST") {
+      const body = request.postDataJSON() as { memory_type: string; content: string; house_id: string | null; source_conversation_id: string | null };
+      state.memory = { id: "memory-1", ...body, version: 1, expires_at: null, created_at: "2026-08-29T04:00:00Z", updated_at: "2026-08-29T04:00:00Z" };
+      return route.fulfill({ json: envelope(state.memory) });
+    }
+    if (path === "/api/agent/memories/memory-1" && method === "PATCH") {
+      const body = request.postDataJSON() as { content: string; expected_version: number };
+      if (state.memoryConflictOnce) {
+        state.memoryConflictOnce = false;
+        state.memory = { ...state.memory!, content: "服务端新内容", version: 2, updated_at: "2026-08-29T04:30:00Z" };
+        return route.fulfill({ status: 409, json: { success: false, data: null, error: { code: "VERSION_CONFLICT", message: "changed" }, request_id: "memory-conflict" } });
+      }
+      state.memory = { ...state.memory!, content: body.content, version: body.expected_version + 1, updated_at: "2026-08-29T05:00:00Z" };
+      return route.fulfill({ json: envelope(state.memory) });
+    }
+    if (path === "/api/agent/memories/memory-1" && method === "DELETE") {
+      state.memory = null;
+      return route.fulfill({ json: envelope({ deleted: true }) });
+    }
+    const agentMatch = path.match(/^\/api\/agent\/conversations\/([^/]+)(.*)$/);
+    if (agentMatch) {
+      const conversationId = agentMatch[1];
+      const suffix = agentMatch[2];
+      if (suffix === "/messages/stream" && method === "POST") {
+        state.agentConversationId = conversationId;
+        const body = request.postDataJSON() as { text: string; slots?: Record<string, unknown> | null };
+        state.agentMessages.push({ id: `user-${state.agentMessages.length}`, role: "user", content: body.text, intent: "repair_create", house_id: "house-a", created_at: "2026-08-29T04:00:00Z" });
+        if (!body.slots?.location) {
+          const turn = { conversation_id: conversationId, status: "ACTIVE", done: false, intent: "repair_create", missing_slots: ["location"], requested_slot: "location", slot_prompt: { field: "location", label: "发生位置", prompt: "请选择事件发生位置，也可以输入更具体的位置", allow_custom: true, options: [{ label: "地下车库", value: "地下车库" }] }, handover_required: false, pending_confirmation: null, facts: null };
+          return route.fulfill({ status: 200, headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache" }, body: `event: clarification\ndata: ${JSON.stringify({ slot_prompt: turn.slot_prompt })}\n\nevent: turn\ndata: ${JSON.stringify(turn)}\n\nevent: done\ndata: {"done":false,"status":"ACTIVE"}\n\n` });
+        }
+        state.agentPending = { summary: "确认创建报修工单", tool: "repair_create", params: { description: "厨房漏水", location: body.slots.location }, action_hash: "server-action-hash", issued_at: "2026-08-29T04:00:00Z" };
+        const turn = { conversation_id: conversationId, status: "WAITING_CONFIRM", done: false, intent: "repair_create", missing_slots: [], requested_slot: null, slot_prompt: null, handover_required: false, pending_confirmation: state.agentPending, facts: null };
+        return route.fulfill({ status: 200, headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache" }, body: `event: confirmation\ndata: ${JSON.stringify(state.agentPending)}\n\nevent: turn\ndata: ${JSON.stringify(turn)}\n\nevent: done\ndata: {"done":false,"status":"WAITING_CONFIRM"}\n\n` });
+      }
+      if (suffix === "/messages" && method === "GET")
+        return route.fulfill({ json: envelope(state.agentMessages) });
+      if (suffix === "/confirmations" && method === "POST") {
+        const body = request.postDataJSON() as { confirmed: boolean; action_hash: string | null };
+        if (body.confirmed && state.agentConflictOnce) {
+          state.agentConflictOnce = false;
+          state.agentPending = { ...state.agentPending!, action_hash: "fresh-server-action-hash" };
+          return route.fulfill({ status: 409, json: { success: false, data: null, error: { code: "CONFIRMATION_PARAMS_CHANGED", message: "changed" }, request_id: "agent-conflict" } });
+        }
+        state.agentPending = null;
+        const facts = body.confirmed ? { work_order: { id: "wo-1", business_no: "BX-2026-001", status: "PENDING_ASSIGNMENT", location: "地下车库", urgency: "NORMAL", updated_at: "2026-08-29T04:00:00Z" } } : null;
+        return route.fulfill({ json: envelope({ conversation_id: conversationId, status: "ACTIVE", done: true, intent: "repair_create", reply: body.confirmed ? "已执行，请以结构化工单为准。" : "已取消。", facts, missing_slots: [], requested_slot: null, slot_prompt: null, handover_required: false, pending_confirmation: null }) });
+      }
+      if (suffix === "" && method === "GET")
+        return route.fulfill({ json: envelope({ conversation_id: conversationId, status: state.agentPending ? "WAITING_CONFIRM" : "ACTIVE", current_house_id: "house-a", last_intent: "repair_create", handover_required: false, handover_ticket_id: null, runtime_version: "v2", pending_confirmation: state.agentPending }) });
+      if (suffix === "" && method === "DELETE") {
+        state.agentConversationId = "";
+        state.agentPending = null;
+        return route.fulfill({ json: envelope({ conversation_id: conversationId, status: "CLOSED", current_house_id: "house-a", handover_required: false, pending_confirmation: null }) });
+      }
+    }
     if (path === "/api/confirmations")
       return route.fulfill({
         status: 200,
@@ -452,6 +518,106 @@ test("resident real runtime authenticates without exposing Demo business records
   await expectNoHorizontalOverflow(page);
 });
 
+test("resident Agent clarification, changed confirmation recovery and trusted facts", async ({ page }) => {
+  const requestFailures: string[] = [];
+  page.on("requestfailed", (request) => requestFailures.push(`${request.url()}: ${request.failure()?.errorText}`));
+  await login(page, "resident");
+  await page.getByRole("link", { name: "Agent", exact: true }).click();
+  await page.getByLabel("发送给 Agent").fill("厨房漏水");
+  await page.getByRole("button", { name: "发送" }).click();
+  await page.waitForTimeout(200);
+  expect(requestFailures).toEqual([]);
+  await expect(page.getByText("请选择事件发生位置，也可以输入更具体的位置")).toBeVisible();
+  await page.getByRole("button", { name: "地下车库" }).click();
+  await page.getByRole("button", { name: "发送" }).click();
+  await expect(page.getByText("确认创建报修工单")).toBeVisible();
+  await page.reload();
+  await expect(page.getByText("确认创建报修工单")).toBeVisible();
+  const stale = page.waitForRequest((request) => request.url().endsWith("/confirmations"));
+  await page.getByRole("button", { name: "确认执行" }).click();
+  expect((await stale).postDataJSON()).toEqual({ confirmed: true, action_hash: "server-action-hash" });
+  await expect(page.getByLabel("Agent 对话历史").getByText(/确认参数已变化/)).toBeVisible();
+  const fresh = page.waitForRequest((request) => request.url().endsWith("/confirmations"));
+  await page.getByRole("button", { name: "确认执行" }).click();
+  expect((await fresh).postDataJSON()).toEqual({ confirmed: true, action_hash: "fresh-server-action-hash" });
+  await expect(page.getByText("BX-2026-001")).toBeVisible();
+  await expect(page.getByText("已执行，请以结构化工单为准。")).toBeVisible();
+});
+
+test("real Agent memory CRUD stays actor-scoped and versioned", async ({ page }) => {
+  await login(page, "resident");
+  await page.getByRole("link", { name: "Agent", exact: true }).click();
+  await page.getByLabel("内容").fill("优先短信联系");
+  await page.getByRole("button", { name: "保存记忆" }).click();
+  await expect(page.getByText("优先短信联系")).toBeVisible();
+  await page.getByRole("button", { name: "编辑" }).click();
+  await page.locator("input").last().fill("仅工作日联系");
+  await page.getByRole("button", { name: "提交更新" }).click();
+  await expect(page.getByText(/记忆已被其他操作更新/)).toBeVisible();
+  await expect(page.getByText("服务端新内容")).toBeVisible();
+  await page.getByRole("button", { name: "编辑" }).click();
+  await page.locator("input").last().fill("仅工作日联系");
+  await page.getByRole("button", { name: "提交更新" }).click();
+  await expect(page.getByText("仅工作日联系")).toBeVisible();
+  await page.getByRole("button", { name: "删除" }).click();
+  await expect(page.getByText("暂无长期记忆")).toBeVisible();
+});
+
+test("operations home is the real Agent workspace", async ({ page }) => {
+  await login(page, "manager");
+  await expect(page.getByText("REAL AGENT WORKSPACE")).toBeVisible();
+  await expect(page.getByText("真实对话")).toBeVisible();
+});
+
+test("Agent cancel sends real cancellation and never renders business success", async ({ page }) => {
+  await login(page, "resident");
+  await page.getByRole("link", { name: "Agent", exact: true }).click();
+  await page.getByLabel("发送给 Agent").fill("厨房漏水");
+  await page.getByRole("button", { name: "发送" }).click();
+  await page.getByRole("button", { name: "地下车库" }).click();
+  await page.getByRole("button", { name: "发送" }).click();
+  const cancellation = page.waitForRequest((request) => request.url().endsWith("/confirmations"));
+  await page.getByRole("button", { name: "取消" }).click();
+  expect((await cancellation).postDataJSON()).toEqual({ confirmed: false, action_hash: null });
+  await expect(page.getByText("BX-2026-001")).toHaveCount(0);
+  await page.getByLabel("发送给 Agent").fill("改为联系物业");
+  await expect(page.getByRole("button", { name: "发送" })).toBeEnabled();
+});
+
+test("Agent handover and stream failure remain explicit and recoverable", async ({ page }) => {
+  await login(page, "resident");
+  let handover = true;
+  await page.route("**/api/agent/conversations/*/messages/stream", async (route) => {
+    const id = new URL(route.request().url()).pathname.split("/").at(-3)!;
+    const body = handover
+      ? `event: handover\ndata: {"conversation_id":"${id}"}\n\nevent: turn\ndata: {"conversation_id":"${id}","status":"HANDOVER","done":true,"missing_slots":[],"handover_required":true,"pending_confirmation":null}\n\nevent: done\ndata: {"done":true}\n\n`
+      : `event: failed\ndata: {"category":"execution_failure","recoverable_via_status":true}\n\n`;
+    await route.fulfill({ status: 200, headers: { "Content-Type": "text/event-stream" }, body });
+  });
+  await page.goto("/agent");
+  await page.getByLabel("发送给 Agent").fill("需要人工协助");
+  await page.getByRole("button", { name: "发送" }).click();
+  await expect(page.getByLabel("Agent 对话历史").getByText("已转人工处理")).toBeVisible();
+  handover = false;
+  await page.getByLabel("发送给 Agent").fill("再次尝试");
+  await page.getByRole("button", { name: "发送" }).click();
+  await expect(page.getByLabel("Agent 对话历史").getByText(/本轮执行失败/)).toBeVisible();
+  await page.getByLabel("发送给 Agent").fill("查看最新状态后重试");
+  await expect(page.getByRole("button", { name: "发送" })).toBeEnabled();
+});
+
+test("house switch detaches an incompatible Agent conversation", async ({ page }) => {
+  await login(page, "multi");
+  await page.getByLabel("当前房屋").selectOption("house-a");
+  await page.getByRole("link", { name: "Agent", exact: true }).click();
+  await page.getByLabel("发送给 Agent").fill("厨房漏水");
+  await page.getByRole("button", { name: "发送" }).click();
+  await expect(page).toHaveURL(/\/agent\/conversations\//);
+  await page.getByLabel("当前房屋").selectOption("house-b");
+  await expect(page).toHaveURL(/\/agent$/);
+  await expect(page.getByText("开始真实 Agent 对话")).toBeVisible();
+});
+
 test("resident opens bill detail and sees explicit unknown-rule state", async ({
   page,
 }) => {
@@ -578,9 +744,7 @@ test("manager gets deterministic operations and admin navigation", async ({
   page,
 }) => {
   await login(page, "manager");
-  await expect(
-    page.getByRole("heading", { name: "欢迎回来，真实经理" }),
-  ).toBeVisible();
+  await expect(page.getByText("REAL AGENT WORKSPACE")).toBeVisible();
   await expect(page.getByRole("link", { name: "账单" })).toBeVisible();
   await expect(page.getByRole("link", { name: "运营" })).toBeVisible();
   await page.getByRole("link", { name: "管理" }).click();
