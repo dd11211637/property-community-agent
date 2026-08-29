@@ -9,6 +9,7 @@ const services = {
   sessionStore: createInMemorySessionStore(),
   authentication: demoAuthentication,
   showcaseModels: demoModels,
+  mode: "demo" as const,
 };
 
 createRoot(document.getElementById("root")!).render(<Application services={services} />);

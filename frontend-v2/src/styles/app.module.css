@@ -14,6 +14,9 @@
 .main { min-width: 0; }
 .topbar { position: sticky; z-index: 20; top: 0; display: flex; min-height: 72px; align-items: center; justify-content: space-between; gap: var(--space-4); border-bottom: 1px solid var(--color-border); padding: 12px clamp(18px, 3vw, 42px); background: rgb(243 240 232 / 86%); backdrop-filter: blur(18px); }
 .house { min-width: 220px; border: 0; border-radius: var(--radius-sm); padding: 9px 11px; color: var(--color-ink); background: var(--color-surface); }
+.houseControl { display: grid; gap: 4px; }
+.houseError { max-width: 360px; color: #8a321f; font-size: .74rem; }
+.accountLabel { padding: 8px 10px; color: var(--color-ink-soft); font-size: .76rem; font-weight: 700; }
 .user { display: flex; align-items: center; gap: 10px; }
 .userCopy { text-align: right; }
 .userCopy strong, .userCopy small { display: block; }

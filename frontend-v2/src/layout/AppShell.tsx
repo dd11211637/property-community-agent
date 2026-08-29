@@ -1,28 +1,32 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Bot, Building2, ChevronDown, CircleGauge, Home, LogOut, Mail, Menu as MenuIcon, Megaphone, ReceiptText, ShieldCheck, Wrench } from "lucide-react";
 import { NavLink, Outlet } from "react-router-dom";
+import { routeCapabilities } from "../app/routeConfig";
+import { useRuntimeMode } from "../app/runtimeModeDefinition";
 import { hasCapability } from "../auth/capabilities";
 import { useSession } from "../auth/useSession";
-import { routeCapabilities } from "../app/routeConfig";
-import styles from "../styles/app.module.css";
-import { Button } from "../shared/ui";
 import { Drawer, Menu, MenuItem, Tooltip } from "../shared/overlays";
+import { Button } from "../shared/ui";
+import styles from "../styles/app.module.css";
 
 const icons: Record<string, React.ReactNode> = {
   "/": <Home size={19} />, "/repairs": <Wrench size={19} />, "/billing": <ReceiptText size={19} />,
-  "/community": <Megaphone size={19} />, "/operations": <ShieldCheck size={19} />, "/messages": <Mail size={19} />, "/admin": <CircleGauge size={19} />,
+  "/community": <Megaphone size={19} />, "/operations": <ShieldCheck size={19} />,
+  "/messages": <Mail size={19} />, "/admin": <CircleGauge size={19} />,
 };
 
 function Navigation() {
   const { session } = useSession();
   if (session.status !== "authenticated") return null;
+  const resident = hasCapability(session.actor.roles, "resident-experience");
   const operations = hasCapability(session.actor.roles, "operations");
   const admin = hasCapability(session.actor.roles, "admin");
-  const mode = operations ? "operations" : "resident";
   const routes = routeCapabilities.filter((route) => {
     if (route.navigation === "none") return false;
-    if (route.navigation !== "both" && route.navigation !== mode) return false;
-    if (route.requiredCapability === "operations" && !operations) return false;
+    if (route.path === "/") return true;
+    if (route.navigation === "resident" && !resident) return false;
+    if (route.navigation === "operations" && !operations) return false;
+    if (route.navigation === "both" && !resident && !operations) return false;
     if (route.requiredCapability === "admin" && !admin) return false;
     return true;
   });
@@ -34,14 +38,16 @@ function Brand() {
 }
 
 function SidebarContent() {
-  return <><Brand /><Navigation /><div className={styles.sidebarFoot}><p>服务运行平稳</p><span>Skeleton 展示环境 · 非生产</span></div></>;
+  const mode = useRuntimeMode();
+  return <><Brand /><Navigation /><div className={styles.sidebarFoot}><p>{mode === "demo" ? "设计预览" : "Frontend V2 基础"}</p><span>{mode === "demo" ? "Demo 数据 · 非生产" : "真实认证 · 业务尚未迁移"}</span></div></>;
 }
 
 export function AppShell() {
-  const { session, transitioning, selectHouse, signOut } = useSession();
+  const { session, transitioning, selectionError, selectHouse, signOut } = useSession();
+  const mode = useRuntimeMode();
   if (session.status !== "authenticated") return null;
   const currentHouse = session.houses.find((house) => house.id === session.currentHouseId);
-  return <div className={styles.shell}><aside className={styles.sidebar}><SidebarContent /></aside><main className={styles.main}><header className={styles.topbar}><div className={styles.mobileMenu}><Drawer title="导航" trigger={<Button iconOnly tone="ghost" aria-label="打开导航"><MenuIcon /></Button>}><SidebarContent /></Drawer></div><label><span className="sr-only">当前房屋</span><select className={styles.house} aria-label="当前房屋" value={session.currentHouseId ?? ""} onChange={(event) => void selectHouse(event.target.value)}><option value="" disabled>请选择房屋</option>{session.houses.map((house) => <option key={house.id} value={house.id}>{house.label}</option>)}</select></label><Menu trigger={<Button tone="ghost" aria-label="打开用户菜单"><span className={styles.user}><span className={styles.userCopy}><strong>{session.actor.displayName}</strong><small>{currentHouse?.label ?? session.actor.communityName}</small></span><span className={styles.avatar}>{session.actor.displayName.slice(0, 1)}</span><ChevronDown size={16} /></span></Button>}><DropdownMenu.Label className={styles.navLink}>当前身份</DropdownMenu.Label><MenuItem><Bot size={16} />{session.actor.roles.join(" · ")}</MenuItem><DropdownMenu.Separator /><MenuItem onSelect={signOut}><LogOut size={16} />退出预览</MenuItem></Menu></header>{transitioning ? <div className={styles.transition} role="status">正在切换房屋上下文…</div> : null}<div className={styles.content}><Outlet /></div></main></div>;
+  return <div className={styles.shell}><aside className={styles.sidebar}><SidebarContent /></aside><main className={styles.main}><header className={styles.topbar}><div className={styles.mobileMenu}><Drawer title="导航" trigger={<Button iconOnly tone="ghost" aria-label="打开导航"><MenuIcon /></Button>}><SidebarContent /></Drawer></div><div className={styles.houseControl}><label><span className="sr-only">当前房屋</span><select className={styles.house} aria-label="当前房屋" value={session.currentHouseId ?? ""} disabled={transitioning || session.houses.length === 0} onChange={(event) => void selectHouse(event.target.value)}><option value="">{session.houses.length === 0 ? "无可用房屋" : "选择当前房屋"}</option>{session.houses.map((house) => <option key={house.id} value={house.id}>{house.label}</option>)}</select></label>{selectionError ? <span className={styles.houseError} role="alert">{selectionError}</span> : null}</div><Menu trigger={<Button tone="ghost" aria-label="打开用户菜单"><span className={styles.user}><span className={styles.userCopy}><strong>{session.actor.displayName}</strong><small>{currentHouse?.label ?? session.actor.communityName}</small></span><span className={styles.avatar}>{session.actor.displayName.slice(0, 1)}</span><ChevronDown size={16} /></span></Button>}><DropdownMenu.Label className={styles.accountLabel}>当前身份</DropdownMenu.Label><MenuItem><Bot size={16} />{session.actor.displayName}</MenuItem><MenuItem><Building2 size={16} />{session.actor.communityName}</MenuItem><MenuItem><ShieldCheck size={16} />{session.actor.roles.length ? session.actor.roles.join(" · ") : "无已知角色"}</MenuItem><DropdownMenu.Separator /><MenuItem onSelect={() => void signOut()}><LogOut size={16} />{mode === "demo" ? "退出预览" : "退出登录"}</MenuItem></Menu></header>{transitioning ? <div className={styles.transition} role="status">正在验证并切换房屋上下文…</div> : null}<div className={styles.content}><Outlet /></div></main></div>;
 }
 
 export function MobileHelp() {

@@ -15,4 +15,14 @@ describe("explicit capability mapping", () => {
     expect(hasCapability(["FUTURE_UNKNOWN_ROLE"], "operations")).toBe(false);
     expect(hasCapability(["FUTURE_UNKNOWN_ROLE"], "admin")).toBe(false);
   });
+
+  it.each(["CUSTOMER_SERVICE", "REPAIR_WORKER", "FINANCE", "FINANCE_STAFF", "SECURITY_STAFF", "SECURITY_GUARD", "DUTY_STAFF", "MANAGER", "SYSTEM_ADMIN"])("grants explicit operations capability to %s", (role) => {
+    expect(hasCapability([role], "operations")).toBe(true);
+  });
+
+  it("takes the capability union for a multi-role actor", () => {
+    const roles = ["RESIDENT", "CUSTOMER_SERVICE"];
+    expect(hasCapability(roles, "resident-experience")).toBe(true);
+    expect(hasCapability(roles, "operations")).toBe(true);
+  });
 });

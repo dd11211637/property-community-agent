@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-quer
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AppProviders, AppRoutes, type ApplicationServices } from "../../src/app/App";
 import { SessionProvider } from "../../src/auth/SessionContext";
 import { useSession } from "../../src/auth/useSession";
@@ -12,11 +12,11 @@ import { demoAuthentication } from "../../examples/demoAdapters";
 import { demoModels } from "../../examples/demoData";
 
 function session(roles: string[], actorId = "actor-1"): SessionState {
-  return { status: "authenticated", actor: { id: actorId, displayName: "测试用户", roles, communityName: "桂语社区" }, houses: [{ id: "house-a", label: "A" }, { id: "house-b", label: "B" }], currentHouseId: "house-a" };
+  return { status: "authenticated", accessToken: "token", actor: { id: actorId, displayName: "测试用户", roles, communityId: "community-1", communityName: "桂语社区" }, houses: [{ id: "house-a", label: "A", resolved: false }, { id: "house-b", label: "B", resolved: false }], currentHouseId: "house-a" };
 }
 
 function renderRoute(path: string, state: SessionState = { status: "unauthenticated" }) {
-  const services: ApplicationServices = { sessionStore: createInMemorySessionStore(state), authentication: demoAuthentication, showcaseModels: demoModels };
+  const services: ApplicationServices = { sessionStore: createInMemorySessionStore(state), authentication: demoAuthentication, showcaseModels: demoModels, mode: "demo" };
   return render(<MemoryRouter initialEntries={[path]}><AppProviders services={services}><AppRoutes /></AppProviders></MemoryRouter>);
 }
 
@@ -44,17 +44,41 @@ describe("application routing", () => {
     expect(screen.getByRole("heading", { name: "当前身份无权访问" })).toBeVisible();
   });
 
+  it("keeps resident navigation when the actor also has operations capability", () => {
+    renderRoute("/", session(["RESIDENT", "CUSTOMER_SERVICE"]));
+    expect(screen.getByRole("link", { name: "账单" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "运营" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: /今天，从最重要的事项开始/ })).toBeVisible();
+  });
+
+  it("gives an unknown-role actor no product navigation beyond home", () => {
+    renderRoute("/", session(["UNKNOWN_ROLE"]));
+    expect(screen.queryByRole("link", { name: "报修" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "运营" })).not.toBeInTheDocument();
+  });
+
   it("renders a real not-found page", () => {
     renderRoute("/does-not-exist");
     expect(screen.getByRole("heading", { name: "这里还没有社区服务" })).toBeVisible();
   });
 });
 
+describe("real runtime boundary", () => {
+  it("shows neutral unmigrated content instead of Demo business records", () => {
+    const services: ApplicationServices = { sessionStore: createInMemorySessionStore(session(["RESIDENT"])), authentication: demoAuthentication, mode: "real" };
+    render(<MemoryRouter initialEntries={["/repairs"]}><AppProviders services={services}><AppRoutes /></AppProviders></MemoryRouter>);
+    expect(screen.getByRole("heading", { name: "业务页面尚未迁移" })).toBeVisible();
+    expect(screen.queryByText("卫生间顶部渗水")).not.toBeInTheDocument();
+  });
+});
+
+const scopeAbort = vi.fn();
+
 function ScopedResource() {
   const { session, selectHouse } = useSession();
   const authenticated = session.status === "authenticated";
   const key = scopeQueryKey({ actorId: authenticated ? session.actor.id : "anonymous", houseId: authenticated ? session.currentHouseId : null }, "resource");
-  const query = useQuery({ queryKey: key, queryFn: async () => new Promise<string>(() => undefined), enabled: authenticated });
+  const query = useQuery({ queryKey: key, queryFn: async ({ signal }) => new Promise<string>(() => signal.addEventListener("abort", scopeAbort, { once: true })), enabled: authenticated });
   if (!authenticated) return null;
   return <><span>{query.data ?? "新房屋加载中"}</span><button onClick={() => void selectHouse("house-b")}>切换</button></>;
 }
@@ -70,5 +94,6 @@ describe("house transition", () => {
     await user.click(screen.getByRole("button", { name: "切换" }));
     await waitFor(() => expect(screen.getByText("新房屋加载中")).toBeVisible());
     expect(screen.queryByText("House A 私有内容")).not.toBeInTheDocument();
+    expect(scopeAbort).toHaveBeenCalled();
   });
 });

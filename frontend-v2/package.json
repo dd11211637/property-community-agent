@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --port 5174",
+    "dev:demo": "vite --port 5174 --open /demo.html",
     "api:generate": "openapi-typescript ../docs/api/openapi.json -o src/api/generated/schema.ts",
     "api:check": "npm run api:generate && git diff --exit-code -- src/api/generated/schema.ts",
     "lint": "eslint .",
