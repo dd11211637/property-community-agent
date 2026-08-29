@@ -4,7 +4,7 @@ import type {
   PendingConfirmation,
   TurnState,
 } from "./models";
-import { parseAgentTurn, parsePendingConfirmation } from "./parsers";
+import { parseAgentTurn, parsePendingConfirmation, parseSlotPrompt } from "./parsers";
 
 export const initialTurnState: TurnState = {
   phase: "idle",
@@ -85,16 +85,16 @@ export function turnReducer(state: TurnState, action: TurnAction): TurnState {
   if (event === "intent")
     return { ...state, intent: typeof data.intent === "string" ? data.intent : state.intent };
   if (event === "message")
-    return { ...state, reply: typeof data.message === "string" ? data.message : typeof data.reply === "string" ? data.reply : state.reply };
+    return { ...state, reply: typeof data.content === "string" ? data.content : typeof data.message === "string" ? data.message : typeof data.reply === "string" ? data.reply : state.reply };
   if (event === "facts") return { ...state, facts: data.facts ?? null };
   if (event === "clarification")
     return {
       ...state,
       phase: "clarifying",
       progress: null,
-      requestedSlot: typeof data.requested_slot === "string" ? data.requested_slot : null,
+      requestedSlot: typeof data.requested_slot === "string" ? data.requested_slot : parseSlotPrompt(data.slot_prompt)?.field ?? null,
       missingSlots: Array.isArray(data.missing_slots) ? data.missing_slots.filter((x): x is string => typeof x === "string") : [],
-      slotPrompt: typeof data.slot_prompt === "string" ? data.slot_prompt : null,
+      slotPrompt: parseSlotPrompt(data.slot_prompt),
     };
   if (event === "confirmation")
     return { ...state, phase: "awaiting-confirmation", progress: null, confirmation: parsePendingConfirmation(data.pending_confirmation ?? data) };
@@ -108,8 +108,7 @@ export function turnReducer(state: TurnState, action: TurnAction): TurnState {
   if (event === "turn") return fromTurn(state, parseAgentTurn(data));
   if (event === "failed")
     return { ...state, phase: "failed", progress: null, confirmation: null, error: "Agent 本轮执行失败，请恢复会话状态后重试。", uncertain: true };
-  if (event === "done" && state.phase !== "awaiting-confirmation" && state.phase !== "handed-over")
+  if (event === "done" && data.done === true && state.phase !== "awaiting-confirmation" && state.phase !== "handed-over")
     return { ...state, phase: "completed", progress: null, uncertain: false };
   return state;
 }
-

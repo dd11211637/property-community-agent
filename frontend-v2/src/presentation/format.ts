@@ -6,7 +6,16 @@ const statusLabels: Record<string, string> = {
 
 export function labelFor(code: string): string { return statusLabels[code] ?? code.replaceAll("_", " "); }
 export function formatCurrency(value: number): string { return new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY" }).format(value); }
-export function formatDate(value: string): string { return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value)); }
+export function formatDate(value: string): string {
+  const date = new Date(value);
+  if (!value || Number.isNaN(date.getTime())) return "未提供";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
 export function statusTone(code: string): "neutral" | "success" | "warning" | "dangerTone" | "info" {
   if (["COMPLETED", "CLOSED", "PAID", "PUBLISHED"].includes(code)) return "success";
   if (["OVERDUE", "HIGH_RISK"].includes(code)) return "dangerTone";

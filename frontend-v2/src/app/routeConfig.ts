@@ -11,6 +11,7 @@ export type RouteCapability = {
 export const routeCapabilities: RouteCapability[] = [
   { path: "/login", label: "登录", public: true, navigation: "none" },
   { path: "/", label: "首页", public: false, navigation: "both" },
+  { path: "/agent", label: "Agent", public: false, navigation: "both" },
   { path: "/repairs", label: "报修", public: false, navigation: "both" },
   { path: "/billing", label: "账单", public: false, navigation: "both" },
   { path: "/community", label: "社区", public: false, navigation: "both" },

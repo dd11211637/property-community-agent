@@ -13,6 +13,7 @@ import {
   useBusinessClient,
   useBusinessKey,
 } from "./hooks";
+import { ResidentAgentEntry } from "../agent/AgentWorkspace";
 import type { BusinessRecord, PlatformMessage } from "./models";
 
 function relatedPath(message: PlatformMessage): string | null {
@@ -406,13 +407,7 @@ export function RealBusinessHomePage() {
           />
         ) : null}
       </div>
-      <Card>
-        <strong>Agent 能力尚未迁移</strong>
-        <p>
-          对话、SSE、Memory、槽位和 Agent
-          确认编排保持禁用；本页面只组合普通业务查询。
-        </p>
-      </Card>
+      {resident ? <ResidentAgentEntry /> : null}
     </div>
   );
 }

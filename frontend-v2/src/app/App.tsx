@@ -52,6 +52,8 @@ import {
 } from "../business/MessagesAdminHome";
 import { RuntimeModeProvider } from "./runtimeMode";
 import { useRuntimeMode, type RuntimeMode } from "./runtimeModeDefinition";
+import { AgentRuntimeProvider } from "../agent/runtime";
+import { AgentWorkspace } from "../agent/AgentWorkspace";
 
 export type ApplicationServices = {
   sessionStore: SessionStore;
@@ -117,8 +119,10 @@ export function AppRoutes() {
       >
         <Route
           index
-          element={mode === "demo" ? <HomePage /> : <RealBusinessHomePage />}
+          element={mode === "demo" ? <HomePage /> : <RealHome />}
         />
+        <Route path="agent" element={<BusinessPage demo={<HomePage />} real={<AgentWorkspace />} />} />
+        <Route path="agent/conversations/:conversationId" element={<BusinessPage demo={<HomePage />} real={<AgentWorkspace />} />} />
         <Route
           path="repairs"
           element={
@@ -243,6 +247,14 @@ function OptionalShowcase({
   );
 }
 
+function RealHome() {
+  const { session } = useSession();
+  if (session.status !== "authenticated") return null;
+  return hasCapability(session.actor.roles, "operations")
+    ? <AgentWorkspace />
+    : <RealBusinessHomePage />;
+}
+
 export function AppProviders({
   services,
   children,
@@ -272,9 +284,11 @@ export function AppProviders({
         auth={services.authentication}
       >
         <RuntimeModeProvider mode={services.mode}>
-          <OptionalShowcase models={services.showcaseModels}>
-            {content}
-          </OptionalShowcase>
+          <AgentRuntimeProvider>
+            <OptionalShowcase models={services.showcaseModels}>
+              {content}
+            </OptionalShowcase>
+          </AgentRuntimeProvider>
         </RuntimeModeProvider>
       </SessionProvider>
     </QueryClientProvider>

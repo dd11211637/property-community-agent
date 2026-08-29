@@ -34,6 +34,14 @@ export type PendingConfirmation = {
   issuedAt: string | null;
 };
 
+export type SlotPrompt = {
+  field: string;
+  label: string;
+  prompt: string;
+  allowCustom: boolean;
+  options: { label: string; value: unknown }[];
+};
+
 export type ConversationStatus = {
   conversationId: string;
   status: string;
@@ -54,7 +62,7 @@ export type AgentTurn = {
   facts: unknown | null;
   missingSlots: string[];
   requestedSlot: string | null;
-  slotPrompt: string | null;
+  slotPrompt: SlotPrompt | null;
   handoverRequired: boolean;
   pendingConfirmation: PendingConfirmation | null;
 };
@@ -112,10 +120,9 @@ export type TurnState = {
   facts: unknown | null;
   requestedSlot: string | null;
   missingSlots: string[];
-  slotPrompt: string | null;
+  slotPrompt: SlotPrompt | null;
   confirmation: PendingConfirmation | null;
   handoverTicketId: string | null;
   error: string | null;
   uncertain: boolean;
 };
-

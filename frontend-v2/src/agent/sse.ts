@@ -60,6 +60,7 @@ function decodeEvent(frame: string): AgentStreamEvent | null {
 export async function* parseAgentSse(
   stream: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
+  idleTimeoutMs = 60_000,
 ): AsyncGenerator<AgentStreamEvent> {
   const reader = stream.getReader();
   const decoder = new TextDecoder("utf-8");
@@ -68,7 +69,40 @@ export async function* parseAgentSse(
     while (true) {
       if (signal?.aborted)
         throw new ApiError("cancelled", 0, "REQUEST_CANCELLED", "请求已取消。");
-      const { value, done } = await reader.read();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const idle = new Promise<never>((_resolve, reject) => {
+        timer = globalThis.setTimeout(() => reject(new ApiError(
+          "timeout",
+          0,
+          "AGENT_STREAM_IDLE_TIMEOUT",
+          "Agent 流长时间没有返回事件。",
+        )), idleTimeoutMs);
+      });
+      let abortHandler: (() => void) | undefined;
+      const aborted = new Promise<never>((_resolve, reject) => {
+        if (!signal) return;
+        abortHandler = () => {
+          reject(new ApiError(
+            "cancelled",
+            0,
+            "REQUEST_CANCELLED",
+            "请求已取消。",
+          ));
+          void reader.cancel().catch(() => undefined);
+        };
+        signal.addEventListener("abort", abortHandler, { once: true });
+      });
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await Promise.race([reader.read(), idle, aborted]);
+      } catch (error) {
+        await reader.cancel().catch(() => undefined);
+        throw error;
+      } finally {
+        if (timer) globalThis.clearTimeout(timer);
+        if (abortHandler) signal?.removeEventListener("abort", abortHandler);
+      }
+      const { value, done } = chunk;
       buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, "\n");
       let boundary = buffer.indexOf("\n\n");
       while (boundary >= 0) {
@@ -87,4 +121,3 @@ export async function* parseAgentSse(
     reader.releaseLock();
   }
 }
-

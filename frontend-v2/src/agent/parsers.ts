@@ -7,6 +7,7 @@ import type {
   ConversationSummary,
   MemoryType,
   PendingConfirmation,
+  SlotPrompt,
 } from "./models";
 
 type RecordValue = Record<string, unknown>;
@@ -68,6 +69,27 @@ export function parsePendingConfirmation(value: unknown): PendingConfirmation | 
   };
 }
 
+export function parseSlotPrompt(value: unknown): SlotPrompt | null {
+  if (value === null || value === undefined) return null;
+  const source = record(value, "slot_prompt");
+  const field = optionalText(source.field);
+  const prompt = optionalText(source.prompt);
+  if (!field || !prompt) invalid("slot_prompt");
+  const options = Array.isArray(source.options)
+    ? source.options.map((raw) => {
+        const option = record(raw, "slot_prompt.option");
+        return { label: text(option.label, "slot_prompt.option.label"), value: option.value };
+      })
+    : [];
+  return {
+    field,
+    label: optionalText(source.label) ?? field,
+    prompt,
+    allowCustom: source.allow_custom !== false,
+    options,
+  };
+}
+
 export function parseConversationList(value: unknown): ConversationSummary[] {
   return items(value, "conversation list").map((raw) => {
     const source = record(raw, "conversation");
@@ -125,7 +147,7 @@ export function parseAgentTurn(value: unknown): AgentTurn {
     facts: source.facts ?? null,
     missingSlots: strings(source.missing_slots),
     requestedSlot: optionalText(source.requested_slot),
-    slotPrompt: optionalText(source.slot_prompt),
+    slotPrompt: parseSlotPrompt(source.slot_prompt),
     handoverRequired: boolean(source.handover_required),
     pendingConfirmation: parsePendingConfirmation(source.pending_confirmation),
   };
@@ -151,4 +173,3 @@ export function parseMemory(value: unknown): AgentMemory {
     updatedAt: optionalText(source.updated_at),
   };
 }
-

@@ -138,7 +138,8 @@ export class ApiClient {
     options.signal?.addEventListener("abort", cancel, { once: true });
     if (options.signal?.aborted) controller.abort();
     try {
-      const response = await this.fetcher(this.resolveUrl(path), {
+      const fetcher = this.fetcher;
+      const response = await fetcher(this.resolveUrl(path), {
         ...options,
         body:
           options.body === undefined ? undefined : JSON.stringify(options.body),

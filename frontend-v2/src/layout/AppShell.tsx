@@ -24,6 +24,7 @@ import styles from "../styles/app.module.css";
 
 const icons: Record<string, React.ReactNode> = {
   "/": <Home size={19} />,
+  "/agent": <Bot size={19} />,
   "/repairs": <Wrench size={19} />,
   "/billing": <ReceiptText size={19} />,
   "/community": <Megaphone size={19} />,
@@ -93,7 +94,7 @@ function SidebarContent() {
         <span>
           {mode === "demo"
             ? "Demo 数据 · 非生产"
-            : "普通业务已接入 · Agent 未迁移"}
+            : "真实业务与 Agent 已接入"}
         </span>
       </div>
     </>
