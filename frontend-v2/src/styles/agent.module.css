@@ -1,0 +1,15 @@
+.workspace { display: grid; gap: var(--space-4); }
+.message { display: grid; gap: var(--space-3); max-width: 86%; }
+.assistant { justify-self: start; }
+.user { justify-self: end; }
+.bubble { border-radius: 6px var(--radius-md) var(--radius-md) var(--radius-md); padding: 12px 15px; background: var(--color-surface-muted); line-height: 1.65; }
+.user .bubble { border-radius: var(--radius-md) 6px var(--radius-md) var(--radius-md); color: white; background: var(--color-brand); }
+.composer { display: grid; grid-template-columns: 1fr auto; gap: var(--space-2); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); padding: var(--space-2); background: var(--color-surface-raised); box-shadow: var(--shadow-sm); }
+.composer textarea { min-height: 52px; border: 0; padding: 9px; resize: none; outline: none; background: transparent; }
+.action { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); border-radius: var(--radius-sm); padding: 12px; background: var(--color-brand-soft); }
+.action p, .handoff p { margin: 3px 0 0; color: var(--color-ink-soft); font-size: .85rem; }
+.confirmation { border: 1px solid rgb(223 123 100 / 30%); background: #fff9f6; }
+.confirmation h3 { margin: 0 0 7px; }
+.confirmation p { color: var(--color-ink-soft); line-height: 1.6; }
+.actions { display: flex; gap: var(--space-2); margin-top: var(--space-4); }
+.handoff { display: flex; gap: var(--space-3); align-items: start; border-left: 3px solid var(--color-accent); padding: 13px; background: var(--color-accent-soft); }
