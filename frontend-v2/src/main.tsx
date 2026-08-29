@@ -8,14 +8,20 @@ import "./styles/global.css";
 
 const sessionStore = createBrowserSessionStore(window.sessionStorage);
 const queryClient = new QueryClient({
-  defaultOptions: { queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: false }, mutations: { retry: false } },
+  defaultOptions: {
+    queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: false },
+    mutations: { retry: false },
+  },
 });
 const apiClient = new ApiClient(
   import.meta.env.VITE_API_BASE_URL ?? "",
   () => {
     const session = sessionStore.getSnapshot();
     return session.status === "authenticated"
-      ? { accessToken: session.accessToken, currentHouseId: session.currentHouseId }
+      ? {
+          accessToken: session.accessToken,
+          currentHouseId: session.currentHouseId,
+        }
       : {};
   },
   fetch,
@@ -30,7 +36,10 @@ const services = {
   sessionStore,
   queryClient,
   authentication: new AuthenticationService(apiClient),
+  apiClient,
   mode: "real" as const,
 };
 
-createRoot(document.getElementById("root")!).render(<Application services={services} />);
+createRoot(document.getElementById("root")!).render(
+  <Application services={services} />,
+);
