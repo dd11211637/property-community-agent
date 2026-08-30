@@ -8,8 +8,9 @@ Set these values without writing them to the repository or shell history:
 
 - `RC_POSTGRES_PASSWORD`, `JWT_SECRET`, and `DEEPSEEK_API_KEY`;
 - `RELEASE_SHA` equal to `git rev-parse HEAD`;
-- optional `MEMORY_EMBEDDING_API_KEY` for semantic Memory retrieval;
-- optional provider URLs/models and `RC_HTTP_PORT`.
+- a running local Ollama with `qwen3-embedding:0.6b`, or explicit Memory provider
+  URL/key/model/version/source-dimension overrides;
+- optional `RC_HTTP_PORT`.
 
 Put these values in an ignored `.env` file or inject them through the shell. `JWT_SECRET` must have at least 32 characters. OTel is disabled by default for local use. The default stack never runs files under `testing/`.
 
@@ -24,6 +25,10 @@ Put these values in an ignored `.env` file or inject them through the shell. `JW
 The helper reads the ignored `.env` from this or another worktree of the same repository, injects the exact current `HEAD`, and never prints secrets. Pass `-EnvFile C:\path\to\.env` only when automatic discovery is unsuitable.
 
 The product is served from `http://127.0.0.1:8080/`. `/api/agent/conversations/{id}/messages/stream` is a real POST SSE path with proxy buffering disabled and a bounded long-read timeout. The production image omits `demo.html`.
+
+Before the first start, install the default local embedding model with
+`ollama pull qwen3-embedding:0.6b`. The RC allows 30 seconds for a cold model
+load and stores its padded 1536-dimensional vectors in pgvector.
 
 ## One-time local bootstrap
 
