@@ -22,6 +22,8 @@ from time import monotonic
 from uuid import UUID
 
 from property_agent.agent.runtime_rollout import (
+    BucketDecisionClass,
+    EligibilityReason,
     RolloutConfig,
     RolloutControl,
     RuntimeAssignment,
@@ -101,6 +103,14 @@ class AgentRuntimeVersion(StrEnum):
         raise ValueError(f"unsupported persisted agent runtime version: {value!r}")
 
 
+class RequiredRuntimeUnavailable(RuntimeError):
+    """The explicitly required local runtime cannot safely accept a new conversation."""
+
+    def __init__(self, reason: EligibilityReason) -> None:
+        self.reason = reason
+        super().__init__(f"local v2 runtime is not ready: {reason.value}")
+
+
 class RuntimeSelectionPolicy:
     """Selects only not-yet-persisted conversations from trusted structural facts."""
 
@@ -108,6 +118,7 @@ class RuntimeSelectionPolicy:
         self,
         *,
         enabled: bool = False,
+        required_v2: bool = False,
         control: RolloutControl | None = None,
         eligibility: RuntimeEligibility | None = None,
         community_policy: CommunityPolicy | None = None,
@@ -116,6 +127,7 @@ class RuntimeSelectionPolicy:
         clock: Callable[[], float] = monotonic,
     ) -> None:
         self._legacy_enabled = bool(enabled)
+        self._required_v2 = bool(required_v2)
         self._control = control or RolloutControl(RolloutConfig())
         self._eligibility = eligibility or RuntimeEligibility()
         self._community_policy = community_policy or (lambda _community_id: True)
@@ -125,7 +137,7 @@ class RuntimeSelectionPolicy:
 
     @property
     def v2_enabled(self) -> bool:
-        return self._legacy_enabled or self._control.config.basis_points > 0
+        return self._legacy_enabled or self._required_v2 or self._control.config.basis_points > 0
 
     @property
     def rollout_control(self) -> RolloutControl:
@@ -139,6 +151,8 @@ class RuntimeSelectionPolicy:
         conversation_id: str | None = None,
     ) -> AgentRuntimeVersion:
         """Compatibility facade plus trusted-input PR7-C assignment entrypoint."""
+        if self._required_v2:
+            return self._select_required_v2()
         if self._legacy_enabled:
             return AgentRuntimeVersion.V2
         if community_id is None or actor_id is None or conversation_id is None:
@@ -150,6 +164,32 @@ class RuntimeSelectionPolicy:
                 conversation_id=conversation_id,
             ).runtime_version
         )
+
+    def _select_required_v2(self) -> AgentRuntimeVersion:
+        with self._eligibility_lock:
+            eligibility = replace(
+                self._eligibility,
+                accepted_head_available=self._readiness.is_healthy(),
+            )
+            reason = eligibility.reason()
+        if reason is not EligibilityReason.ELIGIBLE:
+            raise RequiredRuntimeUnavailable(reason)
+        if self._assignment_observer is not None:
+            config = self._control.config
+            self._assignment_observer(
+                RuntimeAssignment(
+                    runtime_version="v2",
+                    eligible=True,
+                    eligibility_reason=reason,
+                    decision_class=BucketDecisionClass.LOCAL_V2_DEFAULT,
+                    bucket=None,
+                    rollout_basis_points=0,
+                    config_version="local-v2",
+                    salt_version=config.salt_version,
+                    eligibility_policy_version="local-v2-v1",
+                )
+            )
+        return AgentRuntimeVersion.V2
 
     def decide_new(
         self,
@@ -192,6 +232,20 @@ class RuntimeSelectionPolicy:
                 accepted_head_available=self._readiness.is_healthy(),
             )
             reason = eligibility.reason()
+        if self._required_v2:
+            ready = reason is EligibilityReason.ELIGIBLE
+            return {
+                "state": "READY" if ready else "NOT_READY",
+                "ready": ready,
+                "assignment_mode": "local-v2",
+                "required_runtime": "v2",
+                "rollout_basis_points": 0,
+                "config_version": "local-v2",
+                "salt_version": config.salt_version,
+                "eligibility_policy_version": "local-v2-v1",
+                "fallback_runtime": "none",
+                "reason": reason.value,
+            }
         ready = config.basis_points == 0 or reason.value == "eligible"
         state = "OPTIONAL_ZERO" if config.basis_points == 0 else "READY"
         if not ready:

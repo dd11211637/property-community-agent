@@ -1387,6 +1387,41 @@ def test_public_default_rollout_remains_zero_basis_points() -> None:
     assert RuntimeSelectionPolicy().readiness()["state"] == "OPTIONAL_ZERO"
 
 
+def test_local_v2_requires_live_dependencies_and_never_falls_back() -> None:
+    policy = RuntimeSelectionPolicy(
+        required_v2=True,
+        eligibility=RuntimeEligibility(
+            v2_engine_available=True,
+            official_saver_available=True,
+            model_config_approved=True,
+            memory_embedding_available=True,
+        ),
+    )
+    assert policy.readiness()["state"] == "NOT_READY"
+    with pytest.raises(RuntimeError, match="accepted_head_unavailable"):
+        policy.select_new()
+    policy.observe_accepted_head(available=True)
+    assert policy.readiness()["assignment_mode"] == "local-v2"
+    assert policy.readiness()["fallback_runtime"] == "none"
+    assert policy.readiness()["reason"] == "eligible"
+    assert policy.select_new() is AgentRuntimeVersion.V2
+
+
+def test_local_v2_missing_memory_fails_closed() -> None:
+    policy = RuntimeSelectionPolicy(
+        required_v2=True,
+        eligibility=RuntimeEligibility(
+            v2_engine_available=True,
+            official_saver_available=True,
+            model_config_approved=True,
+            memory_embedding_available=False,
+        ),
+    )
+    policy.observe_accepted_head(available=True)
+    with pytest.raises(RuntimeError, match="memory_embedding_unavailable"):
+        policy.select_new()
+
+
 def test_public_request_schema_has_no_runtime_selector() -> None:
     assert "runtime_version" not in SendMessageRequest.model_fields
 

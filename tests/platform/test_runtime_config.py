@@ -45,6 +45,27 @@ def test_production_profile_accepts_explicit_secure_configuration():
     config.validate_runtime_security()
 
 
+def test_local_v2_profile_is_limited_to_local_candidate_deployments():
+    config = Settings(
+        env="development",
+        deployment_environment="production",
+        agent_runtime_profile="local-v2",
+        _env_file=None,
+    )
+    with pytest.raises(RuntimeError, match="local-use or release-candidate"):
+        config.validate_runtime_security()
+
+
+def test_local_v2_profile_accepts_local_use():
+    config = Settings(
+        env="development",
+        deployment_environment="local-use",
+        agent_runtime_profile="local-v2",
+        _env_file=None,
+    )
+    config.validate_runtime_security()
+
+
 def test_production_profile_rejects_enabled_telemetry_without_exporter():
     config = Settings(
         env="production",

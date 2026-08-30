@@ -155,6 +155,25 @@ def _build_runtime_policy(app: FastAPI, *, v2_engine_available: bool) -> Runtime
         model_config_approved=settings.agent_v2_model_config_approved,
         emergency_stop=settings.agent_v2_emergency_stop,
     )
+    if settings.agent_runtime_profile == "local-v2":
+        local_eligibility = RuntimeEligibility(
+            deployment_compatible=settings.deployment_environment
+            in {"local-use", "release-candidate"},
+            v2_engine_available=v2_engine_available,
+            official_saver_available=v2_engine_available,
+            accepted_head_available=False,
+            model_config_approved=bool(settings.deepseek_api_key.strip()),
+            memory_embedding_available=bool(settings.memory_embedding_api_key.strip()),
+            emergency_stop=settings.agent_v2_emergency_stop,
+        )
+        return RuntimeSelectionPolicy(
+            required_v2=True,
+            control=control,
+            eligibility=local_eligibility,
+            assignment_observer=(
+                observability.observe_runtime_assignment if observability is not None else None
+            ),
+        )
     return RuntimeSelectionPolicy(
         control=control,
         eligibility=eligibility,

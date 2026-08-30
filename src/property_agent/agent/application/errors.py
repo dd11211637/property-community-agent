@@ -17,6 +17,7 @@ class AgentSessionErrorCode(StrEnum):
     CONFIRMATION_EXPIRED = "CONFIRMATION_EXPIRED"
     CONFIRMATION_PARAMS_CHANGED = "CONFIRMATION_PARAMS_CHANGED"
     CONVERSATION_BUSY = "CONVERSATION_BUSY"
+    RUNTIME_UNAVAILABLE = "RUNTIME_UNAVAILABLE"
 
 
 _DEFAULT_MESSAGES = {
@@ -29,6 +30,7 @@ _DEFAULT_MESSAGES = {
     AgentSessionErrorCode.CONFIRMATION_EXPIRED: "确认已超时失效，请重新发起并确认。",
     AgentSessionErrorCode.CONFIRMATION_PARAMS_CHANGED: "操作内容已变化，请重新确认。",
     AgentSessionErrorCode.CONVERSATION_BUSY: "该会话正在被另一个请求处理，请稍后重试。",
+    AgentSessionErrorCode.RUNTIME_UNAVAILABLE: "Agent V2 运行时尚未就绪，请稍后再试。",
 }
 
 _STATUS_CODES = {
@@ -41,6 +43,7 @@ _STATUS_CODES = {
     AgentSessionErrorCode.CONFIRMATION_EXPIRED: 409,
     AgentSessionErrorCode.CONFIRMATION_PARAMS_CHANGED: 409,
     AgentSessionErrorCode.CONVERSATION_BUSY: 409,
+    AgentSessionErrorCode.RUNTIME_UNAVAILABLE: 503,
 }
 
 

@@ -40,6 +40,7 @@ class EligibilityReason(StrEnum):
     OFFICIAL_SAVER_UNAVAILABLE = "official_saver_unavailable"
     ACCEPTED_HEAD_UNAVAILABLE = "accepted_head_unavailable"
     MODEL_CONFIG_UNAPPROVED = "model_config_unapproved"
+    MEMORY_EMBEDDING_UNAVAILABLE = "memory_embedding_unavailable"
     COMMUNITY_POLICY_EXCLUDED = "community_policy_excluded"
 
 
@@ -50,6 +51,7 @@ class BucketDecisionClass(StrEnum):
     ROLLOUT_ZERO = "rollout_zero"
     BUCKET_V1 = "bucket_v1"
     BUCKET_V2 = "bucket_v2"
+    LOCAL_V2_DEFAULT = "local_v2_default"
 
 
 class RolloutChangeReason(StrEnum):
@@ -71,6 +73,7 @@ class RuntimeEligibility:
     official_saver_available: bool = False
     accepted_head_available: bool = True
     model_config_approved: bool = False
+    memory_embedding_available: bool = True
     community_policy_included: bool = True
     emergency_stop: bool = False
 
@@ -83,6 +86,10 @@ class RuntimeEligibility:
             (not self.official_saver_available, EligibilityReason.OFFICIAL_SAVER_UNAVAILABLE),
             (not self.accepted_head_available, EligibilityReason.ACCEPTED_HEAD_UNAVAILABLE),
             (not self.model_config_approved, EligibilityReason.MODEL_CONFIG_UNAPPROVED),
+            (
+                not self.memory_embedding_available,
+                EligibilityReason.MEMORY_EMBEDDING_UNAVAILABLE,
+            ),
             (not self.community_policy_included, EligibilityReason.COMMUNITY_POLICY_EXCLUDED),
         )
         for failed, reason in checks:

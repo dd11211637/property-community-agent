@@ -92,6 +92,7 @@ class Settings(BaseSettings):
     agent_v2_new_conversation_fallback_runtime: str = "v1"
     agent_v2_emergency_stop: bool = False
     agent_v2_model_config_approved: bool = False
+    agent_runtime_profile: Literal["public-rollout", "local-v2"] = "public-rollout"
     # Model/prompt approval identity is derived from the shared production
     # ModelReleaseIdentity (property_agent.agent.model_release), not operator env,
     # so a rollout is bound to the certified model execution contract and readiness
@@ -124,6 +125,14 @@ class Settings(BaseSettings):
 
     def validate_runtime_security(self) -> None:
         """Reject development credentials when the production profile is selected."""
+        if self.agent_runtime_profile == "local-v2" and self.deployment_environment not in {
+            "local-use",
+            "release-candidate",
+        }:
+            raise RuntimeError(
+                "Unsafe runtime configuration: AGENT_RUNTIME_PROFILE=local-v2 is limited "
+                "to local-use or release-candidate deployments"
+            )
         if self.env.strip().lower() != "production":
             return
 

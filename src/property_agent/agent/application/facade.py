@@ -25,10 +25,12 @@ from property_agent.agent.application.conversation_service import (
     ConversationService,
     ConversationSnapshot,
 )
+from property_agent.agent.application.errors import AgentSessionError, AgentSessionErrorCode
 from property_agent.agent.application.graph_engine import GraphEngine
 from property_agent.agent.application.runner import AgentSessionRunner
 from property_agent.agent.runtime_version import (
     AgentRuntimeVersion,
+    RequiredRuntimeUnavailable,
     RuntimeSelectionPolicy,
 )
 
@@ -108,15 +110,21 @@ class AgentRuntimeFacadeImpl:
         context: AgentContext,
         conversation_id: str,
     ) -> tuple[GraphEngine | None, str]:
-        version = (
-            self._policy.select_for(existing.runtime_version)
-            if existing is not None
-            else self._policy.select_new(
-                community_id=context.community_id,
-                actor_id=context.actor_id,
-                conversation_id=conversation_id,
+        try:
+            version = (
+                self._policy.select_for(existing.runtime_version)
+                if existing is not None
+                else self._policy.select_new(
+                    community_id=context.community_id,
+                    actor_id=context.actor_id,
+                    conversation_id=conversation_id,
+                )
             )
-        )
+        except RequiredRuntimeUnavailable as exc:
+            raise AgentSessionError(
+                AgentSessionErrorCode.RUNTIME_UNAVAILABLE,
+                f"Agent V2 运行时尚未就绪（{exc.reason.value}）。",
+            ) from exc
         if version == AgentRuntimeVersion.V2 and self._v2_engine is None:
             raise RuntimeError("pinned v2 runtime is unavailable")
         return (self._v2_engine if version == AgentRuntimeVersion.V2 else None, version.value)
