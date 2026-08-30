@@ -2,7 +2,9 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Query
+from sqlalchemy.orm import Session
 
+from property_agent.platform.infrastructure.database import get_db
 from property_agent.platform.schemas import Envelope
 from property_agent.repair.adapters.api.dependencies import get_request_context, get_service
 from property_agent.repair.adapters.api.response_schemas import (
@@ -20,7 +22,8 @@ from property_agent.repair.adapters.api.schemas import (
     ReworkRequest,
     VersionedActionRequest,
 )
-from property_agent.repair.adapters.presentation import timeline_entry_data, work_order_data
+from property_agent.repair.adapters.api.work_order_presenter import WorkOrderPresenter
+from property_agent.repair.adapters.presentation import timeline_entry_data
 from property_agent.repair.application.commands import (
     CreateReviewCommand,
     CreateWorkOrderCommand,
@@ -37,6 +40,13 @@ ContextDependency = Annotated[RequestContext, Depends(get_request_context)]
 IdempotencyHeader = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)]
 
 
+def get_work_order_presenter(db: Session = Depends(get_db)) -> WorkOrderPresenter:  # noqa: B008
+    return WorkOrderPresenter(db)
+
+
+PresenterDependency = Annotated[WorkOrderPresenter, Depends(get_work_order_presenter)]
+
+
 def _success(data, context: RequestContext) -> Envelope:
     return Envelope(success=True, data=data, error=None, request_id=context.request_id)
 
@@ -47,6 +57,7 @@ def create_work_order(
     idempotency_key: IdempotencyHeader,
     service: ServiceDependency,
     context: ContextDependency,
+    presenter: PresenterDependency,
 ) -> Envelope:
     work_order = service.create(
         CreateWorkOrderCommand(
@@ -61,13 +72,14 @@ def create_work_order(
         context,
         idempotency_key=idempotency_key,
     )
-    return _success(work_order_data(work_order, service, context), context)
+    return _success(presenter.present(work_order, service, context), context)
 
 
 @router.get("", response_model=WorkOrderListEnvelope)
 def search_work_orders(
     service: ServiceDependency,
     context: ContextDependency,
+    presenter: PresenterDependency,
     house_id: UUID | None = None,
     status: Annotated[list[str] | None, Query()] = None,
     assigned_to_me: bool = False,
@@ -86,7 +98,7 @@ def search_work_orders(
     )
     return _success(
         {
-            "items": [work_order_data(item, service, context) for item in results],
+            "items": presenter.present_many(results, service, context),
             "limit": limit,
             "offset": offset,
         },
@@ -99,9 +111,10 @@ def get_work_order(
     work_order_id: UUID,
     service: ServiceDependency,
     context: ContextDependency,
+    presenter: PresenterDependency,
 ) -> Envelope:
     result = service.get(work_order_id, context)
-    return _success(work_order_data(result, service, context), context)
+    return _success(presenter.present(result, service, context), context)
 
 
 @router.get("/{work_order_id}/timeline", response_model=WorkOrderTimelineEnvelope)
@@ -120,11 +133,12 @@ def _execute(
     idempotency_key: str,
     service: WorkOrderService,
     context: RequestContext,
+    presenter: WorkOrderPresenter,
 ) -> Envelope:
     result = service.execute_action(
         work_order_id, command, context, idempotency_key=idempotency_key
     )
-    return _success(work_order_data(result, service, context), context)
+    return _success(presenter.present(result, service, context), context)
 
 
 @router.post("/{work_order_id}/actions/assign", response_model=WorkOrderEnvelope)
@@ -134,6 +148,7 @@ def assign_work_order(
     idempotency_key: IdempotencyHeader,
     service: ServiceDependency,
     context: ContextDependency,
+    presenter: PresenterDependency,
 ) -> Envelope:
     return _execute(
         work_order_id,
@@ -145,6 +160,7 @@ def assign_work_order(
         idempotency_key,
         service,
         context,
+        presenter,
     )
 
 
@@ -155,6 +171,7 @@ def accept_work_order(
     idempotency_key: IdempotencyHeader,
     service: ServiceDependency,
     context: ContextDependency,
+    presenter: PresenterDependency,
 ) -> Envelope:
     return _execute(
         work_order_id,
@@ -162,6 +179,7 @@ def accept_work_order(
         idempotency_key,
         service,
         context,
+        presenter,
     )
 
 
@@ -172,6 +190,7 @@ def reject_work_order(
     idempotency_key: IdempotencyHeader,
     service: ServiceDependency,
     context: ContextDependency,
+    presenter: PresenterDependency,
 ) -> Envelope:
     return _execute(
         work_order_id,
@@ -183,6 +202,7 @@ def reject_work_order(
         idempotency_key,
         service,
         context,
+        presenter,
     )
 
 
@@ -193,6 +213,7 @@ def record_progress(
     idempotency_key: IdempotencyHeader,
     service: ServiceDependency,
     context: ContextDependency,
+    presenter: PresenterDependency,
 ) -> Envelope:
     return _execute(
         work_order_id,
@@ -207,6 +228,7 @@ def record_progress(
         idempotency_key,
         service,
         context,
+        presenter,
     )
 
 
@@ -217,6 +239,7 @@ def submit_completion(
     idempotency_key: IdempotencyHeader,
     service: ServiceDependency,
     context: ContextDependency,
+    presenter: PresenterDependency,
 ) -> Envelope:
     current = service.get(work_order_id, context)
     action = (
@@ -235,6 +258,7 @@ def submit_completion(
         idempotency_key,
         service,
         context,
+        presenter,
     )
 
 
@@ -245,6 +269,7 @@ def verify_pass(
     idempotency_key: IdempotencyHeader,
     service: ServiceDependency,
     context: ContextDependency,
+    presenter: PresenterDependency,
 ) -> Envelope:
     return _execute(
         work_order_id,
@@ -254,6 +279,7 @@ def verify_pass(
         idempotency_key,
         service,
         context,
+        presenter,
     )
 
 
@@ -264,6 +290,7 @@ def request_rework(
     idempotency_key: IdempotencyHeader,
     service: ServiceDependency,
     context: ContextDependency,
+    presenter: PresenterDependency,
 ) -> Envelope:
     return _execute(
         work_order_id,
@@ -275,6 +302,7 @@ def request_rework(
         idempotency_key,
         service,
         context,
+        presenter,
     )
 
 
@@ -285,6 +313,7 @@ def create_review(
     idempotency_key: IdempotencyHeader,
     service: ServiceDependency,
     context: ContextDependency,
+    presenter: PresenterDependency,
 ) -> Envelope:
     result = service.create_review(
         work_order_id,
@@ -292,4 +321,4 @@ def create_review(
         context,
         idempotency_key=idempotency_key,
     )
-    return _success(work_order_data(result, service, context), context)
+    return _success(presenter.present(result, service, context), context)

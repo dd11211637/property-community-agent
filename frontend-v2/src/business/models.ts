@@ -4,6 +4,9 @@ export type WorkOrder = {
   id: string;
   number: string;
   houseId: string;
+  houseDisplay: string | null;
+  reporterId: string;
+  reporterName: string | null;
   category: string;
   location: string;
   description: string;
@@ -11,6 +14,7 @@ export type WorkOrder = {
   status: string;
   version: number;
   assigneeId: string | null;
+  assigneeName: string | null;
   hasReview: boolean;
   availableActions: string[];
   createdAt: string;
@@ -146,6 +150,9 @@ export function parseWorkOrder(value: unknown): WorkOrder {
     id: text(item.id, "workOrder.id"),
     number: text(item.business_no, "workOrder.business_no"),
     houseId: text(item.house_id, "workOrder.house_id"),
+    houseDisplay: optionalText(item.house_display),
+    reporterId: text(item.reporter_id, "workOrder.reporter_id"),
+    reporterName: optionalText(item.reporter_name),
     category: text(item.category, "workOrder.category"),
     location: text(item.location, "workOrder.location"),
     description: text(item.description, "workOrder.description"),
@@ -153,6 +160,7 @@ export function parseWorkOrder(value: unknown): WorkOrder {
     status: text(item.status, "workOrder.status"),
     version: integer(item.version, "workOrder.version"),
     assigneeId: optionalText(item.assignee_id),
+    assigneeName: optionalText(item.assignee_name),
     hasReview: item.has_review === true,
     availableActions: strings(item.available_actions),
     createdAt: dateText(item.created_at),

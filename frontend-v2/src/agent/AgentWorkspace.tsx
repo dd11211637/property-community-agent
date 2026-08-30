@@ -103,13 +103,19 @@ export function AgentWorkspace() {
     ]);
     const recovered = await service.getConversation(id).catch(() => null);
     dispatch({ type: "restore-confirmation", confirmation: recovered?.pendingConfirmation ?? null });
+    return recovered;
   };
 
   const submit = async () => {
     const text = draft.trim();
     if (!text || session.status !== "authenticated") return;
     const id = conversationId ?? crypto.randomUUID();
-    if (!conversationId) navigate(`/agent/conversations/${id}`);
+    let revealed = Boolean(conversationId);
+    const revealConversation = () => {
+      if (revealed) return;
+      revealed = true;
+      navigate(`/agent/conversations/${id}`, { replace: true });
+    };
     const controller = runtime.createController();
     active.current = controller;
     setStreaming(true);
@@ -123,11 +129,13 @@ export function AgentWorkspace() {
       };
       if (compatibilityMode) {
         const result = await service.sendMessage(id, body, controller.signal);
+        revealConversation();
         dispatch({ type: "turn", turn: result });
         await reconcileTrustedFacts(queryClient, result.facts);
       } else {
         let terminal = false;
         for await (const event of service.streamMessage(id, body, controller.signal)) {
+          revealConversation();
           dispatch({ type: "event", event });
           if (event.event === "facts") await reconcileTrustedFacts(queryClient, event.data.facts);
           if (event.event === "turn" && event.data.facts) await reconcileTrustedFacts(queryClient, event.data.facts);
@@ -135,7 +143,8 @@ export function AgentWorkspace() {
         }
         if (!terminal) {
           dispatch({ type: "fail", message: "流连接已结束，正在核对权威会话状态。", uncertain: true });
-          await refreshAuthority(id);
+          const recovered = await refreshAuthority(id);
+          if (recovered) revealConversation();
         }
       }
       await refreshAuthority(id);
@@ -252,8 +261,7 @@ export function ResidentAgentEntry() {
     <div className={styles.cardHeading}><Bot /><div><strong>询问真实社区 Agent</strong><p>业务结果将以可信结构化卡片呈现；自然语言回复本身不代表操作成功。</p></div></div>
     <Textarea rows={3} maxLength={2000} value={text} onChange={(event) => setText(event.target.value)} aria-label="向社区 Agent 提问" placeholder="例如：帮我报修厨房漏水" />
     <Button tone="primary" disabled={!text.trim()} onClick={() => {
-      const id = crypto.randomUUID();
-      navigate(`/agent/conversations/${id}`, { state: { initialText: text.trim(), autoSubmit: true } });
+      navigate("/agent", { state: { initialText: text.trim(), autoSubmit: true } });
     }}><Send size={16} />开始对话</Button>
   </Card>;
 }

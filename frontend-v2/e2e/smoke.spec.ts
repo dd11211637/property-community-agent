@@ -79,6 +79,9 @@ async function installAuthTransport(page: Page) {
     id: "wo-1",
     business_no: "BX-2026-001",
     house_id: "house-a",
+    house_display: "1栋 1单元 101室",
+    reporter_id: "actor-resident",
+    reporter_name: "真实居民",
     category: "WATER_PLUMBING",
     location: "厨房",
     description: "水槽持续渗水",
@@ -86,6 +89,7 @@ async function installAuthTransport(page: Page) {
     status: state.workOrderVersion > 1 ? "IN_PROGRESS" : "PENDING_ASSIGNMENT",
     version: state.workOrderVersion,
     assignee_id: state.workOrderVersion > 1 ? "worker-1" : null,
+    assignee_name: state.workOrderVersion > 1 ? "维修人员" : null,
     has_review: false,
     available_actions:
       state.workOrderVersion > 1
@@ -728,6 +732,9 @@ test("message center marks one message read and deep-links to business context",
   await expect(
     page.getByRole("heading", { name: "BX-2026-001" }),
   ).toBeVisible();
+  await expect(page.getByText("真实居民", { exact: true })).toBeVisible();
+  await expect(page.getByText("1栋 1单元 101室", { exact: true })).toBeVisible();
+  await expect(page.getByText("待分派", { exact: true })).toBeVisible();
 });
 
 test("resident is forbidden from admin while manager sees truthful service states", async ({

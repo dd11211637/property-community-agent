@@ -2714,6 +2714,8 @@ export interface components {
         WorkOrderResponse: {
             /** Assignee Id */
             assignee_id: string | null;
+            /** Assignee Name */
+            assignee_name?: string | null;
             /** Available Actions */
             available_actions: string[];
             /** Business No */
@@ -2733,6 +2735,8 @@ export interface components {
             description: string;
             /** Has Review */
             has_review: boolean;
+            /** House Display */
+            house_display?: string | null;
             /**
              * House Id
              * Format: uuid
@@ -2750,6 +2754,8 @@ export interface components {
              * Format: uuid
              */
             reporter_id: string;
+            /** Reporter Name */
+            reporter_name?: string | null;
             /** Status */
             status: string;
             /** Updated At */

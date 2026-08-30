@@ -4619,6 +4619,17 @@
             ],
             "title": "Assignee Id"
           },
+          "assignee_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee Name"
+          },
           "available_actions": {
             "items": {
               "type": "string"
@@ -4662,6 +4673,17 @@
             "title": "Has Review",
             "type": "boolean"
           },
+          "house_display": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "House Display"
+          },
           "house_id": {
             "format": "uuid",
             "title": "House Id",
@@ -4680,6 +4702,17 @@
             "format": "uuid",
             "title": "Reporter Id",
             "type": "string"
+          },
+          "reporter_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reporter Name"
           },
           "status": {
             "title": "Status",

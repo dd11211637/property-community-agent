@@ -289,6 +289,7 @@ export function RealRepairDetailPage() {
       filters: { role: "REPAIR_WORKER" },
     }),
     queryFn: ({ signal }) => client.listStaff("REPAIR_WORKER", signal),
+    enabled: staffMode,
   });
   const mutation = useMutation({
     mutationFn: async ({
@@ -401,8 +402,20 @@ export function RealRepairDetailPage() {
                 <DetailGrid
                   entries={[
                     ["位置", item.location],
-                    ["房屋", item.houseId],
-                    ["处理人", item.assigneeId],
+                    ["房屋", item.houseDisplay ?? "房屋信息未解析"],
+                    [
+                      "报修人",
+                      item.reporterName ??
+                        (session.status === "authenticated" &&
+                        session.actor.id === item.reporterId
+                          ? session.actor.displayName
+                          : "用户信息未解析"),
+                    ],
+                    [
+                      "处理人",
+                      item.assigneeName ??
+                        (item.assigneeId ? "人员信息未解析" : "待分派"),
+                    ],
                     ["版本", item.version],
                     ["更新时间", formatDate(item.updatedAt)],
                   ]}

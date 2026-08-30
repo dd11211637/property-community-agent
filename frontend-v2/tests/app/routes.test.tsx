@@ -164,6 +164,7 @@ describe("real runtime boundary", () => {
     const user = userEvent.setup();
     const store = createInMemorySessionStore(session(["RESIDENT"]));
     let created = false;
+    let prematureStatusReads = 0;
     const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       const headers = new Headers(init?.headers);
@@ -178,7 +179,10 @@ describe("real runtime boundary", () => {
         );
       }
       if (url.includes("/api/agent/conversations/") && !url.endsWith("/messages")) {
-        if (!created) return new Response(JSON.stringify({ success: false, data: null, error: { code: "NOT_FOUND", message: "missing" }, request_id: "r" }), { status: 404 });
+        if (!created) {
+          prematureStatusReads += 1;
+          return new Response(JSON.stringify({ success: false, data: null, error: { code: "NOT_FOUND", message: "missing" }, request_id: "r" }), { status: 404 });
+        }
         const id = url.split("/").at(-1)!;
         return new Response(JSON.stringify({ success: true, data: { conversation_id: id, status: "ACTIVE", current_house_id: "house-a", handover_required: false, pending_confirmation: null }, error: null, request_id: "r" }), { status: 200 });
       }
@@ -197,6 +201,8 @@ describe("real runtime boundary", () => {
     await user.type(screen.getByLabelText("发送给 Agent"), "厨房漏水");
     await user.click(screen.getByRole("button", { name: "发送" }));
     expect(await screen.findByText("WX-1")).toBeVisible();
+    await waitFor(() => expect(prematureStatusReads).toBe(0));
+    expect(screen.queryByText("missing")).not.toBeInTheDocument();
     expect(screen.queryByText("卫生间顶部渗水")).not.toBeInTheDocument();
   });
 });

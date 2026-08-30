@@ -16,13 +16,16 @@ class WorkOrderResponse(PresentationModel):
     business_no: str
     community_id: UUID
     house_id: UUID
+    house_display: str | None = None
     reporter_id: UUID
+    reporter_name: str | None = None
     category: str
     location: str
     description: str
     urgency: str
     status: str
     assignee_id: UUID | None
+    assignee_name: str | None = None
     version: int
     available_actions: list[str]
     has_review: bool

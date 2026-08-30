@@ -217,6 +217,10 @@ def test_create_work_order_through_the_assembled_app(seeded, client) -> None:
     data = body["data"]
     assert data["status"] == "PENDING_ASSIGNMENT"
     assert data["house_id"] == str(HOUSE)
+    assert data["house_display"] == "3栋 1单元 702室"
+    assert data["reporter_id"] == str(RESIDENT)
+    assert data["reporter_name"] == "住户"
+    assert data["assignee_name"] is None
 
     with seeded() as session:
         stored = session.get(WorkOrderModel, UUID(data["id"]))

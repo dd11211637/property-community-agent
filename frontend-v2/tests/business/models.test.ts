@@ -16,6 +16,9 @@ describe("business response parsers", () => {
       id: "wo-1",
       business_no: "BX-001",
       house_id: "house-a",
+      house_display: "1栋 1单元 101室",
+      reporter_id: "resident-1",
+      reporter_name: "张三",
       category: "ELECTRICAL",
       location: "厨房",
       description: "跳闸",
@@ -23,6 +26,7 @@ describe("business response parsers", () => {
       status: "PENDING_ASSIGNMENT",
       version: 2,
       assignee_id: null,
+      assignee_name: null,
       has_review: false,
       available_actions: ["ASSIGN"],
       created_at: "2026-01-01T00:00:00Z",
@@ -33,6 +37,8 @@ describe("business response parsers", () => {
       number: "BX-001",
       version: 2,
       availableActions: ["ASSIGN"],
+      reporterName: "张三",
+      houseDisplay: "1栋 1单元 101室",
     });
   });
 
