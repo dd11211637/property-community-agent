@@ -19,18 +19,18 @@ const shared = {
   messages: ["/messages", "消息中心", Bell] as NavItem,
 };
 
-function navigationFor(workspace: WorkspaceKind): NavGroup[] {
+function navigationFor(workspace: WorkspaceKind, roles: readonly string[]): NavGroup[] {
   if (workspace === "admin") return [
     { title: "运营概览", items: [shared.agent, ["/admin", "管理工作台", Gauge]] },
     { title: "业务调度", items: [shared.repairs, shared.announcements, shared.inspection] },
     { title: "协作", items: [shared.messages] },
   ];
   if (workspace === "maintenance") return [
-    { title: "今日工作", items: [shared.agent, shared.repairs, shared.inspection] },
+    { title: "今日工作", items: [shared.agent, shared.repairs, ...(roles.includes("CUSTOMER_SERVICE") ? [shared.announcements] : []), ...(roles.some((role) => ["SECURITY_GUARD", "SECURITY_STAFF", "DUTY_STAFF"].includes(role)) ? [shared.inspection] : [])] },
     { title: "协作", items: [shared.messages] },
   ];
   return [
-    { title: "我的社区", items: [shared.agent, shared.repairs, ["/billing", "账单费用", ReceiptText], shared.announcements] },
+    { title: "我的社区", items: [shared.agent, shared.repairs, ["/billing", "账单费用", ReceiptText], shared.announcements, ["/inspection", "安全事件上报", ClipboardCheck, "巡检与事件"]] },
     { title: "服务消息", items: [shared.messages] },
   ];
 }
@@ -39,7 +39,7 @@ export function AppShell() {
   const { session, logout, selectHouse } = useAuth();
   const [open, setOpen] = useState(false);
   const workspace = workspaceFor(session?.actor.roles);
-  const navigation = navigationFor(workspace);
+  const navigation = navigationFor(workspace, session?.actor.roles ?? []);
   return (
     <div className={`app-shell workspace-${workspace}`}>
       <EnvironmentBadge />

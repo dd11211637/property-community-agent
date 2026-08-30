@@ -52,7 +52,7 @@ test("住户登录后可查看真实账单并通过 Agent 查询", async ({ page
   expect(streamBody).toContain("event: done");
   await expect(page.locator(".message.assistant").last()).toContainText(/账单|查询/);
   const firstAgentBill = page.locator(".agent-facts").first();
-  await expect(firstAgentBill).toContainText("账单号");
+  await expect(firstAgentBill).toContainText("当前房屋账单");
   await expect(firstAgentBill).toContainText("¥430.00");
   await expect(firstAgentBill).not.toContainText("¥-");
 });
@@ -186,7 +186,7 @@ test("报修信息不完整时可逐步点击选项补全", async ({ page }) => 
 test("可使用业务工单号查询真实状态和进度", async ({ page }) => {
   await login(page, "zhangsan");
   await page.getByRole("link", { name: "报修服务" }).click();
-  const businessNumberText = await page.locator(".entity-card small").first().innerText();
+  const businessNumberText = await page.locator(".repair-item small").first().innerText();
   const businessNumber = businessNumberText.match(/WX-[A-Z0-9-]+/)?.[0];
   expect(businessNumber).toBeTruthy();
 
@@ -196,7 +196,7 @@ test("可使用业务工单号查询真实状态和进度", async ({ page }) => 
   await waitForAgent(page);
   const result = page.locator(".agent-facts").last();
   await expect(result).toContainText(businessNumber!, { timeout: 15_000 });
-  await expect(result).toContainText(/等待|处理中|返工|完成/, { timeout: 15_000 });
+  await expect(result).toContainText(/待接单|等待|处理中|返工|完成/, { timeout: 15_000 });
 });
 
 test("多房屋住户必须选择房屋且切换后服务可用", async ({ page }) => {
@@ -219,13 +219,13 @@ test("管理者看到真实聚合工作台，住户访问则被拒绝", async ({
   await login(managerPage, "manager");
   await managerPage.getByRole("link", { name: "管理工作台" }).click();
   await expect(managerPage.getByRole("heading", { name: "管理工作台" })).toBeVisible();
-  await expect(managerPage.getByText("集成健康")).toBeVisible();
+  await expect(managerPage.getByText("服务支撑状态")).toBeVisible();
   await managerContext.close();
 
   const residentContext = await browser.newContext();
   const residentPage = await residentContext.newPage();
   await login(residentPage, "zhangsan");
-  await residentPage.getByRole("link", { name: "管理工作台" }).click();
+  await residentPage.goto("/admin");
   await expect(residentPage.getByRole("alert")).toContainText(/无权|权限|角色|禁止/);
   await residentContext.close();
 });
@@ -273,7 +273,7 @@ test("住户创建财务咨询后刷新仍可见并可提交", async ({ page }) 
   await expect(page.getByText(marker)).toBeVisible();
   await page.getByText(marker).click();
   await page.getByRole("button", { name: "提交咨询" }).click();
-  await expect(page.getByRole("button", { name: new RegExp(`SUBMITTED ${marker}`) })).toBeVisible();
+  await expect(page.getByRole("button", { name: new RegExp(`待复核.*${marker}`) })).toBeVisible();
 });
 
 test("住户可人工上报安防事件且刷新后状态保留", async ({ page }) => {
@@ -304,7 +304,7 @@ test("客服创建公告草稿并送审，管理者可看到待审核状态", as
   await expect(customerPage.getByRole("heading", { name: title }).last()).toBeVisible();
   await customerPage.getByRole("button", { name: "送审" }).click();
   await customerPage.getByRole("dialog").getByRole("button", { name: "确认操作" }).click();
-  await expect(customerPage.getByRole("button", { name: new RegExp(`PENDING_REVIEW ${title}`) })).toBeVisible();
+  await expect(customerPage.getByRole("button", { name: new RegExp(`待审核.*${title}`) })).toBeVisible();
   await customerContext.close();
 
   const managerContext = await browser.newContext();
@@ -339,7 +339,7 @@ test("报修跨角色完成派单、返工、验收和评价闭环", async ({ br
   const assignDialog = managerPage.getByRole("dialog");
   await assignDialog.getByLabel("维修人员").selectOption({ label: "维修工老张" });
   await assignDialog.getByRole("button", { name: "确认操作" }).click();
-  await expect(managerPage.getByText("PENDING_ACCEPTANCE", { exact: true }).last()).toBeVisible();
+  await expect(managerPage.getByText("待接单", { exact: true }).last()).toBeVisible();
   await managerContext.close();
 
   const workerContext = await browser.newContext();
@@ -384,7 +384,7 @@ test("报修跨角色完成派单、返工、验收和评价闭环", async ({ br
   await verifyPage.getByRole("button", { name: "评价" }).click();
   await verifyPage.getByRole("dialog").getByLabel("评价内容").fill("维修完成，服务态度良好。");
   await verifyPage.getByRole("dialog").getByRole("button", { name: "确认操作" }).click();
-  await expect(verifyPage.getByText("CLOSED", { exact: true }).last()).toBeVisible();
+  await expect(verifyPage.getByText("已完成", { exact: true }).last()).toBeVisible();
   await verifyContext.close();
 });
 
@@ -412,20 +412,20 @@ test("公告跨角色完成创建、审核、二次确认发布", async ({ brows
   await managerPage.getByRole("button", { name: "确认发布" }).click();
   await expect(managerPage.getByRole("dialog").getByRole("button", { name: "二次确认并发布" })).toBeVisible();
   await managerPage.getByRole("dialog").getByRole("button", { name: "二次确认并发布" }).click();
-  await expect(managerPage.getByRole("button", { name: new RegExp(`PUBLISHED ${title}`) })).toBeVisible();
+  await expect(managerPage.getByRole("button", { name: new RegExp(`已发布.*${title}`) })).toBeVisible();
 
   const residentContext = await browser.newContext();
   const residentPage = await residentContext.newPage();
   await login(residentPage, "zhangsan");
   await residentPage.getByRole("link", { name: "社区公告" }).click();
-  await expect(residentPage.getByRole("button", { name: new RegExp(`PUBLISHED ${title}`) })).toBeVisible();
+  await expect(residentPage.getByRole("button", { name: new RegExp(`已发布.*${title}`) })).toBeVisible();
   await residentContext.close();
 
-  await managerPage.getByRole("button", { name: "撤回" }).click();
+  await managerPage.getByRole("button", { name: "撤回", exact: true }).click();
   const withdrawDialog = managerPage.getByRole("dialog");
   await withdrawDialog.getByLabel("撤回原因").fill("维护计划已调整，撤回后重新发布。");
   await withdrawDialog.getByRole("button", { name: "确认操作" }).click();
-  await expect(managerPage.getByRole("button", { name: new RegExp(`WITHDRAWN ${title}`) })).toBeVisible();
+  await expect(managerPage.getByRole("button", { name: new RegExp(`已撤回.*${title}`) })).toBeVisible();
   await managerContext.close();
 
   const hiddenContext = await browser.newContext();
@@ -459,14 +459,14 @@ test("公告驳回原因持久化且客服可看到驳回状态", async ({ brows
   const rejectDialog = managerPage.getByRole("dialog");
   await rejectDialog.getByLabel("驳回原因").fill("请补充影响楼栋和具体生效时间。");
   await rejectDialog.getByRole("button", { name: "确认操作" }).click();
-  await expect(managerPage.getByRole("button", { name: new RegExp(`REJECTED ${title}`) })).toBeVisible();
+  await expect(managerPage.getByRole("button", { name: new RegExp(`已驳回.*${title}`) })).toBeVisible();
   await managerContext.close();
 
   const verifyContext = await browser.newContext();
   const verifyPage = await verifyContext.newPage();
   await login(verifyPage, "customer_service");
   await verifyPage.getByRole("link", { name: "社区公告" }).click();
-  await expect(verifyPage.getByRole("button", { name: new RegExp(`REJECTED ${title}`) })).toBeVisible();
+  await expect(verifyPage.getByRole("button", { name: new RegExp(`已驳回.*${title}`) })).toBeVisible();
   await verifyContext.close();
 });
 
@@ -497,7 +497,7 @@ test("巡检任务跨角色完成创建、分派、记录和复核", async ({ br
   await guardPage.getByRole("dialog").getByRole("button", { name: "确认操作" }).click();
   await guardPage.getByRole("button", { name: "提交记录" }).click();
   const recordDialog = guardPage.getByRole("dialog");
-  await recordDialog.getByLabel("点位").fill("1栋大厅");
+  await recordDialog.getByLabel("点位", { exact: true }).fill("1栋大厅");
   await recordDialog.getByLabel("记录内容").fill("消防通道畅通，设备状态正常。");
   await recordDialog.getByRole("button", { name: "确认操作" }).click();
   await guardContext.close();
@@ -509,7 +509,7 @@ test("巡检任务跨角色完成创建、分派、记录和复核", async ({ br
   await reviewPage.getByRole("button", { name: new RegExp(title) }).click();
   await reviewPage.getByRole("button", { name: "复核完成" }).click();
   await reviewPage.getByRole("dialog").getByRole("button", { name: "确认操作" }).click();
-  await expect(reviewPage.getByRole("button", { name: new RegExp(`COMPLETED ${title}`) })).toBeVisible();
+  await expect(reviewPage.getByRole("button", { name: new RegExp(`已完成.*${title}`) })).toBeVisible();
   await reviewContext.close();
 });
 
@@ -562,7 +562,7 @@ test("安防事件支持退回后再次处置并完成复核", async ({ browser 
   await managerPage.getByRole("button", { name: new RegExp(location) }).click();
   await managerPage.getByRole("button", { name: "复核通过" }).click();
   await managerPage.getByRole("dialog").getByRole("button", { name: "确认复核通过" }).click();
-  await expect(managerPage.getByRole("button", { name: new RegExp(`CLOSED.*${location}`) })).toBeVisible();
+  await expect(managerPage.getByRole("button", { name: new RegExp(`已完成.*${location}`) })).toBeVisible();
   await managerContext.close();
 });
 
@@ -601,7 +601,7 @@ test("高风险安防事件必须先确认评级才能复核关闭", async ({ br
   await reporterPage.getByRole("dialog").getByRole("button", { name: "确认高风险评级" }).click();
   await reporterPage.getByRole("button", { name: "复核通过" }).click();
   await reporterPage.getByRole("dialog").getByRole("button", { name: "确认复核通过" }).click();
-  await expect(reporterPage.getByRole("button", { name: new RegExp(`CLOSED.*${location}`) })).toBeVisible();
+  await expect(reporterPage.getByRole("button", { name: new RegExp(`已完成.*${location}`) })).toBeVisible();
   await reporterContext.close();
 });
 
@@ -634,9 +634,9 @@ test("消息中心支持筛选、单条已读和全部已读", async ({ page }) 
 test("管理工作台展示失败消息、重试上限和人工接管", async ({ page }) => {
   await login(page, "manager");
   await page.getByRole("link", { name: "管理工作台" }).click();
-  const failedPanel = page.locator("section").filter({ has: page.getByRole("heading", { name: "失败消息与人工接管" }) });
-  await expect(failedPanel.getByText(/重试 5\/5/).first()).toBeVisible();
-  await expect(failedPanel.getByText(/接管状态：PENDING/).first()).toBeVisible();
+  const failedPanel = page.locator("section").filter({ has: page.getByRole("heading", { name: "需要人工接管的消息" }) });
+  await expect(failedPanel.getByText(/已尝试 5\/5 次/).first()).toBeVisible();
+  await expect(failedPanel.getByText(/待处理/).first()).toBeVisible();
   await expect(failedPanel.getByText(/备用联系：/).first()).not.toContainText("未配置");
 });
 
