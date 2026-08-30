@@ -12,6 +12,13 @@ from property_agent.agent.adapters.api.memory_schemas import (
     DeleteMemoryRequest,
     UpdateMemoryRequest,
 )
+from property_agent.agent.adapters.api.response_schemas import (
+    ConversationListEnvelope,
+    ConversationMessagesEnvelope,
+    DeletedMemoryEnvelope,
+    MemoryEnvelope,
+    MemoryListEnvelope,
+)
 from property_agent.agent.application.memory_service import AgentMemoryService
 from property_agent.agent.observed_boundaries import ObservedMemoryService
 from property_agent.platform.infrastructure.database import get_db
@@ -36,7 +43,7 @@ def _envelope(data: object, context: AgentRequestContext) -> Envelope:
     return Envelope(success=True, data=data, error=None, request_id=context.request_id)
 
 
-@router.get("/conversations", response_model=Envelope)
+@router.get("/conversations", response_model=ConversationListEnvelope)
 def list_conversations(
     context: ContextDep,
     service: MemoryServiceDep,
@@ -45,17 +52,20 @@ def list_conversations(
     return _envelope(service.list_conversations(context, limit=limit), context)
 
 
-@router.get("/conversations/{conversation_id}/messages", response_model=Envelope)
+@router.get(
+    "/conversations/{conversation_id}/messages",
+    response_model=ConversationMessagesEnvelope,
+)
 def list_messages(conversation_id: str, context: ContextDep, service: MemoryServiceDep) -> Envelope:
     return _envelope(service.list_messages(conversation_id, context), context)
 
 
-@router.get("/memories", response_model=Envelope)
+@router.get("/memories", response_model=MemoryListEnvelope)
 def list_memories(context: ContextDep, service: MemoryServiceDep) -> Envelope:
     return _envelope(service.list_memories(context), context)
 
 
-@router.post("/memories", response_model=Envelope)
+@router.post("/memories", response_model=MemoryEnvelope)
 def create_memory(
     payload: CreateMemoryRequest,
     context: ContextDep,
@@ -72,7 +82,7 @@ def create_memory(
     return _envelope(data, context)
 
 
-@router.patch("/memories/{memory_id}", response_model=Envelope)
+@router.patch("/memories/{memory_id}", response_model=MemoryEnvelope)
 def update_memory(
     memory_id: UUID,
     payload: UpdateMemoryRequest,
@@ -88,7 +98,7 @@ def update_memory(
     return _envelope(data, context)
 
 
-@router.delete("/memories/{memory_id}", response_model=Envelope)
+@router.delete("/memories/{memory_id}", response_model=DeletedMemoryEnvelope)
 def delete_memory(
     memory_id: UUID,
     payload: DeleteMemoryRequest,

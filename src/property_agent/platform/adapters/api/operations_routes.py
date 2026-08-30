@@ -15,6 +15,12 @@ from property_agent.platform.adapters.api.dependencies import (
     require_idempotency_key,
     require_role,
 )
+from property_agent.platform.adapters.api.operations_schemas import (
+    AdminDashboardEnvelope,
+    MarkAllReadEnvelope,
+    MessageEnvelope,
+    MessageListEnvelope,
+)
 from property_agent.platform.adapters.api.schemas import Envelope, StaffOptionResponse
 from property_agent.platform.application.message_admin_service import (
     AdminDashboardService,
@@ -63,7 +69,7 @@ def list_staff(
     return TypedEnvelope(success=True, data=data, request_id=context.request_id)
 
 
-@router.get("/api/messages", response_model=Envelope)
+@router.get("/api/messages", response_model=MessageListEnvelope)
 def list_messages(
     status: MessageStatus | None = None,
     business_type: BusinessType | None = None,
@@ -82,7 +88,7 @@ def list_messages(
     return Envelope(data=data, request_id=context.request_id)
 
 
-@router.post("/api/messages/read-all", response_model=Envelope)
+@router.post("/api/messages/read-all", response_model=MarkAllReadEnvelope)
 def mark_all_messages_read(
     context: RequestContext = Depends(get_current_user),  # noqa: B008
     idempotency_key: str = Depends(require_idempotency_key),  # noqa: B008
@@ -92,7 +98,7 @@ def mark_all_messages_read(
     return Envelope(data=data, request_id=context.request_id)
 
 
-@router.post("/api/messages/{message_id}/read", response_model=Envelope)
+@router.post("/api/messages/{message_id}/read", response_model=MessageEnvelope)
 def mark_message_read(
     message_id: UUID,
     context: RequestContext = Depends(get_current_user),  # noqa: B008
@@ -107,7 +113,7 @@ def mark_message_read(
     return Envelope(data=data, request_id=context.request_id)
 
 
-@router.get("/api/admin/dashboard", response_model=Envelope)
+@router.get("/api/admin/dashboard", response_model=AdminDashboardEnvelope)
 def admin_dashboard(
     context: RequestContext = Depends(require_role("MANAGER", "SYSTEM_ADMIN")),  # noqa: B008
     db: Session = Depends(get_db),  # noqa: B008

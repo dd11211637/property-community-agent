@@ -1239,11 +1239,154 @@ export interface components {
             /** Supplement Reason */
             supplement_reason?: string | null;
         };
+        /** AdminDashboardResponse */
+        AdminDashboardResponse: {
+            /** Failed Message Count */
+            failed_message_count: number;
+            /** Failed Messages */
+            failed_messages: components["schemas"]["MessageResponse"][];
+            /** High Risk Event Count */
+            high_risk_event_count: number;
+            /** High Risk Events */
+            high_risk_events: components["schemas"]["HighRiskEventResponse"][];
+            integration_health: components["schemas"]["IntegrationHealthResponse"];
+            /** Pending Count */
+            pending_count: number;
+            /** Pending Items */
+            pending_items: components["schemas"]["PendingHandoverResponse"][];
+        } & {
+            [key: string]: unknown;
+        };
+        /** AgentTurnResponse */
+        AgentTurnResponse: {
+            /** Agent Trace */
+            agent_trace: {
+                [key: string]: unknown;
+            } | {
+                [key: string]: unknown;
+            }[] | null;
+            /** Confidence */
+            confidence: number | null;
+            /** Conversation Id */
+            conversation_id: string;
+            /** Done */
+            done: boolean;
+            /** Error */
+            error: string | null;
+            /** Facts */
+            facts: {
+                [key: string]: unknown;
+            } | null;
+            /** Handover Required */
+            handover_required: boolean;
+            /** Intent */
+            intent: string | null;
+            /** Messages */
+            messages: {
+                [key: string]: unknown;
+            }[];
+            /** Missing Slots */
+            missing_slots: string[];
+            /** Operation Level */
+            operation_level: string | null;
+            pending_confirmation: components["schemas"]["PendingConfirmationResponse"] | null;
+            /** Reply */
+            reply: string;
+            /** Requested Slot */
+            requested_slot: string | null;
+            slot_prompt: components["schemas"]["SlotPromptResponse"] | null;
+            /** Status */
+            status: string;
+        } & {
+            [key: string]: unknown;
+        };
         /**
          * AnnouncementCategory
          * @enum {string}
          */
         AnnouncementCategory: "GENERAL" | "MAINTENANCE" | "SAFETY" | "EMERGENCY";
+        /** AnnouncementListResponse */
+        AnnouncementListResponse: {
+            /** Items */
+            items: components["schemas"]["AnnouncementResponse"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** AnnouncementResponse */
+        AnnouncementResponse: {
+            /** Audience Condition */
+            audience_condition: {
+                [key: string]: string[];
+            };
+            /** Available Actions */
+            available_actions: string[];
+            /** Body */
+            body: string;
+            /** Business No */
+            business_no: string;
+            /** Category */
+            category: string;
+            /**
+             * Community Id
+             * Format: uuid
+             */
+            community_id: string;
+            /** Created At */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Manager Recheck Required */
+            manager_recheck_required: boolean;
+            /** Published At */
+            published_at: string | null;
+            /** Scheduled At */
+            scheduled_at: string | null;
+            /** Status */
+            status: string;
+            /** Title */
+            title: string;
+            /** Updated At */
+            updated_at: string;
+            /** Version */
+            version: number;
+            /** Withdrawn At */
+            withdrawn_at: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** AnnouncementVersionResponse */
+        AnnouncementVersionResponse: {
+            /** Audience Condition */
+            audience_condition: {
+                [key: string]: string[];
+            };
+            /** Body */
+            body: string;
+            /** Category */
+            category: string;
+            /** Created At */
+            created_at: string;
+            /**
+             * Operator Id
+             * Format: uuid
+             */
+            operator_id: string;
+            /** Source */
+            source: string;
+            /** Title */
+            title: string;
+            /** Version No */
+            version_no: number;
+        } & {
+            [key: string]: unknown;
+        };
         /** AnswerConsultationRequest */
         AnswerConsultationRequest: {
             /** Answer */
@@ -1280,6 +1423,21 @@ export interface components {
             assignee_id: string;
             /** Expected Version */
             expected_version: number;
+        };
+        /** AudienceSnapshotResponse */
+        AudienceSnapshotResponse: {
+            /** Condition */
+            condition: {
+                [key: string]: string[];
+            };
+            /** Count */
+            count: number;
+            /** Generated At */
+            generated_at: string;
+            /** Samples */
+            samples: unknown[];
+        } & {
+            [key: string]: unknown;
         };
         /** BillDetailResponse */
         BillDetailResponse: {
@@ -1460,6 +1618,66 @@ export interface components {
             /** Version */
             version: number;
         };
+        /** ConversationMessageResponse */
+        ConversationMessageResponse: {
+            /** Content */
+            content: string;
+            /** Created At */
+            created_at: string;
+            /** House Id */
+            house_id: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Intent */
+            intent: string | null;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "user" | "assistant" | "system";
+        } & {
+            [key: string]: unknown;
+        };
+        /** ConversationStatusResponse */
+        ConversationStatusResponse: {
+            /** Conversation Id */
+            conversation_id: string;
+            /** Current House Id */
+            current_house_id: string | null;
+            /** Handover Required */
+            handover_required: boolean;
+            /** Handover Ticket Id */
+            handover_ticket_id: string | null;
+            /** Last Intent */
+            last_intent: string | null;
+            pending_confirmation: components["schemas"]["PendingConfirmationResponse"] | null;
+            /** Runtime Version */
+            runtime_version: string;
+            /** Status */
+            status: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** ConversationSummaryResponse */
+        ConversationSummaryResponse: {
+            /** Conversation Id */
+            conversation_id: string;
+            /** Current House Id */
+            current_house_id: string | null;
+            /** Last Intent */
+            last_intent: string | null;
+            /** Last Message At */
+            last_message_at: string | null;
+            /** Status */
+            status: string;
+            /** Title */
+            title: string;
+        } & {
+            [key: string]: unknown;
+        };
         /** CreateAnnouncementRequest */
         CreateAnnouncementRequest: {
             /** Audience Condition */
@@ -1559,6 +1777,20 @@ export interface components {
             /** Expected Version */
             expected_version: number;
         };
+        /** DeletedMemoryResponse */
+        DeletedMemoryResponse: {
+            /** Deleted */
+            deleted: boolean;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Version */
+            version: number;
+        } & {
+            [key: string]: unknown;
+        };
         /** EditAnnouncementRequest */
         EditAnnouncementRequest: {
             /** Audience Condition */
@@ -1574,6 +1806,51 @@ export interface components {
             scheduled_at?: string | null;
             /** Title */
             title: string;
+        };
+        /** Envelope[AdminDashboardResponse] */
+        Envelope_AdminDashboardResponse_: {
+            data?: components["schemas"]["AdminDashboardResponse"] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
+        };
+        /** Envelope[AgentTurnResponse] */
+        Envelope_AgentTurnResponse_: {
+            data?: components["schemas"]["AgentTurnResponse"] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
+        };
+        /** Envelope[AnnouncementListResponse] */
+        Envelope_AnnouncementListResponse_: {
+            data?: components["schemas"]["AnnouncementListResponse"] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
+        };
+        /** Envelope[AnnouncementResponse] */
+        Envelope_AnnouncementResponse_: {
+            data?: components["schemas"]["AnnouncementResponse"] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
+        };
+        /** Envelope[AudienceSnapshotResponse] */
+        Envelope_AudienceSnapshotResponse_: {
+            data?: components["schemas"]["AudienceSnapshotResponse"] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
         };
         /** Envelope[BillDetailResponse] */
         Envelope_BillDetailResponse_: {
@@ -1602,6 +1879,124 @@ export interface components {
             /** Success */
             success: boolean;
         };
+        /** Envelope[ConversationStatusResponse] */
+        Envelope_ConversationStatusResponse_: {
+            data?: components["schemas"]["ConversationStatusResponse"] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
+        };
+        /** Envelope[DeletedMemoryResponse] */
+        Envelope_DeletedMemoryResponse_: {
+            data?: components["schemas"]["DeletedMemoryResponse"] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
+        };
+        /** Envelope[InspectionTaskListResponse] */
+        Envelope_InspectionTaskListResponse_: {
+            data?: components["schemas"]["InspectionTaskListResponse"] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
+        };
+        /** Envelope[InspectionTaskResponse] */
+        Envelope_InspectionTaskResponse_: {
+            data?: components["schemas"]["InspectionTaskResponse"] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
+        };
+        /** Envelope[MarkAllReadResponse] */
+        Envelope_MarkAllReadResponse_: {
+            data?: components["schemas"]["MarkAllReadResponse"] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
+        };
+        /** Envelope[MemoryResponse] */
+        Envelope_MemoryResponse_: {
+            data?: components["schemas"]["MemoryResponse"] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
+        };
+        /** Envelope[MessageListResponse] */
+        Envelope_MessageListResponse_: {
+            data?: components["schemas"]["MessageListResponse"] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
+        };
+        /** Envelope[MessageResponse] */
+        Envelope_MessageResponse_: {
+            data?: components["schemas"]["MessageResponse"] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
+        };
+        /** Envelope[SecurityEventListResponse] */
+        Envelope_SecurityEventListResponse_: {
+            data?: components["schemas"]["SecurityEventListResponse"] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
+        };
+        /** Envelope[SecurityEventResponse] */
+        Envelope_SecurityEventResponse_: {
+            data?: components["schemas"]["SecurityEventResponse"] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
+        };
+        /** Envelope[WorkOrderListResponse] */
+        Envelope_WorkOrderListResponse_: {
+            data?: components["schemas"]["WorkOrderListResponse"] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
+        };
+        /** Envelope[WorkOrderResponse] */
+        Envelope_WorkOrderResponse_: {
+            data?: components["schemas"]["WorkOrderResponse"] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
+        };
+        /** Envelope[list[AnnouncementVersionResponse]] */
+        Envelope_list_AnnouncementVersionResponse__: {
+            /** Data */
+            data?: components["schemas"]["AnnouncementVersionResponse"][] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
+        };
         /** Envelope[list[BillResponse]] */
         Envelope_list_BillResponse__: {
             /** Data */
@@ -1622,10 +2017,60 @@ export interface components {
             /** Success */
             success: boolean;
         };
+        /** Envelope[list[ConversationMessageResponse]] */
+        Envelope_list_ConversationMessageResponse__: {
+            /** Data */
+            data?: components["schemas"]["ConversationMessageResponse"][] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
+        };
+        /** Envelope[list[ConversationSummaryResponse]] */
+        Envelope_list_ConversationSummaryResponse__: {
+            /** Data */
+            data?: components["schemas"]["ConversationSummaryResponse"][] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
+        };
+        /** Envelope[list[MemoryResponse]] */
+        Envelope_list_MemoryResponse__: {
+            /** Data */
+            data?: components["schemas"]["MemoryResponse"][] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
+        };
         /** Envelope[list[StaffOptionResponse]] */
         Envelope_list_StaffOptionResponse__: {
             /** Data */
             data?: components["schemas"]["StaffOptionResponse"][] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
+        };
+        /** Envelope[list[TimelineEntryResponse]] */
+        Envelope_list_TimelineEntryResponse__: {
+            /** Data */
+            data?: components["schemas"]["TimelineEntryResponse"][] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
+        };
+        /** Envelope[list[WorkOrderTimelineEntryResponse]] */
+        Envelope_list_WorkOrderTimelineEntryResponse__: {
+            /** Data */
+            data?: components["schemas"]["WorkOrderTimelineEntryResponse"][] | null;
             error?: components["schemas"]["ErrorBody"] | null;
             /** Request Id */
             request_id: string;
@@ -1657,6 +2102,26 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** HighRiskEventResponse */
+        HighRiskEventResponse: {
+            /** Business No */
+            business_no: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Location */
+            location: string;
+            /** Risk Level */
+            risk_level: string;
+            /** Status */
+            status: string;
+            /** Updated At */
+            updated_at: string;
+        } & {
+            [key: string]: unknown;
         };
         /** HouseSelectionRequest */
         HouseSelectionRequest: {
@@ -1690,6 +2155,73 @@ export interface components {
              * @description 单元
              */
             unit: string;
+        };
+        /** InspectionTaskListResponse */
+        InspectionTaskListResponse: {
+            /** Items */
+            items: components["schemas"]["InspectionTaskResponse"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
+        /** InspectionTaskResponse */
+        InspectionTaskResponse: {
+            /** Ai Pending Confirm */
+            ai_pending_confirm: boolean;
+            /** Ai Suggestions */
+            ai_suggestions: {
+                [key: string]: unknown;
+            }[];
+            /** Assignee Id */
+            assignee_id: string | null;
+            /** Available Actions */
+            available_actions: string[];
+            /** Business No */
+            business_no: string;
+            /** Closed At */
+            closed_at: string | null;
+            /**
+             * Community Id
+             * Format: uuid
+             */
+            community_id: string;
+            /** Created At */
+            created_at: string;
+            /** Description */
+            description: string;
+            /** Due At */
+            due_at: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Planned At */
+            planned_at: string | null;
+            /** Route Points */
+            route_points: string[];
+            /** Status */
+            status: string;
+            /** Title */
+            title: string;
+            /** Updated At */
+            updated_at: string;
+            /** Version */
+            version: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** IntegrationHealthResponse */
+        IntegrationHealthResponse: {
+            /** Database */
+            database: string;
+            /** Message Delivery */
+            message_delivery: string;
+            /** Model Gateway */
+            model_gateway: string;
+        } & {
+            [key: string]: unknown;
         };
         /** LoginRequest */
         LoginRequest: {
@@ -1754,6 +2286,131 @@ export interface components {
              * @default bearer
              */
             token_type: string;
+        };
+        /** MarkAllReadResponse */
+        MarkAllReadResponse: {
+            /** Read At */
+            read_at: string;
+            /** Updated Count */
+            updated_count: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** MemoryResponse */
+        MemoryResponse: {
+            /** Content */
+            content: string;
+            /** Created At */
+            created_at: string;
+            /** Expires At */
+            expires_at: string | null;
+            /** House Id */
+            house_id: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Memory Type */
+            memory_type: string;
+            /** Source Conversation Id */
+            source_conversation_id: string | null;
+            /** Updated At */
+            updated_at: string;
+            /** Version */
+            version: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** MessageListResponse */
+        MessageListResponse: {
+            /** Items */
+            items: components["schemas"]["MessageResponse"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** MessageResponse */
+        MessageResponse: {
+            /** Body */
+            body: string;
+            /** Business Type */
+            business_type: string;
+            /** Created At */
+            created_at: string;
+            /** Fallback Contact */
+            fallback_contact: string | null;
+            /** Handover Status */
+            handover_status: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Is Read */
+            is_read: boolean;
+            /** Last Error */
+            last_error: string | null;
+            /** Max Retry Count */
+            max_retry_count: number;
+            /** Read At */
+            read_at: string | null;
+            /** Resource Id */
+            resource_id: string;
+            /** Retry Count */
+            retry_count: number;
+            /** Retry Exhausted */
+            retry_exhausted: boolean;
+            /** Status */
+            status: string;
+            /** Title */
+            title: string;
+            /** Updated At */
+            updated_at: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** PendingConfirmationResponse */
+        PendingConfirmationResponse: {
+            /** Action Hash */
+            action_hash: string | null;
+            /** Issued At */
+            issued_at: string | null;
+            /** Params */
+            params: {
+                [key: string]: unknown;
+            };
+            /** Summary */
+            summary: string;
+            /** Tool */
+            tool: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** PendingHandoverResponse */
+        PendingHandoverResponse: {
+            /** Created At */
+            created_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Queue */
+            queue: string;
+            /** Source */
+            source: string;
+            /** Status */
+            status: string;
+            /** Summary */
+            summary: string;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * ProcessRecordType
@@ -1831,6 +2488,63 @@ export interface components {
              */
             scheduled_at: string;
         };
+        /** SecurityEventListResponse */
+        SecurityEventListResponse: {
+            /** Items */
+            items: components["schemas"]["SecurityEventResponse"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
+        /** SecurityEventResponse */
+        SecurityEventResponse: {
+            /** Assignee Id */
+            assignee_id: string | null;
+            /** Available Actions */
+            available_actions: string[];
+            /** Business No */
+            business_no: string;
+            /** Closed At */
+            closed_at: string | null;
+            /**
+             * Community Id
+             * Format: uuid
+             */
+            community_id: string;
+            /** Created At */
+            created_at: string;
+            /** Description */
+            description: string;
+            /** Event Type */
+            event_type: string;
+            /** Grade Confirmed By */
+            grade_confirmed_by: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Location */
+            location: string;
+            /**
+             * Reporter Id
+             * Format: uuid
+             */
+            reporter_id: string;
+            /** Risk Level */
+            risk_level: string;
+            /** Source Task Id */
+            source_task_id: string | null;
+            /** Status */
+            status: string;
+            /** Updated At */
+            updated_at: string;
+            /** Version */
+            version: number;
+        } & {
+            [key: string]: unknown;
+        };
         /** SendMessageRequest */
         SendMessageRequest: {
             /**
@@ -1850,6 +2564,30 @@ export interface components {
              * @description 用户输入
              */
             text: string;
+        };
+        /** SlotOptionResponse */
+        SlotOptionResponse: {
+            /** Label */
+            label: string;
+            /** Value */
+            value: unknown;
+        } & {
+            [key: string]: unknown;
+        };
+        /** SlotPromptResponse */
+        SlotPromptResponse: {
+            /** Allow Custom */
+            allow_custom: boolean;
+            /** Field */
+            field: string;
+            /** Label */
+            label: string;
+            /** Options */
+            options: components["schemas"]["SlotOptionResponse"][];
+            /** Prompt */
+            prompt: string;
+        } & {
+            [key: string]: unknown;
         };
         /** StaffOptionResponse */
         StaffOptionResponse: {
@@ -1893,6 +2631,32 @@ export interface components {
          * @enum {string}
          */
         TaskRecordType: "CHECKIN" | "POINT_RECORD" | "PROGRESS" | "COMPLETION" | "SUPPLEMENT";
+        /** TimelineEntryResponse */
+        TimelineEntryResponse: {
+            /** Action */
+            action: string;
+            /** Attachment Ids */
+            attachment_ids: string[];
+            /** Created At */
+            created_at: string;
+            /** Entry Type */
+            entry_type: string;
+            /** From Status */
+            from_status: string | null;
+            /** Note */
+            note: string | null;
+            /**
+             * Operator Id
+             * Format: uuid
+             */
+            operator_id: string;
+            /** Reason */
+            reason: string | null;
+            /** To Status */
+            to_status: string | null;
+        } & {
+            [key: string]: unknown;
+        };
         /** UpdateMemoryRequest */
         UpdateMemoryRequest: {
             /** Content */
@@ -1935,54 +2699,93 @@ export interface components {
             /** Reason */
             reason: string;
         };
-        /** Envelope */
-        property_agent__inspection__adapters__api__schemas__Envelope: {
-            /** Data */
-            data?: unknown;
-            error?: components["schemas"]["ErrorBody"] | null;
-            /** Request Id */
-            request_id: string;
-            /** Success */
-            success: boolean;
+        /** WorkOrderListResponse */
+        WorkOrderListResponse: {
+            /** Items */
+            items: components["schemas"]["WorkOrderResponse"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        } & {
+            [key: string]: unknown;
         };
-        /** Envelope */
-        property_agent__platform__adapters__api__schemas__Envelope: {
-            /** Data */
-            data?: unknown;
-            /** Error */
-            error?: {
-                [key: string]: unknown;
-            } | null;
+        /** WorkOrderResponse */
+        WorkOrderResponse: {
+            /** Assignee Id */
+            assignee_id: string | null;
+            /** Available Actions */
+            available_actions: string[];
+            /** Business No */
+            business_no: string;
+            /** Category */
+            category: string;
+            /** Closed At */
+            closed_at: string | null;
             /**
-             * Request Id
-             * @default
+             * Community Id
+             * Format: uuid
              */
-            request_id: string;
+            community_id: string;
+            /** Created At */
+            created_at: string;
+            /** Description */
+            description: string;
+            /** Has Review */
+            has_review: boolean;
             /**
-             * Success
-             * @default true
+             * House Id
+             * Format: uuid
              */
-            success: boolean;
+            house_id: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Location */
+            location: string;
+            /**
+             * Reporter Id
+             * Format: uuid
+             */
+            reporter_id: string;
+            /** Status */
+            status: string;
+            /** Updated At */
+            updated_at: string;
+            /** Urgency */
+            urgency: string;
+            /** Version */
+            version: number;
+        } & {
+            [key: string]: unknown;
         };
-        /** Envelope */
-        property_agent__platform__schemas__Envelope: {
-            /** Data */
-            data?: unknown | null;
-            error?: components["schemas"]["ErrorBody"] | null;
-            /** Request Id */
-            request_id: string;
-            /** Success */
-            success: boolean;
-        };
-        /** Envelope */
-        property_agent__repair__adapters__api__schemas__Envelope: {
-            /** Data */
-            data?: unknown;
-            error?: components["schemas"]["ErrorBody"] | null;
-            /** Request Id */
-            request_id: string;
-            /** Success */
-            success: boolean;
+        /** WorkOrderTimelineEntryResponse */
+        WorkOrderTimelineEntryResponse: {
+            /** Action */
+            action: string;
+            /** Attachment Ids */
+            attachment_ids: string[];
+            /** Created At */
+            created_at: string;
+            /** Entry Type */
+            entry_type: string;
+            /** From Status */
+            from_status: string | null;
+            /** Note */
+            note: string | null;
+            /**
+             * Operator Id
+             * Format: uuid
+             */
+            operator_id: string;
+            /** Reason */
+            reason: string | null;
+            /** To Status */
+            to_status: string | null;
+        } & {
+            [key: string]: unknown;
         };
     };
     responses: never;
@@ -2010,7 +2813,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_AdminDashboardResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -2041,7 +2844,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_list_ConversationSummaryResponse__"];
                 };
             };
             /** @description Validation Error */
@@ -2072,7 +2875,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_ConversationStatusResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -2103,7 +2906,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_ConversationStatusResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -2138,7 +2941,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_AgentTurnResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -2169,7 +2972,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_list_ConversationMessageResponse__"];
                 };
             };
             /** @description Validation Error */
@@ -2204,7 +3007,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_AgentTurnResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -2239,7 +3042,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "text/event-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -2268,7 +3071,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_list_MemoryResponse__"];
                 };
             };
         };
@@ -2292,7 +3095,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_MemoryResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -2327,7 +3130,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_DeletedMemoryResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -2362,7 +3165,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_MemoryResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -2395,7 +3198,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_AnnouncementListResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -2430,7 +3233,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_AnnouncementResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -2461,7 +3264,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_AnnouncementResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -2498,7 +3301,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_AnnouncementResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -2535,7 +3338,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_AnnouncementResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -2572,7 +3375,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_AnnouncementResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -2609,7 +3412,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_AnnouncementResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -2646,7 +3449,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_AnnouncementResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -2683,7 +3486,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_AnnouncementResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -2714,7 +3517,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_AudienceSnapshotResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -2751,7 +3554,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_AnnouncementResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -2782,7 +3585,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_list_AnnouncementVersionResponse__"];
                 };
             };
             /** @description Validation Error */
@@ -3320,7 +4123,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__inspection__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_InspectionTaskListResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -3356,7 +4159,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__inspection__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_InspectionTaskResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -3389,7 +4192,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__inspection__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_InspectionTaskResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -3427,7 +4230,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__inspection__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_InspectionTaskResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -3465,7 +4268,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__inspection__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_InspectionTaskResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -3503,7 +4306,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__inspection__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_InspectionTaskResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -3541,7 +4344,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__inspection__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_InspectionTaskResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -3579,7 +4382,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__inspection__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_InspectionTaskResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -3617,7 +4420,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__inspection__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_InspectionTaskResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -3655,7 +4458,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__inspection__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_InspectionTaskResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -3688,7 +4491,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__inspection__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_list_TimelineEntryResponse__"];
                 };
             };
             /** @description Validation Error */
@@ -3724,7 +4527,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_MessageListResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -3756,7 +4559,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_MarkAllReadResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -3790,7 +4593,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__platform__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_MessageResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -3827,7 +4630,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__inspection__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_SecurityEventListResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -3863,7 +4666,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__inspection__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_SecurityEventResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -3896,7 +4699,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__inspection__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_SecurityEventResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -3934,7 +4737,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__inspection__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_SecurityEventResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -3972,7 +4775,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__inspection__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_SecurityEventResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -4010,7 +4813,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__inspection__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_SecurityEventResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -4048,7 +4851,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__inspection__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_SecurityEventResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -4086,7 +4889,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__inspection__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_SecurityEventResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -4119,7 +4922,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__inspection__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_list_TimelineEntryResponse__"];
                 };
             };
             /** @description Validation Error */
@@ -4189,7 +4992,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__repair__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_WorkOrderListResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -4225,7 +5028,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__repair__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_WorkOrderResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -4258,7 +5061,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__repair__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_WorkOrderResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -4296,7 +5099,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__repair__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_WorkOrderResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -4334,7 +5137,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__repair__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_WorkOrderResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -4372,7 +5175,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__repair__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_WorkOrderResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -4410,7 +5213,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__repair__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_WorkOrderResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -4448,7 +5251,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__repair__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_WorkOrderResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -4486,7 +5289,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__repair__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_WorkOrderResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -4524,7 +5327,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__repair__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_WorkOrderResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -4562,7 +5365,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__repair__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_WorkOrderResponse_"];
                 };
             };
             /** @description Validation Error */
@@ -4595,7 +5398,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["property_agent__repair__adapters__api__schemas__Envelope"];
+                    "application/json": components["schemas"]["Envelope_list_WorkOrderTimelineEntryResponse__"];
                 };
             };
             /** @description Validation Error */

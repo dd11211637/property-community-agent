@@ -30,6 +30,10 @@ from property_agent.agent.adapters.api.presentation import (
     turn_data,
     wire_events,
 )
+from property_agent.agent.adapters.api.response_schemas import (
+    AgentTurnEnvelope,
+    ConversationStatusEnvelope,
+)
 from property_agent.agent.adapters.api.schemas import ConfirmRequest, SendMessageRequest
 from property_agent.agent.adapters.api.stream_delivery import BoundedStreamBridge
 from property_agent.agent.application.facade import AgentRuntimeFacade
@@ -41,6 +45,12 @@ router = APIRouter(prefix="/api/agent/conversations", tags=["agent"])
 RunnerDep = Annotated[AgentRuntimeFacade, Depends(get_agent_runner)]
 ContextDep = Annotated[AgentRequestContext, Depends(get_agent_context)]
 ConversationId = Annotated[str, Path(min_length=1, max_length=64)]
+
+
+class EventStreamResponse(StreamingResponse):
+    """Document the established SSE wire media type in OpenAPI."""
+
+    media_type = "text/event-stream"
 
 
 def _envelope(data: object, context: AgentRequestContext) -> Envelope:
@@ -58,7 +68,7 @@ def _resolve_house(context: AgentRequestContext, house_id: UUID | None) -> UUID 
     return house_id
 
 
-@router.post("/{conversation_id}/messages", response_model=Envelope)
+@router.post("/{conversation_id}/messages", response_model=AgentTurnEnvelope)
 def send_message(
     conversation_id: ConversationId,
     payload: SendMessageRequest,
@@ -75,7 +85,10 @@ def send_message(
     return _envelope(turn_data(turn), context)
 
 
-@router.post("/{conversation_id}/messages/stream")
+@router.post(
+    "/{conversation_id}/messages/stream",
+    response_class=EventStreamResponse,
+)
 def send_message_stream(
     conversation_id: ConversationId,
     payload: SendMessageRequest,
@@ -118,7 +131,7 @@ def send_message_stream(
     )
 
 
-@router.post("/{conversation_id}/confirmations", response_model=Envelope)
+@router.post("/{conversation_id}/confirmations", response_model=AgentTurnEnvelope)
 def confirm(
     conversation_id: ConversationId,
     payload: ConfirmRequest,
@@ -134,7 +147,7 @@ def confirm(
     return _envelope(turn_data(turn), context)
 
 
-@router.get("/{conversation_id}", response_model=Envelope)
+@router.get("/{conversation_id}", response_model=ConversationStatusEnvelope)
 def get_conversation(
     conversation_id: ConversationId,
     runner: RunnerDep,
@@ -144,7 +157,7 @@ def get_conversation(
     return _envelope(status_data(conversation, pending), context)
 
 
-@router.delete("/{conversation_id}", response_model=Envelope)
+@router.delete("/{conversation_id}", response_model=ConversationStatusEnvelope)
 def close_conversation(
     conversation_id: ConversationId,
     runner: RunnerDep,

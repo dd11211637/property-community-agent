@@ -8,6 +8,13 @@ from property_agent.inspection.adapters.api.dependencies import (
     get_request_context,
     get_task_service,
 )
+from property_agent.inspection.adapters.api.response_schemas import (
+    InspectionTaskEnvelope,
+    InspectionTaskListEnvelope,
+    SecurityEventEnvelope,
+    SecurityEventListEnvelope,
+    TimelineEnvelope,
+)
 from property_agent.inspection.adapters.api.schemas import (
     AddAiSuggestionRequest,
     AddTaskRecordRequest,
@@ -57,7 +64,7 @@ def _success(data, context: RequestContext) -> Envelope:
 
 
 # ============================== 巡检任务 ==============================
-@task_router.post("", response_model=Envelope, status_code=201)
+@task_router.post("", response_model=InspectionTaskEnvelope, status_code=201)
 def create_task(
     payload: CreateInspectionTaskRequest,
     idempotency_key: IdempotencyHeader,
@@ -79,7 +86,7 @@ def create_task(
     return _success(task_data(task, service, context), context)
 
 
-@task_router.get("", response_model=Envelope)
+@task_router.get("", response_model=InspectionTaskListEnvelope)
 def search_tasks(
     service: TaskServiceDep,
     context: ContextDep,
@@ -104,19 +111,19 @@ def search_tasks(
     )
 
 
-@task_router.get("/{task_id}", response_model=Envelope)
+@task_router.get("/{task_id}", response_model=InspectionTaskEnvelope)
 def get_task(task_id: UUID, service: TaskServiceDep, context: ContextDep) -> Envelope:
     return _success(task_data(service.get_task(task_id, context), service, context), context)
 
 
-@task_router.get("/{task_id}/timeline", response_model=Envelope)
+@task_router.get("/{task_id}/timeline", response_model=TimelineEnvelope)
 def get_task_timeline(task_id: UUID, service: TaskServiceDep, context: ContextDep) -> Envelope:
     return _success(
         [timeline_entry_data(e) for e in service.task_timeline(task_id, context)], context
     )
 
 
-@task_router.post("/{task_id}/actions/assign", response_model=Envelope)
+@task_router.post("/{task_id}/actions/assign", response_model=InspectionTaskEnvelope)
 def assign_task(
     task_id: UUID,
     payload: AssignTaskRequest,
@@ -137,7 +144,7 @@ def assign_task(
     )
 
 
-@task_router.post("/{task_id}/actions/start", response_model=Envelope)
+@task_router.post("/{task_id}/actions/start", response_model=InspectionTaskEnvelope)
 def start_task(
     task_id: UUID,
     payload: VersionedActionRequest,
@@ -156,7 +163,7 @@ def start_task(
     )
 
 
-@task_router.post("/{task_id}/actions/submit-records", response_model=Envelope)
+@task_router.post("/{task_id}/actions/submit-records", response_model=InspectionTaskEnvelope)
 def submit_records(
     task_id: UUID,
     payload: SubmitTaskRecordsRequest,
@@ -182,7 +189,7 @@ def submit_records(
     )
 
 
-@task_router.post("/{task_id}/actions/add-record", response_model=Envelope)
+@task_router.post("/{task_id}/actions/add-record", response_model=InspectionTaskEnvelope)
 def add_record(
     task_id: UUID,
     payload: AddTaskRecordRequest,
@@ -209,7 +216,7 @@ def add_record(
     )
 
 
-@task_router.post("/{task_id}/actions/complete", response_model=Envelope)
+@task_router.post("/{task_id}/actions/complete", response_model=InspectionTaskEnvelope)
 def complete_task(
     task_id: UUID,
     payload: VersionedActionRequest,
@@ -228,7 +235,9 @@ def complete_task(
     )
 
 
-@task_router.post("/{task_id}/ai-suggestions", response_model=Envelope, status_code=201)
+@task_router.post(
+    "/{task_id}/ai-suggestions", response_model=InspectionTaskEnvelope, status_code=201
+)
 def add_ai_suggestion(
     task_id: UUID,
     payload: AddAiSuggestionRequest,
@@ -250,7 +259,7 @@ def add_ai_suggestion(
     return _success(task_data(task, service, context), context)
 
 
-@task_router.post("/{task_id}/actions/confirm-ai", response_model=Envelope)
+@task_router.post("/{task_id}/actions/confirm-ai", response_model=InspectionTaskEnvelope)
 def confirm_ai_suggestions(
     task_id: UUID,
     payload: ConfirmAiSuggestionsRequest,
@@ -274,7 +283,7 @@ def _execute_task(
 
 
 # ============================== 安防事件 ==============================
-@event_router.post("", response_model=Envelope, status_code=201)
+@event_router.post("", response_model=SecurityEventEnvelope, status_code=201)
 def create_event(
     payload: CreateSecurityEventRequest,
     idempotency_key: IdempotencyHeader,
@@ -298,7 +307,7 @@ def create_event(
     return _success(event_data(event, service, context), context)
 
 
-@event_router.get("", response_model=Envelope)
+@event_router.get("", response_model=SecurityEventListEnvelope)
 def search_events(
     service: EventServiceDep,
     context: ContextDep,
@@ -328,19 +337,19 @@ def search_events(
     )
 
 
-@event_router.get("/{event_id}", response_model=Envelope)
+@event_router.get("/{event_id}", response_model=SecurityEventEnvelope)
 def get_event(event_id: UUID, service: EventServiceDep, context: ContextDep) -> Envelope:
     return _success(event_data(service.get_event(event_id, context), service, context), context)
 
 
-@event_router.get("/{event_id}/timeline", response_model=Envelope)
+@event_router.get("/{event_id}/timeline", response_model=TimelineEnvelope)
 def get_event_timeline(event_id: UUID, service: EventServiceDep, context: ContextDep) -> Envelope:
     return _success(
         [timeline_entry_data(e) for e in service.event_timeline(event_id, context)], context
     )
 
 
-@event_router.post("/{event_id}/actions/assign", response_model=Envelope)
+@event_router.post("/{event_id}/actions/assign", response_model=SecurityEventEnvelope)
 def assign_event(
     event_id: UUID,
     payload: AssignEventRequest,
@@ -361,7 +370,7 @@ def assign_event(
     )
 
 
-@event_router.post("/{event_id}/actions/submit-disposal", response_model=Envelope)
+@event_router.post("/{event_id}/actions/submit-disposal", response_model=SecurityEventEnvelope)
 def submit_disposal(
     event_id: UUID,
     payload: SubmitDisposalRequest,
@@ -383,7 +392,7 @@ def submit_disposal(
     )
 
 
-@event_router.post("/{event_id}/actions/review-pass", response_model=Envelope)
+@event_router.post("/{event_id}/actions/review-pass", response_model=SecurityEventEnvelope)
 def review_pass(
     event_id: UUID,
     payload: VersionedActionRequest,
@@ -402,7 +411,7 @@ def review_pass(
     )
 
 
-@event_router.post("/{event_id}/actions/grade-confirm", response_model=Envelope)
+@event_router.post("/{event_id}/actions/grade-confirm", response_model=SecurityEventEnvelope)
 def grade_confirm(
     event_id: UUID,
     payload: VersionedActionRequest,
@@ -421,7 +430,7 @@ def grade_confirm(
     )
 
 
-@event_router.post("/{event_id}/actions/return", response_model=Envelope)
+@event_router.post("/{event_id}/actions/return", response_model=SecurityEventEnvelope)
 def return_event(
     event_id: UUID,
     payload: ReturnEventRequest,

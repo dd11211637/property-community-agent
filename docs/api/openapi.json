@@ -104,6 +104,224 @@
         "title": "AddTaskRecordRequest",
         "type": "object"
       },
+      "AdminDashboardResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "failed_message_count": {
+            "title": "Failed Message Count",
+            "type": "integer"
+          },
+          "failed_messages": {
+            "items": {
+              "$ref": "#/components/schemas/MessageResponse"
+            },
+            "title": "Failed Messages",
+            "type": "array"
+          },
+          "high_risk_event_count": {
+            "title": "High Risk Event Count",
+            "type": "integer"
+          },
+          "high_risk_events": {
+            "items": {
+              "$ref": "#/components/schemas/HighRiskEventResponse"
+            },
+            "title": "High Risk Events",
+            "type": "array"
+          },
+          "integration_health": {
+            "$ref": "#/components/schemas/IntegrationHealthResponse"
+          },
+          "pending_count": {
+            "title": "Pending Count",
+            "type": "integer"
+          },
+          "pending_items": {
+            "items": {
+              "$ref": "#/components/schemas/PendingHandoverResponse"
+            },
+            "title": "Pending Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "pending_count",
+          "failed_message_count",
+          "high_risk_event_count",
+          "pending_items",
+          "failed_messages",
+          "high_risk_events",
+          "integration_health"
+        ],
+        "title": "AdminDashboardResponse",
+        "type": "object"
+      },
+      "AgentTurnResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "agent_trace": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Trace"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "done": {
+            "title": "Done",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "facts": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Facts"
+          },
+          "handover_required": {
+            "title": "Handover Required",
+            "type": "boolean"
+          },
+          "intent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intent"
+          },
+          "messages": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "missing_slots": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Slots",
+            "type": "array"
+          },
+          "operation_level": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Level"
+          },
+          "pending_confirmation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PendingConfirmationResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reply": {
+            "title": "Reply",
+            "type": "string"
+          },
+          "requested_slot": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Slot"
+          },
+          "slot_prompt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SlotPromptResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "status",
+          "done",
+          "intent",
+          "confidence",
+          "operation_level",
+          "reply",
+          "messages",
+          "facts",
+          "agent_trace",
+          "missing_slots",
+          "requested_slot",
+          "slot_prompt",
+          "handover_required",
+          "pending_confirmation",
+          "error"
+        ],
+        "title": "AgentTurnResponse",
+        "type": "object"
+      },
       "AnnouncementCategory": {
         "enum": [
           "GENERAL",
@@ -113,6 +331,210 @@
         ],
         "title": "AnnouncementCategory",
         "type": "string"
+      },
+      "AnnouncementListResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AnnouncementResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "limit",
+          "offset"
+        ],
+        "title": "AnnouncementListResponse",
+        "type": "object"
+      },
+      "AnnouncementResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "audience_condition": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Audience Condition",
+            "type": "object"
+          },
+          "available_actions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Available Actions",
+            "type": "array"
+          },
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "business_no": {
+            "title": "Business No",
+            "type": "string"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "community_id": {
+            "format": "uuid",
+            "title": "Community Id",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "manager_recheck_required": {
+            "title": "Manager Recheck Required",
+            "type": "boolean"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published At"
+          },
+          "scheduled_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scheduled At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "withdrawn_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Withdrawn At"
+          }
+        },
+        "required": [
+          "id",
+          "business_no",
+          "community_id",
+          "title",
+          "body",
+          "category",
+          "audience_condition",
+          "scheduled_at",
+          "status",
+          "version",
+          "manager_recheck_required",
+          "published_at",
+          "withdrawn_at",
+          "available_actions",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AnnouncementResponse",
+        "type": "object"
+      },
+      "AnnouncementVersionResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "audience_condition": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Audience Condition",
+            "type": "object"
+          },
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "operator_id": {
+            "format": "uuid",
+            "title": "Operator Id",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "version_no": {
+            "title": "Version No",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version_no",
+          "title",
+          "body",
+          "category",
+          "audience_condition",
+          "operator_id",
+          "source",
+          "created_at"
+        ],
+        "title": "AnnouncementVersionResponse",
+        "type": "object"
       },
       "AnswerConsultationRequest": {
         "properties": {
@@ -194,6 +616,42 @@
           "assignee_id"
         ],
         "title": "AssignTaskRequest",
+        "type": "object"
+      },
+      "AudienceSnapshotResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "condition": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Condition",
+            "type": "object"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "generated_at": {
+            "title": "Generated At",
+            "type": "string"
+          },
+          "samples": {
+            "items": {},
+            "title": "Samples",
+            "type": "array"
+          }
+        },
+        "required": [
+          "condition",
+          "count",
+          "samples",
+          "generated_at"
+        ],
+        "title": "AudienceSnapshotResponse",
         "type": "object"
       },
       "BillDetailResponse": {
@@ -765,6 +1223,205 @@
         "title": "ConsultationResponse",
         "type": "object"
       },
+      "ConversationMessageResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "house_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "House Id"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "intent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intent"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant",
+              "system"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "content",
+          "intent",
+          "house_id",
+          "created_at"
+        ],
+        "title": "ConversationMessageResponse",
+        "type": "object"
+      },
+      "ConversationStatusResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "current_house_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current House Id"
+          },
+          "handover_required": {
+            "title": "Handover Required",
+            "type": "boolean"
+          },
+          "handover_ticket_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handover Ticket Id"
+          },
+          "last_intent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Intent"
+          },
+          "pending_confirmation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PendingConfirmationResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runtime_version": {
+            "title": "Runtime Version",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "status",
+          "current_house_id",
+          "last_intent",
+          "handover_required",
+          "handover_ticket_id",
+          "runtime_version",
+          "pending_confirmation"
+        ],
+        "title": "ConversationStatusResponse",
+        "type": "object"
+      },
+      "ConversationSummaryResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "current_house_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current House Id"
+          },
+          "last_intent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Intent"
+          },
+          "last_message_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Message At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "title",
+          "status",
+          "current_house_id",
+          "last_intent",
+          "last_message_at"
+        ],
+        "title": "ConversationSummaryResponse",
+        "type": "object"
+      },
       "CreateAnnouncementRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1106,6 +1763,31 @@
         "title": "DeleteMemoryRequest",
         "type": "object"
       },
+      "DeletedMemoryResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "deleted": {
+            "title": "Deleted",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "deleted",
+          "version"
+        ],
+        "title": "DeletedMemoryResponse",
+        "type": "object"
+      },
       "EditAnnouncementRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1158,6 +1840,196 @@
           "expected_version"
         ],
         "title": "EditAnnouncementRequest",
+        "type": "object"
+      },
+      "Envelope_AdminDashboardResponse_": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminDashboardResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[AdminDashboardResponse]",
+        "type": "object"
+      },
+      "Envelope_AgentTurnResponse_": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentTurnResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[AgentTurnResponse]",
+        "type": "object"
+      },
+      "Envelope_AnnouncementListResponse_": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnnouncementListResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[AnnouncementListResponse]",
+        "type": "object"
+      },
+      "Envelope_AnnouncementResponse_": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnnouncementResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[AnnouncementResponse]",
+        "type": "object"
+      },
+      "Envelope_AudienceSnapshotResponse_": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AudienceSnapshotResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[AudienceSnapshotResponse]",
         "type": "object"
       },
       "Envelope_BillDetailResponse_": {
@@ -1274,6 +2146,504 @@
         "title": "Envelope[ConsultationResponse]",
         "type": "object"
       },
+      "Envelope_ConversationStatusResponse_": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConversationStatusResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[ConversationStatusResponse]",
+        "type": "object"
+      },
+      "Envelope_DeletedMemoryResponse_": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeletedMemoryResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[DeletedMemoryResponse]",
+        "type": "object"
+      },
+      "Envelope_InspectionTaskListResponse_": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InspectionTaskListResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[InspectionTaskListResponse]",
+        "type": "object"
+      },
+      "Envelope_InspectionTaskResponse_": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InspectionTaskResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[InspectionTaskResponse]",
+        "type": "object"
+      },
+      "Envelope_MarkAllReadResponse_": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MarkAllReadResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[MarkAllReadResponse]",
+        "type": "object"
+      },
+      "Envelope_MemoryResponse_": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MemoryResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[MemoryResponse]",
+        "type": "object"
+      },
+      "Envelope_MessageListResponse_": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MessageListResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[MessageListResponse]",
+        "type": "object"
+      },
+      "Envelope_MessageResponse_": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MessageResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[MessageResponse]",
+        "type": "object"
+      },
+      "Envelope_SecurityEventListResponse_": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SecurityEventListResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[SecurityEventListResponse]",
+        "type": "object"
+      },
+      "Envelope_SecurityEventResponse_": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SecurityEventResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[SecurityEventResponse]",
+        "type": "object"
+      },
+      "Envelope_WorkOrderListResponse_": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkOrderListResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[WorkOrderListResponse]",
+        "type": "object"
+      },
+      "Envelope_WorkOrderResponse_": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkOrderResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[WorkOrderResponse]",
+        "type": "object"
+      },
+      "Envelope_list_AnnouncementVersionResponse__": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AnnouncementVersionResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[list[AnnouncementVersionResponse]]",
+        "type": "object"
+      },
       "Envelope_list_BillResponse__": {
         "properties": {
           "data": {
@@ -1358,6 +2728,132 @@
         "title": "Envelope[list[ConsultationResponse]]",
         "type": "object"
       },
+      "Envelope_list_ConversationMessageResponse__": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ConversationMessageResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[list[ConversationMessageResponse]]",
+        "type": "object"
+      },
+      "Envelope_list_ConversationSummaryResponse__": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ConversationSummaryResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[list[ConversationSummaryResponse]]",
+        "type": "object"
+      },
+      "Envelope_list_MemoryResponse__": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/MemoryResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[list[MemoryResponse]]",
+        "type": "object"
+      },
       "Envelope_list_StaffOptionResponse__": {
         "properties": {
           "data": {
@@ -1398,6 +2894,90 @@
           "request_id"
         ],
         "title": "Envelope[list[StaffOptionResponse]]",
+        "type": "object"
+      },
+      "Envelope_list_TimelineEntryResponse__": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/TimelineEntryResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[list[TimelineEntryResponse]]",
+        "type": "object"
+      },
+      "Envelope_list_WorkOrderTimelineEntryResponse__": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/WorkOrderTimelineEntryResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Data"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[list[WorkOrderTimelineEntryResponse]]",
         "type": "object"
       },
       "ErrorBody": {
@@ -1463,6 +3043,46 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HighRiskEventResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "business_no": {
+            "title": "Business No",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "location": {
+            "title": "Location",
+            "type": "string"
+          },
+          "risk_level": {
+            "title": "Risk Level",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "business_no",
+          "location",
+          "risk_level",
+          "status",
+          "updated_at"
+        ],
+        "title": "HighRiskEventResponse",
+        "type": "object"
+      },
       "HouseSelectionRequest": {
         "properties": {
           "house_id": {
@@ -1509,6 +3129,191 @@
           "room_no"
         ],
         "title": "HouseSelectionResponse",
+        "type": "object"
+      },
+      "InspectionTaskListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/InspectionTaskResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "limit",
+          "offset"
+        ],
+        "title": "InspectionTaskListResponse",
+        "type": "object"
+      },
+      "InspectionTaskResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "ai_pending_confirm": {
+            "title": "Ai Pending Confirm",
+            "type": "boolean"
+          },
+          "ai_suggestions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Ai Suggestions",
+            "type": "array"
+          },
+          "assignee_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee Id"
+          },
+          "available_actions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Available Actions",
+            "type": "array"
+          },
+          "business_no": {
+            "title": "Business No",
+            "type": "string"
+          },
+          "closed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closed At"
+          },
+          "community_id": {
+            "format": "uuid",
+            "title": "Community Id",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "due_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "planned_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Planned At"
+          },
+          "route_points": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Route Points",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "business_no",
+          "community_id",
+          "title",
+          "description",
+          "route_points",
+          "status",
+          "assignee_id",
+          "planned_at",
+          "due_at",
+          "version",
+          "available_actions",
+          "ai_suggestions",
+          "ai_pending_confirm",
+          "created_at",
+          "updated_at",
+          "closed_at"
+        ],
+        "title": "InspectionTaskResponse",
+        "type": "object"
+      },
+      "IntegrationHealthResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "database": {
+            "title": "Database",
+            "type": "string"
+          },
+          "message_delivery": {
+            "title": "Message Delivery",
+            "type": "string"
+          },
+          "model_gateway": {
+            "title": "Model Gateway",
+            "type": "string"
+          }
+        },
+        "required": [
+          "database",
+          "message_delivery",
+          "model_gateway"
+        ],
+        "title": "IntegrationHealthResponse",
         "type": "object"
       },
       "LoginRequest": {
@@ -1611,6 +3416,348 @@
           "house_ids"
         ],
         "title": "LoginResponse",
+        "type": "object"
+      },
+      "MarkAllReadResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "read_at": {
+            "title": "Read At",
+            "type": "string"
+          },
+          "updated_count": {
+            "title": "Updated Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "updated_count",
+          "read_at"
+        ],
+        "title": "MarkAllReadResponse",
+        "type": "object"
+      },
+      "MemoryResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "house_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "House Id"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "memory_type": {
+            "title": "Memory Type",
+            "type": "string"
+          },
+          "source_conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Conversation Id"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "memory_type",
+          "content",
+          "house_id",
+          "source_conversation_id",
+          "version",
+          "expires_at",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "MemoryResponse",
+        "type": "object"
+      },
+      "MessageListResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MessageResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "MessageListResponse",
+        "type": "object"
+      },
+      "MessageResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "business_type": {
+            "title": "Business Type",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "fallback_contact": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fallback Contact"
+          },
+          "handover_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handover Status"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_read": {
+            "title": "Is Read",
+            "type": "boolean"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "max_retry_count": {
+            "title": "Max Retry Count",
+            "type": "integer"
+          },
+          "read_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Read At"
+          },
+          "resource_id": {
+            "title": "Resource Id",
+            "type": "string"
+          },
+          "retry_count": {
+            "title": "Retry Count",
+            "type": "integer"
+          },
+          "retry_exhausted": {
+            "title": "Retry Exhausted",
+            "type": "boolean"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "business_type",
+          "resource_id",
+          "title",
+          "body",
+          "status",
+          "is_read",
+          "read_at",
+          "retry_count",
+          "max_retry_count",
+          "retry_exhausted",
+          "last_error",
+          "handover_status",
+          "fallback_contact",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "MessageResponse",
+        "type": "object"
+      },
+      "PendingConfirmationResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "action_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Hash"
+          },
+          "issued_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issued At"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "tool": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool"
+          }
+        },
+        "required": [
+          "summary",
+          "tool",
+          "params",
+          "action_hash",
+          "issued_at"
+        ],
+        "title": "PendingConfirmationResponse",
+        "type": "object"
+      },
+      "PendingHandoverResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "queue": {
+            "title": "Queue",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "queue",
+          "summary",
+          "status",
+          "created_at"
+        ],
+        "title": "PendingHandoverResponse",
         "type": "object"
       },
       "ProcessRecordType": {
@@ -1838,6 +3985,163 @@
         "title": "ScheduleAnnouncementRequest",
         "type": "object"
       },
+      "SecurityEventListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SecurityEventResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "limit",
+          "offset"
+        ],
+        "title": "SecurityEventListResponse",
+        "type": "object"
+      },
+      "SecurityEventResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "assignee_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignee Id"
+          },
+          "available_actions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Available Actions",
+            "type": "array"
+          },
+          "business_no": {
+            "title": "Business No",
+            "type": "string"
+          },
+          "closed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Closed At"
+          },
+          "community_id": {
+            "format": "uuid",
+            "title": "Community Id",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "event_type": {
+            "title": "Event Type",
+            "type": "string"
+          },
+          "grade_confirmed_by": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grade Confirmed By"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "location": {
+            "title": "Location",
+            "type": "string"
+          },
+          "reporter_id": {
+            "format": "uuid",
+            "title": "Reporter Id",
+            "type": "string"
+          },
+          "risk_level": {
+            "title": "Risk Level",
+            "type": "string"
+          },
+          "source_task_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Task Id"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "business_no",
+          "community_id",
+          "source_task_id",
+          "reporter_id",
+          "event_type",
+          "risk_level",
+          "location",
+          "description",
+          "status",
+          "assignee_id",
+          "grade_confirmed_by",
+          "version",
+          "available_actions",
+          "created_at",
+          "updated_at",
+          "closed_at"
+        ],
+        "title": "SecurityEventResponse",
+        "type": "object"
+      },
       "SendMessageRequest": {
         "properties": {
           "house_id": {
@@ -1878,6 +4182,61 @@
           "text"
         ],
         "title": "SendMessageRequest",
+        "type": "object"
+      },
+      "SlotOptionResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "label",
+          "value"
+        ],
+        "title": "SlotOptionResponse",
+        "type": "object"
+      },
+      "SlotPromptResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "allow_custom": {
+            "title": "Allow Custom",
+            "type": "boolean"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/SlotOptionResponse"
+            },
+            "title": "Options",
+            "type": "array"
+          },
+          "prompt": {
+            "title": "Prompt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "label",
+          "prompt",
+          "allow_custom",
+          "options"
+        ],
+        "title": "SlotPromptResponse",
         "type": "object"
       },
       "StaffOptionResponse": {
@@ -2010,6 +4369,93 @@
         "title": "TaskRecordType",
         "type": "string"
       },
+      "TimelineEntryResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "attachment_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Attachment Ids",
+            "type": "array"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "entry_type": {
+            "title": "Entry Type",
+            "type": "string"
+          },
+          "from_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Status"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "operator_id": {
+            "format": "uuid",
+            "title": "Operator Id",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "to_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Status"
+          }
+        },
+        "required": [
+          "entry_type",
+          "action",
+          "operator_id",
+          "created_at",
+          "from_status",
+          "to_status",
+          "reason",
+          "note",
+          "attachment_ids"
+        ],
+        "title": "TimelineEntryResponse",
+        "type": "object"
+      },
       "UpdateMemoryRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2131,134 +4577,234 @@
         "title": "WithdrawAnnouncementRequest",
         "type": "object"
       },
-      "property_agent__inspection__adapters__api__schemas__Envelope": {
+      "WorkOrderListResponse": {
+        "additionalProperties": true,
         "properties": {
-          "data": {
-            "title": "Data"
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WorkOrderResponse"
+            },
+            "title": "Items",
+            "type": "array"
           },
-          "error": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ErrorBody"
-              },
-              {
-                "type": "null"
-              }
-            ]
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
           },
-          "request_id": {
-            "title": "Request Id",
-            "type": "string"
-          },
-          "success": {
-            "title": "Success",
-            "type": "boolean"
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
           }
         },
         "required": [
-          "success",
-          "request_id"
+          "items",
+          "limit",
+          "offset"
         ],
-        "title": "Envelope",
+        "title": "WorkOrderListResponse",
         "type": "object"
       },
-      "property_agent__platform__adapters__api__schemas__Envelope": {
+      "WorkOrderResponse": {
+        "additionalProperties": true,
         "properties": {
-          "data": {
-            "title": "Data"
-          },
-          "error": {
+          "assignee_id": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "format": "uuid",
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Error"
+            "title": "Assignee Id"
           },
-          "request_id": {
-            "default": "",
-            "title": "Request Id",
+          "available_actions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Available Actions",
+            "type": "array"
+          },
+          "business_no": {
+            "title": "Business No",
             "type": "string"
           },
-          "success": {
-            "default": true,
-            "title": "Success",
-            "type": "boolean"
-          }
-        },
-        "title": "Envelope",
-        "type": "object"
-      },
-      "property_agent__platform__schemas__Envelope": {
-        "properties": {
-          "data": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "closed_at": {
             "anyOf": [
-              {},
+              {
+                "type": "string"
+              },
               {
                 "type": "null"
               }
             ],
-            "title": "Data"
+            "title": "Closed At"
           },
-          "error": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/ErrorBody"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "request_id": {
-            "title": "Request Id",
+          "community_id": {
+            "format": "uuid",
+            "title": "Community Id",
             "type": "string"
           },
-          "success": {
-            "title": "Success",
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "has_review": {
+            "title": "Has Review",
             "type": "boolean"
+          },
+          "house_id": {
+            "format": "uuid",
+            "title": "House Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "location": {
+            "title": "Location",
+            "type": "string"
+          },
+          "reporter_id": {
+            "format": "uuid",
+            "title": "Reporter Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "urgency": {
+            "title": "Urgency",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
           }
         },
         "required": [
-          "success",
-          "request_id"
+          "id",
+          "business_no",
+          "community_id",
+          "house_id",
+          "reporter_id",
+          "category",
+          "location",
+          "description",
+          "urgency",
+          "status",
+          "assignee_id",
+          "version",
+          "available_actions",
+          "has_review",
+          "created_at",
+          "updated_at",
+          "closed_at"
         ],
-        "title": "Envelope",
+        "title": "WorkOrderResponse",
         "type": "object"
       },
-      "property_agent__repair__adapters__api__schemas__Envelope": {
+      "WorkOrderTimelineEntryResponse": {
+        "additionalProperties": true,
         "properties": {
-          "data": {
-            "title": "Data"
+          "action": {
+            "title": "Action",
+            "type": "string"
           },
-          "error": {
+          "attachment_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Attachment Ids",
+            "type": "array"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "entry_type": {
+            "title": "Entry Type",
+            "type": "string"
+          },
+          "from_status": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/ErrorBody"
+                "type": "string"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "From Status"
           },
-          "request_id": {
-            "title": "Request Id",
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "operator_id": {
+            "format": "uuid",
+            "title": "Operator Id",
             "type": "string"
           },
-          "success": {
-            "title": "Success",
-            "type": "boolean"
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "to_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Status"
           }
         },
         "required": [
-          "success",
-          "request_id"
+          "entry_type",
+          "action",
+          "operator_id",
+          "created_at",
+          "from_status",
+          "to_status",
+          "reason",
+          "note",
+          "attachment_ids"
         ],
-        "title": "Envelope",
+        "title": "WorkOrderTimelineEntryResponse",
         "type": "object"
       }
     }
@@ -2296,7 +4842,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_AdminDashboardResponse_"
                 }
               }
             },
@@ -2341,7 +4887,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_list_ConversationSummaryResponse__"
                 }
               }
             },
@@ -2385,7 +4931,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_ConversationStatusResponse_"
                 }
               }
             },
@@ -2427,7 +4973,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_ConversationStatusResponse_"
                 }
               }
             },
@@ -2481,7 +5027,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_AgentTurnResponse_"
                 }
               }
             },
@@ -2523,7 +5069,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_list_ConversationMessageResponse__"
                 }
               }
             },
@@ -2575,7 +5121,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_AgentTurnResponse_"
                 }
               }
             },
@@ -2628,8 +5174,10 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
-                "schema": {}
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
               }
             },
             "description": "Successful Response"
@@ -2659,7 +5207,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_list_MemoryResponse__"
                 }
               }
             },
@@ -2688,7 +5236,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_MemoryResponse_"
                 }
               }
             },
@@ -2741,7 +5289,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_DeletedMemoryResponse_"
                 }
               }
             },
@@ -2792,7 +5340,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_MemoryResponse_"
                 }
               }
             },
@@ -2867,7 +5415,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_AnnouncementListResponse_"
                 }
               }
             },
@@ -2919,7 +5467,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_AnnouncementResponse_"
                 }
               }
             },
@@ -2962,7 +5510,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_AnnouncementResponse_"
                 }
               }
             },
@@ -3024,7 +5572,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_AnnouncementResponse_"
                 }
               }
             },
@@ -3088,7 +5636,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_AnnouncementResponse_"
                 }
               }
             },
@@ -3152,7 +5700,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_AnnouncementResponse_"
                 }
               }
             },
@@ -3216,7 +5764,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_AnnouncementResponse_"
                 }
               }
             },
@@ -3280,7 +5828,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_AnnouncementResponse_"
                 }
               }
             },
@@ -3344,7 +5892,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_AnnouncementResponse_"
                 }
               }
             },
@@ -3387,7 +5935,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_AudienceSnapshotResponse_"
                 }
               }
             },
@@ -3451,7 +5999,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_AnnouncementResponse_"
                 }
               }
             },
@@ -3494,7 +6042,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_list_AnnouncementVersionResponse__"
                 }
               }
             },
@@ -4470,7 +7018,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__inspection__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_InspectionTaskListResponse_"
                 }
               }
             },
@@ -4538,7 +7086,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__inspection__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_InspectionTaskResponse_"
                 }
               }
             },
@@ -4597,7 +7145,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__inspection__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_InspectionTaskResponse_"
                 }
               }
             },
@@ -4677,7 +7225,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__inspection__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_InspectionTaskResponse_"
                 }
               }
             },
@@ -4757,7 +7305,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__inspection__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_InspectionTaskResponse_"
                 }
               }
             },
@@ -4837,7 +7385,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__inspection__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_InspectionTaskResponse_"
                 }
               }
             },
@@ -4917,7 +7465,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__inspection__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_InspectionTaskResponse_"
                 }
               }
             },
@@ -4997,7 +7545,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__inspection__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_InspectionTaskResponse_"
                 }
               }
             },
@@ -5077,7 +7625,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__inspection__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_InspectionTaskResponse_"
                 }
               }
             },
@@ -5157,7 +7705,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__inspection__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_InspectionTaskResponse_"
                 }
               }
             },
@@ -5216,7 +7764,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__inspection__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_list_TimelineEntryResponse__"
                 }
               }
             },
@@ -5333,7 +7881,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_MessageListResponse_"
                 }
               }
             },
@@ -5398,7 +7946,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_MarkAllReadResponse_"
                 }
               }
             },
@@ -5473,7 +8021,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__platform__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_MessageResponse_"
                 }
               }
             },
@@ -5593,7 +8141,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__inspection__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_SecurityEventListResponse_"
                 }
               }
             },
@@ -5661,7 +8209,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__inspection__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_SecurityEventResponse_"
                 }
               }
             },
@@ -5720,7 +8268,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__inspection__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_SecurityEventResponse_"
                 }
               }
             },
@@ -5800,7 +8348,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__inspection__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_SecurityEventResponse_"
                 }
               }
             },
@@ -5880,7 +8428,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__inspection__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_SecurityEventResponse_"
                 }
               }
             },
@@ -5960,7 +8508,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__inspection__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_SecurityEventResponse_"
                 }
               }
             },
@@ -6040,7 +8588,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__inspection__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_SecurityEventResponse_"
                 }
               }
             },
@@ -6120,7 +8668,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__inspection__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_SecurityEventResponse_"
                 }
               }
             },
@@ -6179,7 +8727,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__inspection__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_list_TimelineEntryResponse__"
                 }
               }
             },
@@ -6360,7 +8908,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__repair__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_WorkOrderListResponse_"
                 }
               }
             },
@@ -6428,7 +8976,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__repair__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_WorkOrderResponse_"
                 }
               }
             },
@@ -6487,7 +9035,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__repair__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_WorkOrderResponse_"
                 }
               }
             },
@@ -6567,7 +9115,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__repair__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_WorkOrderResponse_"
                 }
               }
             },
@@ -6647,7 +9195,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__repair__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_WorkOrderResponse_"
                 }
               }
             },
@@ -6727,7 +9275,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__repair__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_WorkOrderResponse_"
                 }
               }
             },
@@ -6807,7 +9355,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__repair__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_WorkOrderResponse_"
                 }
               }
             },
@@ -6887,7 +9435,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__repair__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_WorkOrderResponse_"
                 }
               }
             },
@@ -6967,7 +9515,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__repair__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_WorkOrderResponse_"
                 }
               }
             },
@@ -7047,7 +9595,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__repair__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_WorkOrderResponse_"
                 }
               }
             },
@@ -7127,7 +9675,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__repair__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_WorkOrderResponse_"
                 }
               }
             },
@@ -7186,7 +9734,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/property_agent__repair__adapters__api__schemas__Envelope"
+                  "$ref": "#/components/schemas/Envelope_list_WorkOrderTimelineEntryResponse__"
                 }
               }
             },

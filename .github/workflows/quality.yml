@@ -122,6 +122,50 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:smoke
 
+  frontend-v2-real-stack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      RC_POSTGRES_PASSWORD: ci-compose-placeholder
+      JWT_SECRET: ci-compose-placeholder-at-least-32-characters
+      DEEPSEEK_API_KEY: ci-not-used-by-acceptance
+      MEMORY_EMBEDDING_API_KEY: ci-not-used-by-acceptance
+      RELEASE_SHA: ${{ github.sha }}
+      RC_E2E_BASE_URL: http://127.0.0.1:18080
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend-v2/package-lock.json
+      - name: Validate RC Compose contract
+        run: docker compose -f compose.rc.yaml --profile acceptance config --quiet
+      - name: Start isolated real-stack acceptance target
+        run: >-
+          docker compose -f compose.rc.yaml --profile acceptance
+          up --build -d --wait acceptance-frontend
+      - name: Verify production image excludes Demo entry
+        run: >-
+          docker compose -f compose.rc.yaml --profile acceptance
+          exec -T acceptance-frontend test ! -e /usr/share/nginx/html/demo.html
+      - run: npm ci
+        working-directory: frontend-v2
+      - run: npx playwright install --with-deps chromium
+        working-directory: frontend-v2
+      - run: npm run test:real
+        working-directory: frontend-v2
+      - name: Capture acceptance service logs
+        if: always()
+        run: >-
+          docker compose -f compose.rc.yaml --profile acceptance
+          logs --no-color --tail 300
+      - name: Stop isolated acceptance target
+        if: always()
+        run: >-
+          docker compose -f compose.rc.yaml --profile acceptance
+          down --volumes --remove-orphans
+
   browser-e2e:
     runs-on: ubuntu-latest
     steps:

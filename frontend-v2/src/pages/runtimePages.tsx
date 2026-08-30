@@ -6,10 +6,9 @@ import {
 } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { hasCapability } from "../auth/capabilities";
 import { describeLoginError } from "../auth/errors";
 import { useSession } from "../auth/useSession";
-import { Badge, Button, Card, Field, InlineAlert, Input } from "../shared/ui";
+import { Badge, Button, Field, InlineAlert, Input } from "../shared/ui";
 import styles from "../styles/app.module.css";
 
 function safeReturnPath(state: unknown): string {
@@ -52,8 +51,7 @@ export function RealLoginPage() {
         <Badge>FRONTEND V2</Badge>
         <h1>社区服务，也可以自然、温暖而高效。</h1>
         <p>
-          真实身份、房屋上下文与普通业务服务已安全接入；Agent
-          能力仍保持未迁移状态。
+          真实身份、房屋上下文、业务服务、Agent 与长期记忆已安全接入。
         </p>
         <div className={styles.quickActions}>
           <Badge>
@@ -106,91 +104,6 @@ export function RealLoginPage() {
           </div>
         </form>
       </main>
-    </div>
-  );
-}
-
-export function RealHomePage() {
-  const { session, sessionNotice } = useSession();
-  if (session.status !== "authenticated") return null;
-  const operations = hasCapability(session.actor.roles, "operations");
-  const resident = hasCapability(session.actor.roles, "resident-experience");
-  return (
-    <div className={styles.page}>
-      <header className={styles.pageHeader}>
-        <div>
-          <span className={styles.eyebrow}>
-            {operations ? "OPERATIONS HOME" : "COMMUNITY HOME"}
-          </span>
-          <h1>
-            {operations
-              ? `欢迎回来，${session.actor.displayName}`
-              : `你好，${session.actor.displayName}`}
-          </h1>
-          <p>
-            {session.actor.communityName} ·
-            身份与房屋作用域已由服务端建立。业务垂直流尚未迁移到 Frontend V2。
-          </p>
-        </div>
-      </header>
-      {sessionNotice ? <InlineAlert>{sessionNotice}</InlineAlert> : null}
-      <HouseState />
-      {!operations && !resident ? (
-        <InlineAlert>
-          当前角色尚未映射到已知产品能力。请联系管理员确认权限。
-        </InlineAlert>
-      ) : null}
-      <MigrationPlaceholder
-        title={operations ? "运营工作台尚未迁移" : "居民服务尚未迁移"}
-      />
-    </div>
-  );
-}
-
-function HouseState() {
-  const { session } = useSession();
-  if (session.status !== "authenticated") return null;
-  if (session.houses.length === 0)
-    return (
-      <InlineAlert>
-        当前账号没有绑定房屋。你仍可使用基础账户能力，房屋作用域页面暂不可用。
-      </InlineAlert>
-    );
-  if (!session.currentHouseId)
-    return (
-      <InlineAlert>请选择当前房屋后再进入需要房屋作用域的服务。</InlineAlert>
-    );
-  const current = session.houses.find(
-    (house) => house.id === session.currentHouseId,
-  );
-  return (
-    <Card>
-      <span className={styles.eyebrow}>当前房屋作用域</span>
-      <h2>
-        {current?.label ?? `房屋 · ${session.currentHouseId.slice(0, 8)}`}
-      </h2>
-      <p>
-        {current?.resolved
-          ? "展示信息来自真实房屋选择响应。"
-          : "展示信息尚未解析，当前使用中性房屋标识。"}
-      </p>
-    </Card>
-  );
-}
-
-export function MigrationPlaceholder({
-  title = "业务页面尚未迁移",
-}: {
-  title?: string;
-}) {
-  return (
-    <div className={styles.notFound}>
-      <Building2 size={48} />
-      <h2>{title}</h2>
-      <p>
-        这里不会展示 Demo 工单、账单、公告、事件或 Agent
-        结果。后续将按独立迁移边界接入真实数据。
-      </p>
     </div>
   );
 }

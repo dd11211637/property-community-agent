@@ -7,6 +7,12 @@ from property_agent.announcement.adapters.api.dependencies import (
     get_announcement_service,
     get_request_context,
 )
+from property_agent.announcement.adapters.api.response_schemas import (
+    AnnouncementEnvelope,
+    AnnouncementListEnvelope,
+    AnnouncementVersionsEnvelope,
+    AudienceSnapshotEnvelope,
+)
 from property_agent.announcement.adapters.api.schemas import (
     CreateAnnouncementRequest,
     EditAnnouncementRequest,
@@ -40,7 +46,7 @@ ContextDep = Annotated[RequestContext, Depends(get_request_context)]
 IdempotencyHeader = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)]
 
 
-@router.post("", response_model=Envelope, status_code=201)
+@router.post("", response_model=AnnouncementEnvelope, status_code=201)
 def create(
     payload: CreateAnnouncementRequest,
     idempotency_key: IdempotencyHeader,
@@ -61,7 +67,7 @@ def create(
     return success_envelope(announcement_data(item, service, context), context)
 
 
-@router.get("", response_model=Envelope)
+@router.get("", response_model=AnnouncementListEnvelope)
 def search(
     service: ServiceDep,
     context: ContextDep,
@@ -80,14 +86,14 @@ def search(
     )
 
 
-@router.get("/{announcement_id}", response_model=Envelope)
+@router.get("/{announcement_id}", response_model=AnnouncementEnvelope)
 def get(announcement_id: UUID, service: ServiceDep, context: ContextDep) -> Envelope:
     return success_envelope(
         announcement_data(service.get(announcement_id, context), service, context), context
     )
 
 
-@router.patch("/{announcement_id}", response_model=Envelope)
+@router.patch("/{announcement_id}", response_model=AnnouncementEnvelope)
 def edit(
     announcement_id: UUID,
     payload: EditAnnouncementRequest,
@@ -110,14 +116,14 @@ def edit(
     return success_envelope(announcement_data(item, service, context), context)
 
 
-@router.get("/{announcement_id}/audience-preview", response_model=Envelope)
+@router.get("/{announcement_id}/audience-preview", response_model=AudienceSnapshotEnvelope)
 def preview_audience(announcement_id: UUID, service: ServiceDep, context: ContextDep) -> Envelope:
     return success_envelope(
         audience_snapshot_data(service.preview_audience(announcement_id, context)), context
     )
 
 
-@router.post("/{announcement_id}/submit-review", response_model=Envelope)
+@router.post("/{announcement_id}/submit-review", response_model=AnnouncementEnvelope)
 def submit_review(
     announcement_id: UUID,
     payload: VersionedActionRequest,
@@ -134,7 +140,7 @@ def submit_review(
     return success_envelope(announcement_data(item, service, context), context)
 
 
-@router.post("/{announcement_id}/actions/approve", response_model=Envelope)
+@router.post("/{announcement_id}/actions/approve", response_model=AnnouncementEnvelope)
 def approve(
     announcement_id: UUID,
     payload: VersionedActionRequest,
@@ -153,7 +159,7 @@ def approve(
     )
 
 
-@router.post("/{announcement_id}/actions/reject", response_model=Envelope)
+@router.post("/{announcement_id}/actions/reject", response_model=AnnouncementEnvelope)
 def reject(
     announcement_id: UUID,
     payload: RejectAnnouncementRequest,
@@ -172,7 +178,7 @@ def reject(
     )
 
 
-@router.post("/{announcement_id}/actions/publish", response_model=Envelope)
+@router.post("/{announcement_id}/actions/publish", response_model=AnnouncementEnvelope)
 def publish(
     announcement_id: UUID,
     payload: PublishAnnouncementRequest,
@@ -193,7 +199,7 @@ def publish(
     return success_envelope(announcement_data(item, service, context), context)
 
 
-@router.post("/{announcement_id}/actions/schedule", response_model=Envelope)
+@router.post("/{announcement_id}/actions/schedule", response_model=AnnouncementEnvelope)
 def schedule_publish(
     announcement_id: UUID,
     payload: ScheduleAnnouncementRequest,
@@ -214,7 +220,7 @@ def schedule_publish(
     return success_envelope(announcement_data(item, service, context), context)
 
 
-@router.post("/{announcement_id}/actions/withdraw", response_model=Envelope)
+@router.post("/{announcement_id}/actions/withdraw", response_model=AnnouncementEnvelope)
 def withdraw(
     announcement_id: UUID,
     payload: WithdrawAnnouncementRequest,
@@ -231,7 +237,7 @@ def withdraw(
     return success_envelope(announcement_data(item, service, context), context)
 
 
-@router.get("/{announcement_id}/versions", response_model=Envelope)
+@router.get("/{announcement_id}/versions", response_model=AnnouncementVersionsEnvelope)
 def versions(announcement_id: UUID, service: ServiceDep, context: ContextDep) -> Envelope:
     return success_envelope(
         [version_data(item) for item in service.versions(announcement_id, context)], context

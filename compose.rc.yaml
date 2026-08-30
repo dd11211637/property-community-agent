@@ -1,0 +1,197 @@
+name: property-community-agent-rc
+
+x-backend-environment: &backend-environment
+  ENV: production
+  DEBUG: "false"
+  DATABASE_URL: postgresql+psycopg://property_agent:${RC_POSTGRES_PASSWORD:?Set RC_POSTGRES_PASSWORD}@postgres:5432/property_agent
+  JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET to at least 32 characters}
+  JWT_ALGORITHM: HS256
+  JWT_EXPIRE_HOURS: "8"
+  TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-172.16.0.0/12}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+  DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-v4-flash}
+  DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?Set DEEPSEEK_API_KEY}
+  MEMORY_EMBEDDING_BASE_URL: ${MEMORY_EMBEDDING_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+  MEMORY_EMBEDDING_API_KEY: ${MEMORY_EMBEDDING_API_KEY:?Set MEMORY_EMBEDDING_API_KEY}
+  MEMORY_EMBEDDING_MODEL: ${MEMORY_EMBEDDING_MODEL:-text-embedding-v4}
+  MEMORY_EMBEDDING_VERSION: ${MEMORY_EMBEDDING_VERSION:-bailian-v4-1536-v1}
+  MEMORY_EMBEDDING_DIMENSIONS: "1536"
+  RELEASE_SHA: ${RELEASE_SHA:?Set RELEASE_SHA to the exact RC commit}
+  DEPLOYMENT_ENVIRONMENT: ${DEPLOYMENT_ENVIRONMENT:-release-candidate}
+  CERTIFICATION_WRITE_ENABLED: ${CERTIFICATION_WRITE_ENABLED:-false}
+  AGENT_V2_NEW_CONVERSATION_ROLLOUT_BASIS_POINTS: "0"
+  AGENT_V2_NEW_CONVERSATION_FALLBACK_RUNTIME: v1
+  AGENT_V2_EMERGENCY_STOP: "false"
+
+x-acceptance-environment: &acceptance-environment
+  ENV: testing
+  DEBUG: "false"
+  DATABASE_URL: postgresql+psycopg://property_agent:acceptance-only@postgres-acceptance:5432/property_agent_acceptance
+  JWT_SECRET: acceptance-only-secret-never-use-outside-isolated-tests
+  JWT_ALGORITHM: HS256
+  JWT_EXPIRE_HOURS: "8"
+  TRUSTED_PROXY_CIDRS: 172.16.0.0/12
+  LOG_LEVEL: INFO
+  RELEASE_SHA: ${RELEASE_SHA:-0000000000000000000000000000000000000000}
+  DEPLOYMENT_ENVIRONMENT: isolated-test
+  CERTIFICATION_WRITE_ENABLED: "false"
+  AGENT_V2_NEW_CONVERSATION_ROLLOUT_BASIS_POINTS: "0"
+  AGENT_V2_NEW_CONVERSATION_FALLBACK_RUNTIME: v1
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: property_agent
+      POSTGRES_USER: property_agent
+      POSTGRES_PASSWORD: ${RC_POSTGRES_PASSWORD:?Set RC_POSTGRES_PASSWORD}
+    volumes:
+      - rc_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U property_agent -d property_agent"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build:
+      context: .
+      dockerfile: infra/backend.Dockerfile
+    environment: *backend-environment
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  langgraph-setup:
+    build:
+      context: .
+      dockerfile: infra/backend.Dockerfile
+    environment: *backend-environment
+    command: ["python", "scripts/setup_langgraph_checkpointer.py"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  backend:
+    build:
+      context: .
+      dockerfile: infra/backend.Dockerfile
+    environment: *backend-environment
+    depends_on:
+      langgraph-setup:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  frontend-v2:
+    build:
+      context: .
+      dockerfile: infra/frontend-v2.Dockerfile
+    environment:
+      BACKEND_UPSTREAM: backend:8000
+    ports:
+      - "${RC_HTTP_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/ready >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  postgres-acceptance:
+    profiles: ["acceptance"]
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: property_agent_acceptance
+      POSTGRES_USER: property_agent
+      POSTGRES_PASSWORD: acceptance-only
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U property_agent -d property_agent_acceptance"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  acceptance-migrate:
+    profiles: ["acceptance"]
+    build:
+      context: .
+      dockerfile: infra/backend.Dockerfile
+    environment: *acceptance-environment
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres-acceptance:
+        condition: service_healthy
+    restart: "no"
+
+  acceptance-langgraph:
+    profiles: ["acceptance"]
+    build:
+      context: .
+      dockerfile: infra/backend.Dockerfile
+    environment: *acceptance-environment
+    command: ["python", "scripts/setup_langgraph_checkpointer.py"]
+    depends_on:
+      acceptance-migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  acceptance-seed:
+    profiles: ["acceptance"]
+    build:
+      context: .
+      dockerfile: infra/backend.Dockerfile
+      target: demo-support
+    environment: *acceptance-environment
+    command: ["python", "-m", "testing.seeds.seed_acceptance"]
+    depends_on:
+      acceptance-langgraph:
+        condition: service_completed_successfully
+    restart: "no"
+
+  acceptance-backend:
+    profiles: ["acceptance"]
+    build:
+      context: .
+      dockerfile: infra/backend.Dockerfile
+    environment: *acceptance-environment
+    depends_on:
+      acceptance-seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  acceptance-frontend:
+    profiles: ["acceptance"]
+    build:
+      context: .
+      dockerfile: infra/frontend-v2.Dockerfile
+    environment:
+      BACKEND_UPSTREAM: acceptance-backend:8000
+    ports:
+      - "${ACCEPTANCE_HTTP_PORT:-18080}:80"
+    depends_on:
+      acceptance-backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/ready >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  rc_postgres:

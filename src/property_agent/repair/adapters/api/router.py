@@ -3,12 +3,17 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Query
 
+from property_agent.platform.schemas import Envelope
 from property_agent.repair.adapters.api.dependencies import get_request_context, get_service
+from property_agent.repair.adapters.api.response_schemas import (
+    WorkOrderEnvelope,
+    WorkOrderListEnvelope,
+    WorkOrderTimelineEnvelope,
+)
 from property_agent.repair.adapters.api.schemas import (
     AssignRequest,
     CompletionRequest,
     CreateWorkOrderRequest,
-    Envelope,
     ProgressRequest,
     RejectRequest,
     ReviewRequest,
@@ -36,7 +41,7 @@ def _success(data, context: RequestContext) -> Envelope:
     return Envelope(success=True, data=data, error=None, request_id=context.request_id)
 
 
-@router.post("", response_model=Envelope, status_code=201)
+@router.post("", response_model=WorkOrderEnvelope, status_code=201)
 def create_work_order(
     payload: CreateWorkOrderRequest,
     idempotency_key: IdempotencyHeader,
@@ -59,7 +64,7 @@ def create_work_order(
     return _success(work_order_data(work_order, service, context), context)
 
 
-@router.get("", response_model=Envelope)
+@router.get("", response_model=WorkOrderListEnvelope)
 def search_work_orders(
     service: ServiceDependency,
     context: ContextDependency,
@@ -89,7 +94,7 @@ def search_work_orders(
     )
 
 
-@router.get("/{work_order_id}", response_model=Envelope)
+@router.get("/{work_order_id}", response_model=WorkOrderEnvelope)
 def get_work_order(
     work_order_id: UUID,
     service: ServiceDependency,
@@ -99,7 +104,7 @@ def get_work_order(
     return _success(work_order_data(result, service, context), context)
 
 
-@router.get("/{work_order_id}/timeline", response_model=Envelope)
+@router.get("/{work_order_id}/timeline", response_model=WorkOrderTimelineEnvelope)
 def get_work_order_timeline(
     work_order_id: UUID,
     service: ServiceDependency,
@@ -122,7 +127,7 @@ def _execute(
     return _success(work_order_data(result, service, context), context)
 
 
-@router.post("/{work_order_id}/actions/assign", response_model=Envelope)
+@router.post("/{work_order_id}/actions/assign", response_model=WorkOrderEnvelope)
 def assign_work_order(
     work_order_id: UUID,
     payload: AssignRequest,
@@ -143,7 +148,7 @@ def assign_work_order(
     )
 
 
-@router.post("/{work_order_id}/actions/accept", response_model=Envelope)
+@router.post("/{work_order_id}/actions/accept", response_model=WorkOrderEnvelope)
 def accept_work_order(
     work_order_id: UUID,
     payload: VersionedActionRequest,
@@ -160,7 +165,7 @@ def accept_work_order(
     )
 
 
-@router.post("/{work_order_id}/actions/reject", response_model=Envelope)
+@router.post("/{work_order_id}/actions/reject", response_model=WorkOrderEnvelope)
 def reject_work_order(
     work_order_id: UUID,
     payload: RejectRequest,
@@ -181,7 +186,7 @@ def reject_work_order(
     )
 
 
-@router.post("/{work_order_id}/actions/record-progress", response_model=Envelope)
+@router.post("/{work_order_id}/actions/record-progress", response_model=WorkOrderEnvelope)
 def record_progress(
     work_order_id: UUID,
     payload: ProgressRequest,
@@ -205,7 +210,7 @@ def record_progress(
     )
 
 
-@router.post("/{work_order_id}/actions/submit-completion", response_model=Envelope)
+@router.post("/{work_order_id}/actions/submit-completion", response_model=WorkOrderEnvelope)
 def submit_completion(
     work_order_id: UUID,
     payload: CompletionRequest,
@@ -233,7 +238,7 @@ def submit_completion(
     )
 
 
-@router.post("/{work_order_id}/actions/verify-pass", response_model=Envelope)
+@router.post("/{work_order_id}/actions/verify-pass", response_model=WorkOrderEnvelope)
 def verify_pass(
     work_order_id: UUID,
     payload: VersionedActionRequest,
@@ -252,7 +257,7 @@ def verify_pass(
     )
 
 
-@router.post("/{work_order_id}/actions/request-rework", response_model=Envelope)
+@router.post("/{work_order_id}/actions/request-rework", response_model=WorkOrderEnvelope)
 def request_rework(
     work_order_id: UUID,
     payload: ReworkRequest,
@@ -273,7 +278,7 @@ def request_rework(
     )
 
 
-@router.post("/{work_order_id}/reviews", response_model=Envelope, status_code=201)
+@router.post("/{work_order_id}/reviews", response_model=WorkOrderEnvelope, status_code=201)
 def create_review(
     work_order_id: UUID,
     payload: ReviewRequest,
