@@ -1,7 +1,8 @@
 /* eslint-disable react-refresh/only-export-components */
-import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { apiRequest } from "../api/client";
-import type { House, LoginResponse, Session } from "../api/contracts";
+import type { House, HouseSelectionResponse, LoginResponse, Session } from "../api/contracts";
+import { displayHouseAddress } from "../ui/display";
 
 type AuthValue = {
   session: Session | null;
@@ -25,7 +26,7 @@ function storedSession(): Session | null {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(storedSession);
 
-  const persist = (next: Session | null) => {
+  const persist = useCallback((next: Session | null) => {
     setSession(next);
     if (!next) {
       sessionStorage.removeItem(sessionKey);
@@ -37,7 +38,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     sessionStorage.setItem(sessionKey, JSON.stringify(next));
     sessionStorage.setItem("property_agent_token", next.access_token);
     if (next.current_house_id) sessionStorage.setItem("property_agent_house_id", next.current_house_id);
-  };
+    else sessionStorage.removeItem("property_agent_house_id");
+  }, []);
+
+  useEffect(() => {
+    const current = session?.houses.find((house) => house.id === session.current_house_id);
+    const unresolved = current && /^(当前房屋|绑定房屋|可选房屋)/.test(current.label);
+    if (!session?.current_house_id || !unresolved) return;
+    let active = true;
+    void apiRequest<HouseSelectionResponse>("/api/auth/house", {
+      method: "POST",
+      body: { house_id: session.current_house_id },
+    }).then((selected) => {
+      if (!active) return;
+      persist({
+        ...session,
+        houses: session.houses.map((house) => house.id === selected.house_id
+          ? { ...house, label: displayHouseAddress(selected) }
+          : house),
+      });
+    }).catch(() => {
+      // A readable address is optional; the server-owned house scope remains valid.
+    });
+    return () => { active = false; };
+  }, [persist, session]);
 
   const value = useMemo<AuthValue>(
     () => ({
@@ -49,7 +73,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
         const houses = response.house_ids.map((id, index) => ({
           id,
-          label: id === response.current_house_id ? "当前房屋" : `可选房屋 ${index + 1}`,
+          label: `绑定房屋 ${index + 1}`,
         }));
         const next: Session = {
           access_token: response.access_token,
@@ -67,17 +91,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout: () => persist(null),
       selectHouse: async (house) => {
         if (!session) return;
-        const selected = await apiRequest<{ house_id: string; building: string; unit: string; room_no: string }>("/api/auth/house", {
+        const selected = await apiRequest<HouseSelectionResponse>("/api/auth/house", {
           method: "POST",
           body: { house_id: house.id },
         });
         const houses = session.houses.map((item) => item.id === selected.house_id
-          ? { ...item, label: `${selected.building} ${selected.unit}单元 ${selected.room_no}` }
+          ? { ...item, label: displayHouseAddress(selected) }
           : item);
         persist({ ...session, houses, current_house_id: selected.house_id });
       },
     }),
-    [session],
+    [persist, session],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

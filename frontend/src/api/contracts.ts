@@ -29,6 +29,13 @@ export type LoginResponse = {
   current_house_id?: string | null;
 };
 
+export type HouseSelectionResponse = {
+  house_id: string;
+  building: string;
+  unit: string;
+  room_no: string;
+};
+
 export type ListResult<T> = { items: T[]; total?: number; limit: number; offset: number };
 export type StaffOption = { id: string; display_name: string; role: string };
 export type WorkOrder = {

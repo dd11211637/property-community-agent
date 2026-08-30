@@ -28,6 +28,7 @@ async function waitForAgent(page: Page) {
 
 test("住户登录后可查看真实账单并通过 Agent 查询", async ({ page }) => {
   await login(page, "zhangsan");
+  await expect(page.getByLabel("当前房屋")).toHaveText("1栋 1单元 101");
 
   await page.getByRole("link", { name: "账单费用" }).click();
   await expect(page.getByRole("heading", { name: "当前房屋账单" })).toBeVisible();
@@ -207,6 +208,7 @@ test("多房屋住户必须选择房屋且切换后服务可用", async ({ page 
   await expect(picker.locator("option")).toHaveCount(3);
   await picker.selectOption({ index: 2 });
   await expect(picker).not.toHaveValue("");
+  await expect(picker.locator("option:checked")).toHaveText("2栋 1单元 201");
 
   await page.getByRole("link", { name: "账单费用" }).click();
   await expect(page.getByRole("heading", { name: "当前房屋账单" })).toBeVisible();
@@ -217,7 +219,7 @@ test("管理者看到真实聚合工作台，住户访问则被拒绝", async ({
   const managerContext = await browser.newContext();
   const managerPage = await managerContext.newPage();
   await login(managerPage, "manager");
-  await managerPage.getByRole("link", { name: "管理工作台" }).click();
+  await managerPage.getByRole("link", { name: "管理工作台", exact: true }).click();
   await expect(managerPage.getByRole("heading", { name: "管理工作台" })).toBeVisible();
   await expect(managerPage.getByText("服务支撑状态")).toBeVisible();
   await managerContext.close();

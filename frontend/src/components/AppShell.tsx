@@ -7,6 +7,7 @@ import { NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { workspaceFor, workspaceLabel, type WorkspaceKind } from "../ui/roles";
 import { EnvironmentBadge } from "./EnvironmentBadge";
+import { HouseSwitcher } from "./HouseSwitcher";
 
 type NavItem = readonly [string, string, typeof Bot, string?];
 type NavGroup = { title: string; items: NavItem[] };
@@ -36,7 +37,7 @@ function navigationFor(workspace: WorkspaceKind, roles: readonly string[]): NavG
 }
 
 export function AppShell() {
-  const { session, logout, selectHouse } = useAuth();
+  const { session, logout } = useAuth();
   const [open, setOpen] = useState(false);
   const workspace = workspaceFor(session?.actor.roles);
   const navigation = navigationFor(workspace, session?.actor.roles ?? []);
@@ -61,20 +62,7 @@ export function AppShell() {
       <main className="main-area">
         <header className="topbar">
           <button className="menu-button" aria-label="打开菜单" onClick={() => setOpen(true)}><Menu /></button>
-          <div className="house-picker">
-            <small>当前房屋</small>
-            <select
-              aria-label="当前房屋"
-              value={session?.current_house_id ?? ""}
-              onChange={(event) => {
-                const house = session?.houses.find((item) => item.id === event.target.value);
-                if (house) void selectHouse(house);
-              }}
-            >
-              {!session?.current_house_id && <option value="">请选择房屋</option>}
-              {session?.houses.map((house) => <option value={house.id} key={house.id}>{house.label}</option>)}
-            </select>
-          </div>
+          <HouseSwitcher workspace={workspace} />
           <div className="profile"><span className="avatar">{session?.actor.display_name.slice(0, 1)}</span><div><b>{session?.actor.display_name}</b><small>{workspaceLabel(workspace)} · {session?.actor.community_name}</small></div></div>
           <button className="icon-button" aria-label="退出登录" onClick={logout}><LogOut size={19} /></button>
         </header>

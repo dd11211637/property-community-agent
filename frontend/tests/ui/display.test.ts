@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { businessReference, displayIntegration, displayLabel, isUuid } from "../../src/ui/display";
+import { businessReference, displayHouseAddress, displayIntegration, displayLabel, isUuid } from "../../src/ui/display";
 import { workspaceFor } from "../../src/ui/roles";
 
 describe("release presentation contracts", () => {
@@ -17,6 +17,11 @@ describe("release presentation contracts", () => {
     expect(isUuid(uuid)).toBe(true);
     expect(businessReference(uuid, "当前工单")).toBe("当前工单");
     expect(businessReference("WX-20260830-001")).toBe("WX-20260830-001");
+  });
+
+  it("formats server-owned house fields without duplicating the unit suffix", () => {
+    expect(displayHouseAddress({ building: "1栋", unit: "1单元", room_no: "101" })).toBe("1栋 1单元 101");
+    expect(displayHouseAddress({ building: "2栋", unit: "2", room_no: "201" })).toBe("2栋 2单元 201");
   });
 
   it("selects the role-specific workspace fail-closed", () => {

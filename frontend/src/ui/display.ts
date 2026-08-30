@@ -120,3 +120,8 @@ export function displayIntegration(value: string): string {
     model_gateway: "智能体服务",
   }[value] ?? "外部服务";
 }
+
+export function displayHouseAddress(value: { building: string; unit: string; room_no: string }): string {
+  const unit = value.unit.endsWith("单元") ? value.unit : `${value.unit}单元`;
+  return [value.building, unit, value.room_no].filter(Boolean).join(" ");
+}

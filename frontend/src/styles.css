@@ -27,9 +27,12 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .mobile-close, .menu-button, .sidebar-scrim { display: none; }
 .main-area { width: calc(100% - 250px); min-width: 0; margin-left: 250px; }
 .topbar { height: 74px; display: flex; align-items: center; gap: 15px; padding: 0 32px; border-bottom: 1px solid var(--line); background: #fffefaeb; backdrop-filter: blur(14px); }
-.house-picker { display: flex; flex-direction: column; margin-right: auto; }
+.house-picker { position: relative; display: flex; flex-direction: column; margin-right: auto; }
 .house-picker small, .profile small { color: var(--muted); font-size: 10px; }
 .house-picker select { padding: 1px 24px 1px 0; border: 0; outline: 0; background: transparent; color: #273d35; font-weight: 700; }
+.house-picker strong { color: #273d35; font-size: 14px; line-height: 1.6; }
+.house-picker select:disabled { cursor: wait; opacity: .65; }
+.house-picker-error { position: absolute; top: 54px; padding: 5px 8px; border: 1px solid #efc7bf; border-radius: 7px; color: #8d483d !important; background: #fff8f5; }
 .profile { display: flex; align-items: center; gap: 9px; padding-right: 12px; border-right: 1px solid var(--line); }
 .profile b { display: block; font-size: 13px; }
 .avatar { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; background: #d8e7df; color: var(--green); font-weight: 700; }
