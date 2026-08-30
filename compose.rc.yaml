@@ -114,7 +114,7 @@ services:
     environment:
       BACKEND_UPSTREAM: backend:8000
     ports:
-      - "${RC_HTTP_PORT:-8080}:80"
+      - "127.0.0.1:${RC_HTTP_PORT:-8080}:80"
     depends_on:
       backend:
         condition: service_healthy
@@ -199,7 +199,7 @@ services:
     environment:
       BACKEND_UPSTREAM: acceptance-backend:8000
     ports:
-      - "${ACCEPTANCE_HTTP_PORT:-18080}:80"
+      - "127.0.0.1:${ACCEPTANCE_HTTP_PORT:-18080}:80"
     depends_on:
       acceptance-backend:
         condition: service_healthy
