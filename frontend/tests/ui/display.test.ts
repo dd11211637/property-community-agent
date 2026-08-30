@@ -6,6 +6,9 @@ describe("release presentation contracts", () => {
   it("maps storage values to business language", () => {
     expect(displayLabel("PENDING_ASSIGNMENT")).toBe("待派单");
     expect(displayLabel("DEGRADED")).toBe("需要关注");
+    expect(displayLabel("REPAIR")).toBe("报修");
+    expect(displayLabel("BILLING")).toBe("账单");
+    expect(displayLabel("INSPECTION")).toBe("巡检安防");
     expect(displayIntegration("model_gateway")).toBe("智能体服务");
   });
 
