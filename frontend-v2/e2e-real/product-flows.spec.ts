@@ -79,6 +79,7 @@ test.describe.serial("Frontend V2 real Release Candidate stack", () => {
       return body.data.length;
     }).toBeGreaterThan(0);
 
+    await page.getByRole("link", { name: "AI 与记忆", exact: true }).click();
     await page.getByLabel("内容").fill(memory);
     await page.getByRole("button", { name: "保存记忆" }).click();
     await expect.poll(async () => {
