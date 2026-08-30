@@ -13,16 +13,15 @@ Set these values without writing them to the repository or shell history:
 
 Put these values in an ignored `.env` file or inject them through the shell. `JWT_SECRET` must have at least 32 characters. OTel is disabled by default for local use. The default stack never runs files under `testing/`.
 
-## Build and start
+## First start
 
 ```powershell
-$env:RELEASE_SHA = (git rev-parse HEAD).Trim()
-docker compose -f compose.rc.yaml config --quiet
-docker compose -f compose.rc.yaml up --build -d frontend-v2
-docker compose -f compose.rc.yaml ps
-Invoke-RestMethod http://127.0.0.1:8080/health
-Invoke-RestMethod http://127.0.0.1:8080/ready
+.\scripts\local_rc.ps1 bootstrap
+.\scripts\local_rc.ps1 start
+.\scripts\local_rc.ps1 status
 ```
+
+The helper reads the ignored `.env` from this or another worktree of the same repository, injects the exact current `HEAD`, and never prints secrets. Pass `-EnvFile C:\path\to\.env` only when automatic discovery is unsuitable.
 
 The product is served from `http://127.0.0.1:8080/`. `/api/agent/conversations/{id}/messages/stream` is a real POST SSE path with proxy buffering disabled and a bounded long-read timeout. The production image omits `demo.html`.
 
@@ -30,11 +29,7 @@ The product is served from `http://127.0.0.1:8080/`. `/api/agent/conversations/{
 
 On a new database, explicitly create localhost starter identities and representative records, then start the product. This profile is never part of the default startup chain.
 
-```powershell
-$env:RELEASE_SHA = (git rev-parse HEAD).Trim()
-docker compose -f compose.rc.yaml --profile local-bootstrap run --build --rm local-bootstrap
-docker compose -f compose.rc.yaml up --build -d frontend-v2
-```
+The `bootstrap` command is idempotent and only needs to run again after creating an empty database.
 
 Sign in at `http://127.0.0.1:8080/` with `zhangsan` / `123456`. Other role accounts are documented in `testing/seeds/seed_platform.py`; change or replace these localhost-only starter credentials before exposing the service beyond loopback.
 
@@ -63,11 +58,10 @@ The main Compose file requires the production variables even when only the accep
 ## Stop, restart, and data retention
 
 ```powershell
-docker compose -f compose.rc.yaml logs --tail 200 backend frontend-v2
-docker compose -f compose.rc.yaml restart backend
-Invoke-RestMethod http://127.0.0.1:8080/ready
-docker compose -f compose.rc.yaml down
-docker compose -f compose.rc.yaml up -d frontend-v2
+.\scripts\local_rc.ps1 stop
+.\scripts\local_rc.ps1 start
+.\scripts\local_rc.ps1 restart
+.\scripts\local_rc.ps1 status
 ```
 
 `down`, `stop`, and `restart` preserve the named `rc_postgres` volume. Never add `--volumes` unless permanently deleting local product data is intended. Back up that volume before destructive Docker cleanup. Protected certification and production readiness are deliberately deferred.
