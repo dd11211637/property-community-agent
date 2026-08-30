@@ -24,6 +24,7 @@ class OpenAICompatibleEmbeddingProvider:
         model: str,
         version: str,
         dimensions: int = 1536,
+        source_dimensions: int | None = None,
         timeout_seconds: float = 6.0,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
@@ -32,6 +33,7 @@ class OpenAICompatibleEmbeddingProvider:
         self._model = model
         self._version = version
         self._dimensions = dimensions
+        self._source_dimensions = source_dimensions or dimensions
         self._timeout = timeout_seconds
         self._transport = transport
 
@@ -58,8 +60,10 @@ class OpenAICompatibleEmbeddingProvider:
             vector = self._parse(response.json())
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as exc:
             raise EmbeddingUnavailable("embedding provider request failed") from exc
-        if len(vector) != self._dimensions:
+        if len(vector) != self._source_dimensions:
             raise EmbeddingUnavailable("embedding provider returned an unexpected dimension")
+        if len(vector) < self._dimensions:
+            vector.extend(0.0 for _ in range(self._dimensions - len(vector)))
         return EmbeddingResult(tuple(vector), self._model, self._version)
 
     @staticmethod

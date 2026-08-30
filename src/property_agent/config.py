@@ -74,9 +74,10 @@ class Settings(BaseSettings):
     # ── Provider-neutral long-term-memory embeddings ────────────
     memory_embedding_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     memory_embedding_api_key: str = ""
-    memory_embedding_model: Literal["text-embedding-v4"] = "text-embedding-v4"
+    memory_embedding_model: str = "text-embedding-v4"
     memory_embedding_version: str = "bailian-v4-1536-v1"
     memory_embedding_dimensions: int = 1536
+    memory_embedding_source_dimensions: int = 1536
     memory_embedding_timeout_seconds: float = 6.0
     attachment_storage_root: str = "var/attachments"
 
@@ -158,6 +159,8 @@ class Settings(BaseSettings):
             problems.append("MEMORY_EMBEDDING_DIMENSIONS must match the pgvector schema (1536)")
         if self.memory_embedding_timeout_seconds <= 0:
             problems.append("MEMORY_EMBEDDING_TIMEOUT_SECONDS must be positive")
+        if not 1 <= self.memory_embedding_source_dimensions <= 1536:
+            problems.append("MEMORY_EMBEDDING_SOURCE_DIMENSIONS must be between 1 and 1536")
         if self.otel_enabled and not self.otel_exporter_endpoint.strip():
             problems.append("OTEL_EXPORTER_ENDPOINT is required when OTEL_ENABLED is true")
         if self.otel_export_interval_ms <= 0:

@@ -41,5 +41,6 @@ def _embedding_provider(settings: Any) -> OpenAICompatibleEmbeddingProvider | No
         model=settings.memory_embedding_model,
         version=settings.memory_embedding_version,
         dimensions=settings.memory_embedding_dimensions,
+        source_dimensions=settings.memory_embedding_source_dimensions,
         timeout_seconds=settings.memory_embedding_timeout_seconds,
     )
