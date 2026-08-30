@@ -18,6 +18,7 @@ from property_agent.agent.orchestration import (
     SpecialistOutcome,
 )
 from property_agent.agent.planning import SupervisorPlanner
+from property_agent.agent.repair_semantics import normalize_repair_create
 from property_agent.agent.runtime import PreparedWrite, RuntimeContext
 from property_agent.agent.specialists.announcement import AnnouncementSpecialist
 from property_agent.agent.specialists.billing import BillingSpecialist
@@ -155,6 +156,17 @@ def test_explicit_repair_creation_normalizes_business_semantics():
         "location": "卫生间",
         "description": "水管漏水",
         "urgency": "URGENT",
+    }
+
+
+def test_trailing_repair_request_keeps_the_user_stated_symptom():
+    normalized = normalize_repair_create("客厅电灯坏了，需要报修", {})
+
+    assert normalized == {
+        "category": "ELECTRICAL",
+        "location": "客厅",
+        "description": "电灯坏了",
+        "urgency": "NORMAL",
     }
 
 

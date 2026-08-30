@@ -19,6 +19,28 @@ from property_agent.platform.domain.exceptions import InvalidConfirmationTokenEx
 from property_agent.platform.infrastructure.orm_models import ConfirmationTokenModel
 
 CONFIRMATION_TTL_MINUTES = 5
+_CREATE_WORK_ORDER_DEFAULTS: dict[str, Any] = {
+    "attachment_ids": [],
+    "contact_name": None,
+    "contact_phone": None,
+    "access_instructions": None,
+    "preferred_time_windows": [],
+}
+_CREATE_WORK_ORDER_REQUIRED = {"house_id", "category", "location", "description", "urgency"}
+
+
+def _normalized_parameters(action: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Fill additive API defaults before binding a confirmation token.
+
+    Older clients omit optional work-order service details while newer clients
+    send their explicit JSON defaults. Both represent the same business action
+    and must bind to the same hash; non-default values remain fully protected.
+    """
+    normalized = dict(params)
+    if action == "CREATE_WORK_ORDER" and _CREATE_WORK_ORDER_REQUIRED.issubset(normalized):
+        for name, default in _CREATE_WORK_ORDER_DEFAULTS.items():
+            normalized.setdefault(name, default)
+    return normalized
 
 
 def _hash_dict(data: dict[str, Any]) -> str:
@@ -66,7 +88,7 @@ class ConfirmationService:
         Returns the token string to be sent to the user for confirmation.
         """
         token = secrets.token_urlsafe(32)
-        parameter_hash = _hash_dict(params)
+        parameter_hash = _hash_dict(_normalized_parameters(action, params))
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=CONFIRMATION_TTL_MINUTES)
 
         self._session.add(
@@ -105,7 +127,7 @@ class ConfirmationService:
         Raises:
             InvalidConfirmationTokenException: if any validation fails.
         """
-        parameter_hash = _hash_dict(params)
+        parameter_hash = _hash_dict(_normalized_parameters(action, params))
 
         record = (
             self._session.query(ConfirmationTokenModel)

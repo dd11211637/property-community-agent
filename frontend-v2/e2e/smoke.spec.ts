@@ -735,7 +735,7 @@ test("message center marks one message read and deep-links to business context",
   ).toBeVisible();
   await expect(page.locator("dd").getByText("真实居民", { exact: true })).toBeVisible();
   await expect(page.getByText("1栋 1单元 101室", { exact: true })).toBeVisible();
-  await expect(page.getByText("待分派", { exact: true })).toBeVisible();
+  await expect(page.getByText("待分派", { exact: true }).first()).toBeVisible();
 });
 
 test("resident is forbidden from admin while manager sees truthful service states", async ({

@@ -35,6 +35,11 @@ class AgentRequestContext:
     def bound_house_ids(self) -> frozenset[UUID]:
         return self.house_ids
 
+    def has_any_role(self, *roles: object) -> bool:
+        """Expose the shared business-service authorization protocol."""
+        expected = {str(getattr(role, "value", role)) for role in roles}
+        return bool(self.roles.intersection(expected))
+
     @classmethod
     def from_platform(cls, context: RequestContext) -> "AgentRequestContext":
         return cls(

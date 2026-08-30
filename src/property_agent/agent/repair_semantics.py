@@ -86,7 +86,12 @@ def _urgency_floor(text: str, proposed: str) -> str:
 def _clean_description(proposed: str, text: str, location: str) -> str:
     value = proposed.strip()
     if not value or value == text.strip():
-        value = re.sub(r"^.*?(?:帮我报修|我要报修|需要报修|申请报修)[，,:：\s]*", "", text)
+        value = re.sub(r"^(?:帮我报修|我要报修|需要报修|申请报修)[，,:：\s]*", "", text)
+        value = re.sub(
+            r"[，,。\s]*(?:帮我报修|我要报修|需要报修|申请报修|提交报修)[。！!\s]*$",
+            "",
+            value,
+        )
         value = re.sub(r"^\d+栋\d+单元\d+(?:室)?", "", value).lstrip("，,。 ")
         if location and value.startswith(location):
             value = value[len(location) :]

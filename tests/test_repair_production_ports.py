@@ -438,6 +438,32 @@ def test_token_minted_by_confirmation_service_is_accepted(sessions, seed, servic
     assert canonical_hash(params) == command_hash(command)
 
 
+def test_legacy_confirmation_without_optional_service_details_is_accepted(
+    sessions, seed, service
+) -> None:
+    """Additive request fields do not invalidate an older client's confirmation."""
+    draft = make_command(seed)
+    legacy_params = {
+        "house_id": draft.house_id,
+        "category": draft.category,
+        "location": draft.location,
+        "description": draft.description,
+        "urgency": draft.urgency,
+    }
+    with sessions() as session:
+        token = ConfirmationService(session).generate_token(
+            actor_id=seed.resident,
+            action="CREATE_WORK_ORDER",
+            params=legacy_params,
+        )
+        session.commit()
+
+    command = make_command(seed, token=token)
+    created = service.create(command, resident_ctx(seed), idempotency_key="k-legacy-client")
+
+    assert created.status == WorkOrderStatus.PENDING_ASSIGNMENT
+
+
 def test_agent_create_automatically_assigns_active_repair_worker(sessions, seed, service) -> None:
     command = confirmed_command(sessions, seed)
     agent_service = AutoAssigningWorkOrderService(

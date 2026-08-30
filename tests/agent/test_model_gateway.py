@@ -482,7 +482,7 @@ def test_keyword_guard_fills_explicit_repair_slots_when_model_omits_them():
 
     assert result.slots["category"] == "ELECTRICAL"
     assert result.slots["location"] == "客厅"
-    assert result.slots["description"] == "客厅电灯坏了，需要报修"
+    assert result.slots["description"] == "电灯坏了"
 
 
 def test_keyword_guard_rejects_model_location_not_stated_by_user():
