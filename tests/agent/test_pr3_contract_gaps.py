@@ -417,6 +417,10 @@ def test_repair_confirmation_derives_category_from_exact_pending_description():
                 "description": "厨房水管漏水",
                 "location": "厨房",
                 "urgency": "NORMAL",
+                "contact_name": "张先生",
+                "contact_phone": "13800000000",
+                "access_instructions": "到门口请电话联系",
+                "preferred_time_windows": ("明天上午",),
             },
         },
         slots={"category": "OTHER", "description": "stale legacy description"},
@@ -428,6 +432,11 @@ def test_repair_confirmation_derives_category_from_exact_pending_description():
     assert parameters["house_id"] == house_id
     assert parameters["category"].value == "WATER_PLUMBING"
     assert parameters["description"] == "厨房水管漏水"
+    assert parameters["attachment_ids"] == ()
+    assert parameters["contact_name"] == "张先生"
+    assert parameters["contact_phone"] == "13800000000"
+    assert parameters["access_instructions"] == "到门口请电话联系"
+    assert parameters["preferred_time_windows"] == ("明天上午",)
 
 
 def test_legacy_graph_never_reexposes_internal_capability_cause():

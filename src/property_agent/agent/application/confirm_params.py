@@ -195,6 +195,10 @@ def _repair_create_params(state: GraphState) -> tuple[str, dict[str, Any]]:
             "description": description,
             "urgency": urgency,
             "attachment_ids": (),
+            "contact_name": pending.get("contact_name"),
+            "contact_phone": pending.get("contact_phone"),
+            "access_instructions": pending.get("access_instructions"),
+            "preferred_time_windows": tuple(pending.get("preferred_time_windows") or ()),
         },
     )
 

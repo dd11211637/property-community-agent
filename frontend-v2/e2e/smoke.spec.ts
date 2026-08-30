@@ -550,7 +550,7 @@ test("resident Agent clarification, changed confirmation recovery and trusted fa
 
 test("real Agent memory CRUD stays actor-scoped and versioned", async ({ page }) => {
   await login(page, "resident");
-  await page.getByRole("link", { name: "Agent", exact: true }).click();
+  await page.getByRole("link", { name: "AI 与记忆", exact: true }).click();
   await page.getByLabel("内容").fill("优先短信联系");
   await page.getByRole("button", { name: "保存记忆" }).click();
   await expect(page.getByText("优先短信联系")).toBeVisible();
@@ -567,10 +567,11 @@ test("real Agent memory CRUD stays actor-scoped and versioned", async ({ page })
   await expect(page.getByText("暂无长期记忆")).toBeVisible();
 });
 
-test("operations home is the real Agent workspace", async ({ page }) => {
+test("operations home is centered on real business queues", async ({ page }) => {
   await login(page, "manager");
-  await expect(page.getByText("REAL AGENT WORKSPACE")).toBeVisible();
-  await expect(page.getByText("真实对话")).toBeVisible();
+  await expect(page.getByText(/汇总社区待处理事项与服务状态/)).toBeVisible();
+  await expect(page.getByText("当前可见工单")).toBeVisible();
+  await expect(page.getByText("近期社区公告")).toBeVisible();
 });
 
 test("Agent cancel sends real cancellation and never renders business success", async ({ page }) => {
@@ -619,7 +620,7 @@ test("house switch detaches an incompatible Agent conversation", async ({ page }
   await expect(page).toHaveURL(/\/agent\/conversations\//);
   await page.getByLabel("当前房屋").selectOption("house-b");
   await expect(page).toHaveURL(/\/agent$/);
-  await expect(page.getByText("开始真实 Agent 对话")).toBeVisible();
+  await expect(page.getByText("开始对话")).toBeVisible();
 });
 
 test("resident opens bill detail and sees explicit unknown-rule state", async ({
@@ -732,7 +733,7 @@ test("message center marks one message read and deep-links to business context",
   await expect(
     page.getByRole("heading", { name: "BX-2026-001" }),
   ).toBeVisible();
-  await expect(page.getByText("真实居民", { exact: true })).toBeVisible();
+  await expect(page.locator("dd").getByText("真实居民", { exact: true })).toBeVisible();
   await expect(page.getByText("1栋 1单元 101室", { exact: true })).toBeVisible();
   await expect(page.getByText("待分派", { exact: true })).toBeVisible();
 });
@@ -751,7 +752,7 @@ test("manager gets deterministic operations and admin navigation", async ({
   page,
 }) => {
   await login(page, "manager");
-  await expect(page.getByText("REAL AGENT WORKSPACE")).toBeVisible();
+  await expect(page.getByText(/汇总社区待处理事项与服务状态/)).toBeVisible();
   await expect(page.getByRole("link", { name: "账单" })).toBeVisible();
   await expect(page.getByRole("link", { name: "运营" })).toBeVisible();
   await page.getByRole("link", { name: "管理" }).click();
@@ -804,7 +805,7 @@ test("mobile navigation, account controls and house selector are keyboard operab
   await login(page, "multi");
   await page.getByRole("button", { name: "打开导航" }).click();
   await expect(
-    page.getByRole("dialog").getByRole("link", { name: "社区" }),
+    page.getByRole("dialog").getByRole("link", { name: "社区", exact: true }),
   ).toBeVisible();
   await page.keyboard.press("Escape");
   await page.getByLabel("当前房屋").focus();

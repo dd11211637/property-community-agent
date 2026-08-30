@@ -21,9 +21,18 @@ def test_memory_embedding_dimension_cannot_diverge_from_pgvector_schema():
         Settings(memory_embedding_dimensions=1024, _env_file=None)
 
 
-def test_memory_embedding_model_cannot_drift_from_bailian_v4():
-    with pytest.raises(ValidationError, match="memory_embedding_model"):
-        Settings(memory_embedding_model="text-embedding-3-small", _env_file=None)
+def test_memory_embedding_model_is_provider_neutral_but_vector_shape_stays_fixed():
+    config = Settings(
+        memory_embedding_base_url="http://127.0.0.1:11434/v1",
+        memory_embedding_model="qwen3-embedding:0.6b",
+        memory_embedding_version="ollama-qwen3-0.6b-pad1536-v1",
+        memory_embedding_source_dimensions=1024,
+        _env_file=None,
+    )
+
+    assert config.memory_embedding_model == "qwen3-embedding:0.6b"
+    assert config.memory_embedding_source_dimensions == 1024
+    assert config.memory_embedding_dimensions == 1536
 
 
 def test_production_profile_rejects_default_credentials():

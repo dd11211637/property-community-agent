@@ -129,6 +129,10 @@ def run(base_url: str, *, client: Any | None = None) -> dict[str, Any]:
             "description": "E2E：厨房水管漏水",
             "urgency": "NORMAL",
             "attachment_ids": [],
+            "contact_name": None,
+            "contact_phone": None,
+            "access_instructions": None,
+            "preferred_time_windows": [],
         }
         repair_token = api.confirmation(resident, "CREATE_WORK_ORDER", repair_parameters)
         repair = api.request(

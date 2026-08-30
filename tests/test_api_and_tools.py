@@ -4,6 +4,8 @@ from pydantic import ValidationError
 
 from property_agent.repair.adapters.api.app import create_app
 from property_agent.repair.adapters.api.dependencies import get_request_context
+from property_agent.repair.adapters.api.router import get_work_order_presenter
+from property_agent.repair.adapters.presentation import work_order_data
 from property_agent.repair.adapters.tool_adapter import (
     EXECUTE_ACTION_INPUT_ADAPTER,
     TOOL_SCHEMAS,
@@ -12,6 +14,14 @@ from property_agent.repair.adapters.tool_adapter import (
 )
 from property_agent.repair.domain.enums import WorkOrderStatus
 from tests.conftest import Ids
+
+
+class _InMemoryPresenter:
+    """Keep standalone API contract tests independent from platform tables."""
+
+    @staticmethod
+    def present(work_order, service, context) -> dict:
+        return work_order_data(work_order, service, context)
 
 
 def create_payload(ids: Ids) -> dict:
@@ -29,6 +39,7 @@ def create_payload(ids: Ids) -> dict:
 def test_create_api_uses_unified_envelope(service, ids, resident_context) -> None:
     app = create_app(service)
     app.dependency_overrides[get_request_context] = lambda: resident_context
+    app.dependency_overrides[get_work_order_presenter] = _InMemoryPresenter
     client = TestClient(app)
 
     response = client.post(
@@ -80,6 +91,7 @@ def test_tool_adapter_exposes_framework_neutral_schemas(service, ids, resident_c
 def test_request_id_header_is_limited_to_database_capacity(service, ids, resident_context) -> None:
     app = create_app(service)
     app.dependency_overrides[get_request_context] = lambda: resident_context
+    app.dependency_overrides[get_work_order_presenter] = _InMemoryPresenter
     client = TestClient(app)
 
     response = client.post(
