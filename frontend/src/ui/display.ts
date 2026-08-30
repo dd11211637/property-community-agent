@@ -22,6 +22,12 @@ const labels: Record<string, string> = {
   PUBLISHED: "已发布",
   SCHEDULED: "待发布",
   WITHDRAWN: "已撤回",
+  ANSWERED: "已答复",
+  APPEALED: "申诉处理中",
+  CHECKIN: "到场签到",
+  POINT_RECORD: "点位记录",
+  PROGRESS: "处理进展",
+  COMPLETION: "完成记录",
   SENT: "已送达",
   FAILED: "送达失败",
   READ: "已读",
@@ -49,6 +55,10 @@ const labels: Record<string, string> = {
   DEGRADED: "需要关注",
   CONFIGURED_NOT_PROBED: "已配置，待检测",
   NOT_CREATED: "尚未发起",
+  GAS_LEAK: "燃气泄漏",
+  FIRE: "火情",
+  PERSONAL_SAFETY: "人员安全",
+  EQUIPMENT_FAULT: "设施设备隐患",
 };
 
 const statusTone: Record<string, "neutral" | "success" | "warning" | "danger"> = {
@@ -103,3 +113,10 @@ export function displayMoney(value: unknown): string {
     : "—";
 }
 
+export function displayIntegration(value: string): string {
+  return {
+    database: "业务数据库",
+    message_delivery: "消息送达服务",
+    model_gateway: "智能体服务",
+  }[value] ?? "外部服务";
+}

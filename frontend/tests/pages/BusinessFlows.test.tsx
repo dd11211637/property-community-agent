@@ -121,7 +121,7 @@ describe("M3 business pages", () => {
 
     renderAs(<BillingPage />, ["RESIDENT"]);
     fireEvent.click(await screen.findByRole("button", { name: /2026-08/ }));
-    expect(await screen.findByText("规则缺失")).toBeInTheDocument();
+    expect(await screen.findByText("费用依据待核实")).toBeInTheDocument();
     expect(screen.getByText("物业费")).toBeInTheDocument();
   });
 

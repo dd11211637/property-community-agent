@@ -367,3 +367,55 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+.skeleton-state { align-items: stretch; padding: 34px; }
+.skeleton-state span { color: var(--ink-muted); font-size: 12px; }
+.skeleton-line { width: 72%; height: 12px; border-radius: 6px; background: #e7ece7; animation: skeleton-pulse 1.4s ease-in-out infinite; }
+.skeleton-line.wide { width: 100%; height: 54px; }
+.skeleton-line.short { width: 46%; }
+@keyframes skeleton-pulse { 50% { opacity: .48; } }
+
+.repair-list { display: grid; }
+.repair-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 20px; padding: 20px 4px; border: 0; border-bottom: 1px solid var(--line); background: transparent; }
+.repair-item:first-child { padding-top: 6px; }
+.repair-item-main > div { display: flex; align-items: center; gap: 9px; }
+.repair-item-main h3 { margin: 11px 0 4px; font-size: 18px; }
+.repair-item-main p { margin: 0; overflow: hidden; color: var(--ink-muted); text-overflow: ellipsis; white-space: nowrap; }
+.repair-item-main small { color: var(--ink-muted); }
+.repair-next { display: flex; align-items: center; align-self: center; gap: 6px; color: var(--ink-muted); font-size: 12px; }
+.repair-next svg { width: 15px; }
+.repair-detail-summary { padding: 18px; border-radius: 12px; background: var(--surface-muted); }
+.repair-detail-summary h3 { margin: 13px 0 5px; font-size: 21px; }
+.repair-detail-summary p { margin: 0 0 12px; color: var(--ink); line-height: 1.7; }
+.repair-detail-summary small { color: var(--ink-muted); }
+.primary-actions { margin-top: 16px; }
+
+.bill-card.current { grid-column: span 2; background: #f6f9f4; }
+.bill-card.current strong { font-size: 34px; }
+.bill-card p { margin-bottom: 12px; }
+.bill-detail-hero { display: flex; justify-content: space-between; gap: 20px; padding: 20px; border-radius: 12px; background: var(--surface-muted); }
+.bill-detail-hero > div { display: grid; gap: 7px; }
+.bill-detail-hero strong { font-size: 32px; }
+.bill-detail-hero small, .data-freshness { color: var(--ink-muted); }
+.charge-breakdown { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; margin-top: 16px; background: var(--line); }
+.charge-breakdown > div { display: flex; justify-content: space-between; gap: 10px; padding: 13px; background: var(--surface); }
+.charge-breakdown span { color: var(--ink-muted); }
+.data-freshness { font-size: 11px; }
+
+.announcement-feed, .announcement-queue { display: grid; }
+.announcement-item { display: grid; gap: 10px; padding: 22px 4px; border: 0; border-bottom: 1px solid var(--line); background: transparent; text-align: left; }
+.announcement-item h3 { margin: 0; font-size: 20px; }
+.announcement-item p { display: -webkit-box; margin: 0; overflow: hidden; color: var(--ink); line-height: 1.75; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.announcement-meta { display: flex; align-items: center; gap: 10px; color: var(--ink-muted); font-size: 11px; }
+.announcement-meta time { margin-left: auto; }
+.announcement-queue { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.announcement-queue .announcement-item { padding: 18px; border: 1px solid var(--line); border-radius: 12px; }
+.decision-panel { border-top: 3px solid var(--admin-accent); }
+.danger-panel { border-top-color: var(--danger); }
+.health-evidence { background: #f8faf7; }
+
+@media (max-width: 760px) {
+  .bill-card.current { grid-column: auto; }
+  .charge-breakdown, .announcement-queue { grid-template-columns: 1fr; }
+  .repair-item { grid-template-columns: 1fr; }
+}

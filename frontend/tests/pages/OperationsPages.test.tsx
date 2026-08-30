@@ -68,11 +68,11 @@ describe("M2 operations pages", () => {
     }));
 
     render(<AdminPage />);
-    expect(await screen.findByText("集成健康状态")).toBeInTheDocument();
+    expect(await screen.findByText("服务支撑状态")).toBeInTheDocument();
     expect(screen.getByText("2")).toBeInTheDocument();
     expect(screen.getByText("1")).toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument();
-    expect(screen.getByText("DEGRADED")).toBeInTheDocument();
+    expect(screen.getByText("需要关注")).toBeInTheDocument();
     expect(screen.getByText("消息投递失败")).toBeInTheDocument();
     expect(screen.getByText(/138\*\*\*\*0002/)).toBeInTheDocument();
     expect(screen.queryByText("—")).not.toBeInTheDocument();
