@@ -17,6 +17,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _DEVELOPMENT_JWT_SECRET = "dev-secret-change-in-production-32chars-min"
 
 
+def _validate_runtime_profile(profile: str, environment: str) -> None:
+    if profile == "local-v2" and environment not in {"local-use", "release-candidate"}:
+        raise RuntimeError(
+            "Unsafe runtime configuration: AGENT_RUNTIME_PROFILE=local-v2 is limited "
+            "to local-use or release-candidate deployments"
+        )
+
+
 class Settings(BaseSettings):
     """Application-wide settings loaded from .env and environment variables.
 
@@ -70,6 +78,7 @@ class Settings(BaseSettings):
     memory_embedding_version: str = "bailian-v4-1536-v1"
     memory_embedding_dimensions: int = 1536
     memory_embedding_timeout_seconds: float = 6.0
+    attachment_storage_root: str = "var/attachments"
 
     # ── Agent concurrency guards (P0 正确性底座) ──────────────────
     # 关闭后回退到「单凭 confirmation token」旧行为，便于回滚/排错；
@@ -125,14 +134,7 @@ class Settings(BaseSettings):
 
     def validate_runtime_security(self) -> None:
         """Reject development credentials when the production profile is selected."""
-        if self.agent_runtime_profile == "local-v2" and self.deployment_environment not in {
-            "local-use",
-            "release-candidate",
-        }:
-            raise RuntimeError(
-                "Unsafe runtime configuration: AGENT_RUNTIME_PROFILE=local-v2 is limited "
-                "to local-use or release-candidate deployments"
-            )
+        _validate_runtime_profile(self.agent_runtime_profile, self.deployment_environment)
         if self.env.strip().lower() != "production":
             return
 

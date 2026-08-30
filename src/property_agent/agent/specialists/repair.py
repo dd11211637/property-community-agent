@@ -29,6 +29,11 @@ class RepairSpecialist(StatelessSpecialist):
             }
             if values.get("category"):
                 parameters["category"] = str(values["category"])
+            for key in ("contact_name", "contact_phone", "access_instructions"):
+                if values.get(key):
+                    parameters[key] = str(values[key])
+            if values.get("preferred_time_windows"):
+                parameters["preferred_time_windows"] = tuple(values["preferred_time_windows"])
             return parameters
         return {
             "statuses": tuple(values.get("statuses") or ()),

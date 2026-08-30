@@ -555,6 +555,30 @@
         "title": "AnswerConsultationRequest",
         "type": "object"
       },
+      "AppointmentResponse": {
+        "additionalProperties": true,
+        "properties": {
+          "appointment_at": {
+            "title": "Appointment At",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "recorded_at": {
+            "title": "Recorded At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "appointment_at",
+          "note",
+          "recorded_at"
+        ],
+        "title": "AppointmentResponse",
+        "type": "object"
+      },
       "AssignEventRequest": {
         "additionalProperties": false,
         "properties": {
@@ -616,6 +640,52 @@
           "assignee_id"
         ],
         "title": "AssignTaskRequest",
+        "type": "object"
+      },
+      "AttachmentResponse": {
+        "properties": {
+          "business_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Type"
+          },
+          "content_type": {
+            "title": "Content Type",
+            "type": "string"
+          },
+          "file_name": {
+            "title": "File Name",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "size_bytes": {
+            "title": "Size Bytes",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "file_name",
+          "content_type",
+          "size_bytes",
+          "status",
+          "business_type"
+        ],
+        "title": "AttachmentResponse",
         "type": "object"
       },
       "AudienceSnapshotResponse": {
@@ -990,6 +1060,25 @@
           "name"
         ],
         "title": "BillingRuleResponse",
+        "type": "object"
+      },
+      "Body_upload_attachment_api_attachments_post": {
+        "properties": {
+          "business_type": {
+            "default": "REPAIR",
+            "title": "Business Type",
+            "type": "string"
+          },
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_attachment_api_attachments_post",
         "type": "object"
       },
       "CompletionRequest": {
@@ -1701,6 +1790,18 @@
       "CreateWorkOrderRequest": {
         "additionalProperties": false,
         "properties": {
+          "access_instructions": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Instructions"
+          },
           "attachment_ids": {
             "items": {
               "format": "uuid",
@@ -1717,6 +1818,30 @@
             "title": "Confirmation Token",
             "type": "string"
           },
+          "contact_name": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Name"
+          },
+          "contact_phone": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Phone"
+          },
           "description": {
             "minLength": 1,
             "title": "Description",
@@ -1732,6 +1857,14 @@
             "minLength": 1,
             "title": "Location",
             "type": "string"
+          },
+          "preferred_time_windows": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 5,
+            "title": "Preferred Time Windows",
+            "type": "array"
           },
           "urgency": {
             "$ref": "#/components/schemas/Urgency"
@@ -1992,6 +2125,44 @@
           "request_id"
         ],
         "title": "Envelope[AnnouncementResponse]",
+        "type": "object"
+      },
+      "Envelope_AttachmentResponse_": {
+        "properties": {
+          "data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AttachmentResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "success": {
+            "title": "Success",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "title": "Envelope[AttachmentResponse]",
         "type": "object"
       },
       "Envelope_AudienceSnapshotResponse_": {
@@ -4607,6 +4778,17 @@
       "WorkOrderResponse": {
         "additionalProperties": true,
         "properties": {
+          "access_instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Instructions"
+          },
           "assignee_id": {
             "anyOf": [
               {
@@ -4661,9 +4843,49 @@
             "title": "Community Id",
             "type": "string"
           },
+          "completion_attachment_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Completion Attachment Ids",
+            "type": "array"
+          },
+          "contact_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Name"
+          },
+          "contact_phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Phone"
+          },
           "created_at": {
             "title": "Created At",
             "type": "string"
+          },
+          "current_appointment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AppointmentResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "description": {
             "title": "Description",
@@ -4698,6 +4920,13 @@
             "title": "Location",
             "type": "string"
           },
+          "preferred_time_windows": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Preferred Time Windows",
+            "type": "array"
+          },
           "reporter_id": {
             "format": "uuid",
             "title": "Reporter Id",
@@ -4713,6 +4942,19 @@
               }
             ],
             "title": "Reporter Name"
+          },
+          "request_attachment_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Request Attachment Ids",
+            "type": "array"
+          },
+          "service_phase": {
+            "default": "REQUESTED",
+            "title": "Service Phase",
+            "type": "string"
           },
           "status": {
             "title": "Status",
@@ -4759,6 +5001,17 @@
           "action": {
             "title": "Action",
             "type": "string"
+          },
+          "appointment_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Appointment At"
           },
           "attachment_ids": {
             "items": {
@@ -6095,6 +6348,117 @@
         "summary": "Versions",
         "tags": [
           "announcement"
+        ]
+      }
+    },
+    "/api/attachments": {
+      "post": {
+        "operationId": "upload_attachment_api_attachments_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_attachment_api_attachments_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_AttachmentResponse_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upload Attachment",
+        "tags": [
+          "attachments"
+        ]
+      }
+    },
+    "/api/attachments/{attachment_id}": {
+      "get": {
+        "operationId": "download_attachment_api_attachments__attachment_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "attachment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Attachment Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download Attachment",
+        "tags": [
+          "attachments"
         ]
       }
     },

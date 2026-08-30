@@ -17,6 +17,7 @@ x-backend-environment: &backend-environment
   MEMORY_EMBEDDING_MODEL: ${MEMORY_EMBEDDING_MODEL:-text-embedding-v4}
   MEMORY_EMBEDDING_VERSION: ${MEMORY_EMBEDDING_VERSION:-bailian-v4-1536-v1}
   MEMORY_EMBEDDING_DIMENSIONS: "1536"
+  ATTACHMENT_STORAGE_ROOT: /var/lib/property-agent/attachments
   RELEASE_SHA: ${RELEASE_SHA:?Set RELEASE_SHA to the exact RC commit}
   DEPLOYMENT_ENVIRONMENT: ${DEPLOYMENT_ENVIRONMENT:-release-candidate}
   CERTIFICATION_WRITE_ENABLED: ${CERTIFICATION_WRITE_ENABLED:-false}
@@ -84,6 +85,8 @@ services:
       context: .
       dockerfile: infra/backend.Dockerfile
     environment: *backend-environment
+    volumes:
+      - rc_attachments:/var/lib/property-agent/attachments
     depends_on:
       langgraph-setup:
         condition: service_completed_successfully
@@ -213,3 +216,4 @@ services:
 
 volumes:
   rc_postgres:
+  rc_attachments:

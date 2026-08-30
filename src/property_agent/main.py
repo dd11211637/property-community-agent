@@ -38,6 +38,7 @@ from property_agent.inspection.adapters.api.router import (
     task_router as inspection_task_router,
 )
 from property_agent.inspection.domain.errors import BusinessError as InspectionBusinessError
+from property_agent.platform.adapters.api.attachment_routes import router as attachment_router
 from property_agent.platform.adapters.api.envelope import (
     error_envelope,
     register_common_error_handlers,
@@ -139,6 +140,7 @@ def create_app() -> FastAPI:
     app.include_router(inspection_task_router)
     app.include_router(inspection_event_router)
     app.include_router(billing_router)
+    app.include_router(attachment_router)
 
     # 统一智能体不可用不影响上面的结构化业务接口（PRD §6.5.11）。
     app.include_router(agent_memory_router)

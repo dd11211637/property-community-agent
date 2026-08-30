@@ -43,4 +43,5 @@ def timeline_entry_data(entry: TimelineEntry) -> dict[str, Any]:
         "reason": entry.reason,
         "note": entry.note,
         "attachment_ids": [str(value) for value in entry.attachment_ids],
+        "appointment_at": entry.appointment_at.isoformat() if entry.appointment_at else None,
     }

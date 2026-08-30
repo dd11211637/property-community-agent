@@ -39,6 +39,11 @@ class WorkOrder:
     description: str
     urgency: Urgency
     create_idempotency_key: str
+    contact_name: str | None = None
+    contact_phone: str | None = None
+    access_instructions: str | None = None
+    preferred_time_windows: tuple[str, ...] = ()
+    request_attachment_ids: tuple[UUID, ...] = ()
     status: WorkOrderStatus = WorkOrderStatus.PENDING_ASSIGNMENT
     assignee_id: UUID | None = None
     version: int = 1

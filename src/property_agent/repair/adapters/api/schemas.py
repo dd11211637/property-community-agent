@@ -23,6 +23,10 @@ class CreateWorkOrderRequest(StrictModel):
     urgency: Urgency
     confirmation_token: str = Field(min_length=1)
     attachment_ids: list[UUID] = Field(default_factory=list)
+    contact_name: str | None = Field(default=None, max_length=128)
+    contact_phone: str | None = Field(default=None, max_length=32)
+    access_instructions: str | None = Field(default=None, max_length=1000)
+    preferred_time_windows: list[str] = Field(default_factory=list, max_length=5)
 
 
 class VersionedActionRequest(StrictModel):

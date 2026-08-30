@@ -200,6 +200,7 @@ class SqlAlchemyWorkOrderRepository:
                 created_at=item.created_at,
                 note=item.note,
                 attachment_ids=tuple(UUID(value) for value in item.attachment_ids),
+                appointment_at=item.appointment_at,
             )
             for item in self._session.scalars(process_statement)
         )
@@ -221,6 +222,11 @@ class SqlAlchemyWorkOrderRepository:
             assignee_id=work_order.assignee_id,
             version=work_order.version,
             create_idempotency_key=work_order.create_idempotency_key,
+            contact_name=work_order.contact_name,
+            contact_phone=work_order.contact_phone,
+            access_instructions=work_order.access_instructions,
+            preferred_time_windows=list(work_order.preferred_time_windows),
+            request_attachment_ids=[str(value) for value in work_order.request_attachment_ids],
             created_at=work_order.created_at,
             updated_at=work_order.updated_at,
             closed_at=work_order.closed_at,
@@ -239,6 +245,13 @@ class SqlAlchemyWorkOrderRepository:
             description=model.description,
             urgency=Urgency(model.urgency),
             create_idempotency_key=model.create_idempotency_key,
+            contact_name=model.contact_name,
+            contact_phone=model.contact_phone,
+            access_instructions=model.access_instructions,
+            preferred_time_windows=tuple(model.preferred_time_windows or ()),
+            request_attachment_ids=tuple(
+                UUID(value) for value in model.request_attachment_ids or ()
+            ),
             status=WorkOrderStatus(model.status),
             assignee_id=model.assignee_id,
             version=model.version,

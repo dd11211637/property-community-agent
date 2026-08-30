@@ -26,6 +26,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from property_agent.config import settings
 from property_agent.main import create_app
 from property_agent.platform.application.hashing import canonical_hash
 from property_agent.platform.container import build_production_container
@@ -297,3 +298,20 @@ def test_missing_idempotency_key_is_rejected_before_any_write(seeded, client) ->
 
 def test_health_endpoints_stay_available(client) -> None:
     assert client.get("/health").status_code == 200
+
+
+def test_authenticated_attachment_round_trip(client, monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(settings, "attachment_storage_root", str(tmp_path))
+    headers = {"Authorization": f"Bearer {resident_token()}"}
+    uploaded = client.post(
+        "/api/attachments",
+        headers=headers,
+        data={"business_type": "REPAIR"},
+        files={"file": ("现场.png", b"image-bytes", "image/png")},
+    )
+    assert uploaded.status_code == 201
+    attachment_id = uploaded.json()["data"]["id"]
+
+    downloaded = client.get(f"/api/attachments/{attachment_id}", headers=headers)
+    assert downloaded.status_code == 200
+    assert downloaded.content == b"image-bytes"

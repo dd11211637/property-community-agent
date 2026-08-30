@@ -22,6 +22,10 @@ class CreateWorkOrderCommand:
     # 内消费审批（CONSUMED）与 mutation / 审计 / Outbox 同事务提交。
     approval_ref: str | None = None
     attachment_ids: tuple[UUID, ...] = ()
+    contact_name: str | None = None
+    contact_phone: str | None = None
+    access_instructions: str | None = None
+    preferred_time_windows: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,3 +66,4 @@ class TimelineEntry:
     reason: str | None = None
     note: str | None = None
     attachment_ids: tuple[UUID, ...] = field(default_factory=tuple)
+    appointment_at: datetime | None = None

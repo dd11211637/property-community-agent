@@ -2,13 +2,19 @@
 
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from property_agent.platform.schemas import Envelope
 
 
 class PresentationModel(BaseModel):
     model_config = ConfigDict(extra="allow")
+
+
+class AppointmentResponse(PresentationModel):
+    appointment_at: str
+    note: str
+    recorded_at: str
 
 
 class WorkOrderResponse(PresentationModel):
@@ -26,6 +32,14 @@ class WorkOrderResponse(PresentationModel):
     status: str
     assignee_id: UUID | None
     assignee_name: str | None = None
+    contact_name: str | None = None
+    contact_phone: str | None = None
+    access_instructions: str | None = None
+    preferred_time_windows: list[str] = Field(default_factory=list)
+    request_attachment_ids: list[UUID] = Field(default_factory=list)
+    completion_attachment_ids: list[UUID] = Field(default_factory=list)
+    current_appointment: AppointmentResponse | None = None
+    service_phase: str = "REQUESTED"
     version: int
     available_actions: list[str]
     has_review: bool
@@ -50,6 +64,7 @@ class WorkOrderTimelineEntryResponse(PresentationModel):
     reason: str | None
     note: str | None
     attachment_ids: list[UUID]
+    appointment_at: str | None = None
 
 
 WorkOrderEnvelope = Envelope[WorkOrderResponse]

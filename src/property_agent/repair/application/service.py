@@ -18,11 +18,18 @@ from property_agent.repair.application.ports import (
     RequestContext,
     UnitOfWorkFactory,
 )
+from property_agent.repair.application.service_details import (
+    normalized_service_details,
+    validate_service_details,
+)
+from property_agent.repair.application.snapshot import (
+    work_order_from_snapshot,
+    work_order_snapshot,
+)
 from property_agent.repair.domain.entities import WorkOrder
 from property_agent.repair.domain.enums import (
     ActionCode,
     ProcessRecordType,
-    RepairCategory,
     Role,
     Urgency,
     WorkOrderStatus,
@@ -60,7 +67,6 @@ class WorkOrderService:
         self._require_role(context, *CREATE_ROLES)
         self._require_idempotency_key(idempotency_key)
         self._validate_create(command)
-
         confirmed_parameters = asdict(command)
         confirmed_parameters.pop("confirmation_token", None)
         # approval_ref 是服务端在确认时生成的"审批锁指针"，不是业务参数本身：
@@ -119,6 +125,7 @@ class WorkOrderService:
                 description=command.description.strip(),
                 urgency=command.urgency,
                 create_idempotency_key=idempotency_key,
+                **normalized_service_details(command),
                 created_at=now,
                 updated_at=now,
             )
@@ -139,7 +146,7 @@ class WorkOrderService:
                     key=idempotency_key,
                     request_hash=request_hash,
                     resource_id=work_order.id,
-                    response_snapshot=self._snapshot(work_order),
+                    response_snapshot=work_order_snapshot(work_order),
                 )
             )
             self._audit(
@@ -209,7 +216,7 @@ class WorkOrderService:
                     key=idempotency_key,
                     request_hash=request_hash,
                     resource_id=work_order.id,
-                    response_snapshot=self._snapshot(work_order),
+                    response_snapshot=work_order_snapshot(work_order),
                 )
             )
             if command.action != ActionCode.RECORD_PROGRESS:
@@ -283,7 +290,7 @@ class WorkOrderService:
                     key=idempotency_key,
                     request_hash=request_hash,
                     resource_id=work_order.id,
-                    response_snapshot=self._snapshot(work_order),
+                    response_snapshot=work_order_snapshot(work_order),
                 )
             )
             self._audit(
@@ -620,7 +627,7 @@ class WorkOrderService:
             return None
         if existing.request_hash != request_hash:
             raise idempotency_conflict()
-        return self._from_snapshot(existing.response_snapshot)
+        return work_order_from_snapshot(existing.response_snapshot)
 
     @staticmethod
     def _validate_create(command: CreateWorkOrderCommand) -> None:
@@ -630,6 +637,7 @@ class WorkOrderService:
             raise validation_error("location must not exceed 128 characters.")
         if not command.description.strip():
             raise validation_error("description is required.")
+        validate_service_details(command)
         if not command.confirmation_token.strip():
             raise BusinessError(
                 "CONFIRMATION_REQUIRED",
@@ -687,52 +695,6 @@ class WorkOrderService:
     @staticmethod
     def _new_business_no(now: datetime) -> str:
         return f"WX-{now:%Y%m%d}-{secrets.token_hex(4).upper()}"
-
-    @staticmethod
-    def _snapshot(work_order: WorkOrder) -> dict[str, Any]:
-        return {
-            "id": str(work_order.id),
-            "community_id": str(work_order.community_id),
-            "business_no": work_order.business_no,
-            "house_id": str(work_order.house_id),
-            "reporter_id": str(work_order.reporter_id),
-            "category": work_order.category.value,
-            "location": work_order.location,
-            "description": work_order.description,
-            "urgency": work_order.urgency.value,
-            "create_idempotency_key": work_order.create_idempotency_key,
-            "status": work_order.status.value,
-            "assignee_id": str(work_order.assignee_id) if work_order.assignee_id else None,
-            "version": work_order.version,
-            "created_at": work_order.created_at.isoformat(),
-            "updated_at": work_order.updated_at.isoformat(),
-            "closed_at": work_order.closed_at.isoformat() if work_order.closed_at else None,
-            "has_review": work_order.has_review,
-        }
-
-    @staticmethod
-    def _from_snapshot(snapshot: dict[str, Any]) -> WorkOrder:
-        return WorkOrder(
-            id=UUID(snapshot["id"]),
-            community_id=UUID(snapshot["community_id"]),
-            business_no=snapshot["business_no"],
-            house_id=UUID(snapshot["house_id"]),
-            reporter_id=UUID(snapshot["reporter_id"]),
-            category=RepairCategory(snapshot["category"]),
-            location=snapshot["location"],
-            description=snapshot["description"],
-            urgency=Urgency(snapshot["urgency"]),
-            create_idempotency_key=snapshot["create_idempotency_key"],
-            status=WorkOrderStatus(snapshot["status"]),
-            assignee_id=UUID(snapshot["assignee_id"]) if snapshot["assignee_id"] else None,
-            version=snapshot["version"],
-            created_at=datetime.fromisoformat(snapshot["created_at"]),
-            updated_at=datetime.fromisoformat(snapshot["updated_at"]),
-            closed_at=(
-                datetime.fromisoformat(snapshot["closed_at"]) if snapshot["closed_at"] else None
-            ),
-            has_review=snapshot["has_review"],
-        )
 
     @staticmethod
     def _effective_action(action: ActionCode, from_status: WorkOrderStatus) -> ActionCode:

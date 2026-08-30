@@ -323,6 +323,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Upload Attachment */
+        post: operations["upload_attachment_api_attachments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/attachments/{attachment_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Attachment */
+        get: operations["download_attachment_api_attachments__attachment_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/house": {
         parameters: {
             query?: never;
@@ -1394,6 +1428,17 @@ export interface components {
             /** Expected Version */
             expected_version: number;
         };
+        /** AppointmentResponse */
+        AppointmentResponse: {
+            /** Appointment At */
+            appointment_at: string;
+            /** Note */
+            note: string;
+            /** Recorded At */
+            recorded_at: string;
+        } & {
+            [key: string]: unknown;
+        };
         /** AssignEventRequest */
         AssignEventRequest: {
             /**
@@ -1423,6 +1468,24 @@ export interface components {
             assignee_id: string;
             /** Expected Version */
             expected_version: number;
+        };
+        /** AttachmentResponse */
+        AttachmentResponse: {
+            /** Business Type */
+            business_type: string | null;
+            /** Content Type */
+            content_type: string;
+            /** File Name */
+            file_name: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Status */
+            status: string;
         };
         /** AudienceSnapshotResponse */
         AudienceSnapshotResponse: {
@@ -1532,6 +1595,16 @@ export interface components {
             valid_until?: string | null;
             /** Version */
             version: string;
+        };
+        /** Body_upload_attachment_api_attachments_post */
+        Body_upload_attachment_api_attachments_post: {
+            /**
+             * Business Type
+             * @default REPAIR
+             */
+            business_type: string;
+            /** File */
+            file: string;
         };
         /** CompletionRequest */
         CompletionRequest: {
@@ -1756,11 +1829,17 @@ export interface components {
         };
         /** CreateWorkOrderRequest */
         CreateWorkOrderRequest: {
+            /** Access Instructions */
+            access_instructions?: string | null;
             /** Attachment Ids */
             attachment_ids?: string[];
             category: components["schemas"]["RepairCategory"];
             /** Confirmation Token */
             confirmation_token: string;
+            /** Contact Name */
+            contact_name?: string | null;
+            /** Contact Phone */
+            contact_phone?: string | null;
             /** Description */
             description: string;
             /**
@@ -1770,6 +1849,8 @@ export interface components {
             house_id: string;
             /** Location */
             location: string;
+            /** Preferred Time Windows */
+            preferred_time_windows?: string[];
             urgency: components["schemas"]["Urgency"];
         };
         /** DeleteMemoryRequest */
@@ -1837,6 +1918,15 @@ export interface components {
         /** Envelope[AnnouncementResponse] */
         Envelope_AnnouncementResponse_: {
             data?: components["schemas"]["AnnouncementResponse"] | null;
+            error?: components["schemas"]["ErrorBody"] | null;
+            /** Request Id */
+            request_id: string;
+            /** Success */
+            success: boolean;
+        };
+        /** Envelope[AttachmentResponse] */
+        Envelope_AttachmentResponse_: {
+            data?: components["schemas"]["AttachmentResponse"] | null;
             error?: components["schemas"]["ErrorBody"] | null;
             /** Request Id */
             request_id: string;
@@ -2712,6 +2802,8 @@ export interface components {
         };
         /** WorkOrderResponse */
         WorkOrderResponse: {
+            /** Access Instructions */
+            access_instructions?: string | null;
             /** Assignee Id */
             assignee_id: string | null;
             /** Assignee Name */
@@ -2729,8 +2821,15 @@ export interface components {
              * Format: uuid
              */
             community_id: string;
+            /** Completion Attachment Ids */
+            completion_attachment_ids?: string[];
+            /** Contact Name */
+            contact_name?: string | null;
+            /** Contact Phone */
+            contact_phone?: string | null;
             /** Created At */
             created_at: string;
+            current_appointment?: components["schemas"]["AppointmentResponse"] | null;
             /** Description */
             description: string;
             /** Has Review */
@@ -2749,6 +2848,8 @@ export interface components {
             id: string;
             /** Location */
             location: string;
+            /** Preferred Time Windows */
+            preferred_time_windows?: string[];
             /**
              * Reporter Id
              * Format: uuid
@@ -2756,6 +2857,13 @@ export interface components {
             reporter_id: string;
             /** Reporter Name */
             reporter_name?: string | null;
+            /** Request Attachment Ids */
+            request_attachment_ids?: string[];
+            /**
+             * Service Phase
+             * @default REQUESTED
+             */
+            service_phase: string;
             /** Status */
             status: string;
             /** Updated At */
@@ -2771,6 +2879,8 @@ export interface components {
         WorkOrderTimelineEntryResponse: {
             /** Action */
             action: string;
+            /** Appointment At */
+            appointment_at?: string | null;
             /** Attachment Ids */
             attachment_ids: string[];
             /** Created At */
@@ -3593,6 +3703,72 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Envelope_list_AnnouncementVersionResponse__"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_attachment_api_attachments_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                Authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_attachment_api_attachments_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Envelope_AttachmentResponse_"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_attachment_api_attachments__attachment_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                Authorization?: string | null;
+            };
+            path: {
+                attachment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

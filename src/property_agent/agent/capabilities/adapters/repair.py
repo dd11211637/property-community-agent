@@ -73,6 +73,10 @@ class RepairCreateInput(CapabilityInput):
     description: str = Field(min_length=1, max_length=2000)
     location: str = Field(min_length=1, max_length=255)
     urgency: str = "NORMAL"
+    contact_name: str | None = Field(default=None, max_length=128)
+    contact_phone: str | None = Field(default=None, max_length=32)
+    access_instructions: str | None = Field(default=None, max_length=1000)
+    preferred_time_windows: tuple[str, ...] = Field(default=(), max_length=5)
 
 
 class RepairCreateOutput(CapabilityOutput):
@@ -193,6 +197,10 @@ class RepairCreateAdapter:
             urgency=normalize_repair_urgency(request.urgency),
             confirmation_token=runtime.write.confirmation_token,
             approval_ref=runtime.write.approval_ref,
+            contact_name=request.contact_name,
+            contact_phone=request.contact_phone,
+            access_instructions=request.access_instructions,
+            preferred_time_windows=request.preferred_time_windows,
         )
         with _translate_public_repair_errors():
             work_order = self._service.create(

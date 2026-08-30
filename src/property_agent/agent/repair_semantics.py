@@ -46,12 +46,21 @@ def normalize_repair_create(text: str, values: dict[str, Any]) -> dict[str, Any]
     description = _clean_description(str(values.get("description") or ""), text, location)
     urgency = _urgency_floor(text, str(values.get("urgency") or "NORMAL"))
     category = classify_repair_category(description or text).value
-    return {
+    result = {
         "category": category,
         "location": location,
         "description": description,
         "urgency": urgency,
     }
+    for key in ("contact_name", "contact_phone", "access_instructions"):
+        if values.get(key):
+            result[key] = str(values[key]).strip()
+    preferred = tuple(values.get("preferred_time_windows") or ())
+    if not preferred:
+        preferred = tuple(marker for marker in ("明天上午", "明天下午", "周末") if marker in text)
+    if preferred:
+        result["preferred_time_windows"] = preferred[:5]
+    return result
 
 
 def normalize_repair_list(text: str, values: dict[str, Any]) -> dict[str, Any]:

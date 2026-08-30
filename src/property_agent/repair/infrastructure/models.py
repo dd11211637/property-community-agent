@@ -46,6 +46,15 @@ class WorkOrderModel(Base):
     assignee_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True))
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     create_idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    contact_name: Mapped[str | None] = mapped_column(String(128))
+    contact_phone: Mapped[str | None] = mapped_column(String(32))
+    access_instructions: Mapped[str | None] = mapped_column(Text)
+    preferred_time_windows: Mapped[list[str]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=list
+    )
+    request_attachment_ids: Mapped[list[str]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"), nullable=False, default=list
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
