@@ -3,6 +3,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { apiRequest } from "../api/client";
 import type { AgentMemory } from "../api/contracts";
+import { useOptionalAuth } from "../auth/AuthContext";
 
 const memoryLabels: Record<AgentMemory["memory_type"], string> = {
   PREFERENCE: "服务偏好",
@@ -12,6 +13,8 @@ const memoryLabels: Record<AgentMemory["memory_type"], string> = {
 };
 
 export function AgentContextPanel() {
+  const auth = useOptionalAuth();
+  const currentHouse = auth?.session?.houses.find((house) => house.id === auth.session?.current_house_id)?.label;
   const [memories, setMemories] = useState<AgentMemory[]>([]);
   const [editing, setEditing] = useState(false);
   const [content, setContent] = useState("");
@@ -46,7 +49,7 @@ export function AgentContextPanel() {
   return <aside className="agent-context-panel" aria-label="Agent 当前上下文">
     <section>
       <div className="context-title"><Home size={15} /><b>当前服务范围</b></div>
-      <p>{currentHouseSummary()}</p>
+      <p>{currentHouse ?? "尚未选择房屋"}</p>
       <small>身份、社区和房屋权限每轮由服务端重新验证。</small>
     </section>
     <section>
@@ -73,9 +76,4 @@ export function AgentContextPanel() {
       </div>
     </section>
   </aside>;
-}
-
-function currentHouseSummary(): string {
-  const houseId = sessionStorage.getItem("property_agent_house_id");
-  return houseId ? `当前房屋 · ${houseId.slice(0, 8)}` : "尚未选择房屋";
 }

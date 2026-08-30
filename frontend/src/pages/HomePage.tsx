@@ -5,6 +5,8 @@ import type { AgentConversation, AgentMessage } from "../api/contracts";
 import { AgentContextPanel } from "../components/AgentContextPanel";
 import { AgentConversationRail } from "../components/AgentConversationRail";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { RoleOverview } from "../components/RoleOverview";
+import { businessReference, displayLabel, displayMoney } from "../ui/display";
 
 type AgentReply = {
   reply: string;
@@ -111,36 +113,12 @@ function storedConversationId(): string | null {
   return sessionStorage.getItem("property_agent_conversation_id");
 }
 
-const statusLabels: Record<string, string> = {
-  PENDING_ASSIGNMENT: "等待物业派单",
-  PENDING_ACCEPTANCE: "等待维修人员接单",
-  PROCESSING: "正在处理中",
-  PENDING_VERIFICATION: "等待住户验收",
-  REWORKING: "正在返工",
-  CLOSED: "已完成",
-  UNPAID: "待缴费",
-  OVERDUE: "已逾期",
-  PAID: "已缴费",
-  CANCELLED: "已取消",
-  PLANNED: "待分派",
-  ASSIGNED: "已分派",
-  IN_PROGRESS: "巡检中",
-  SUBMITTED: "待复核",
-  COMPLETED: "已完成",
-  REPORTED: "待分派",
-  PENDING_REVIEW: "待复核",
-};
-
 function statusLabel(value: unknown) {
-  const text = String(value ?? "");
-  return statusLabels[text] ?? text;
+  return displayLabel(value);
 }
 
 function money(value: unknown) {
-  const amount = Number(value);
-  return Number.isFinite(amount)
-    ? amount.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-    : "—";
+  return displayMoney(value);
 }
 
 function AgentFactsCard({ facts }: { facts: AgentFacts }) {
@@ -148,7 +126,7 @@ function AgentFactsCard({ facts }: { facts: AgentFacts }) {
     const order = facts.work_order;
     const latest = facts.timeline?.at(-1);
     const latestDetail = latest?.note ?? latest?.reason;
-    return <div className="agent-facts"><b>工单 {String(order.business_no ?? order.id ?? "")}</b><span>{statusLabel(order.status)}</span><p>{String(order.location ?? "")}</p>{latestDetail != null && <small>最新进展：{String(latestDetail)}</small>}</div>;
+    return <div className="agent-facts"><b>工单 {businessReference(order.business_no, "当前工单")}</b><span>{statusLabel(order.status)}</span><p>{String(order.location ?? "")}</p>{latestDetail != null && <small>最新进展：{String(latestDetail)}</small>}</div>;
   }
   if (facts.task) {
     const task = facts.task;
@@ -162,7 +140,7 @@ function AgentFactsCard({ facts }: { facts: AgentFacts }) {
     if (items.length) {
       return <div className="agent-fact-list">{facts.total != null && <div className="agent-facts"><b>巡检完成情况</b><span>{facts.incomplete === 0 ? "全部完成" : `${facts.incomplete} 项未完成`}</span><p>共 {facts.total} 项，已完成 {facts.completed ?? 0} 项</p></div>}{items.slice(0, 5).map((item, index) => {
         const type = String(item.entity_type ?? "");
-        if (type === "BILL" || item.bill_id) return <div className="agent-facts" key={String(item.bill_id)}><b>{String(item.period ?? "账单")} · ¥{money(item.total_amount ?? item.amount)}</b><span>{statusLabel(item.status)}</span><p>物业费 ¥{money(item.property_fee)} · 水电费 ¥{money(item.utility_fee)} · 停车费 ¥{money(item.parking_fee)}</p><small>账单号 {String(item.bill_id)}</small></div>;
+        if (type === "BILL" || item.bill_id) return <div className="agent-facts" key={String(item.bill_id)}><b>{String(item.period ?? "账单")} · ¥{money(item.total_amount ?? item.amount)}</b><span>{statusLabel(item.status)}</span><p>物业费 ¥{money(item.property_fee)} · 水电费 ¥{money(item.utility_fee)} · 停车费 ¥{money(item.parking_fee)}</p><small>{businessReference(item.business_no, "当前房屋账单")}</small></div>;
         if (type === "INSPECTION_TASK") return <div className="agent-facts" key={String(item.id ?? index)}><b>{String(item.title ?? "巡检任务")}</b><span>{statusLabel(item.status)}</span><p>{Array.isArray(item.route_points) ? item.route_points.join("、") : ""}</p><small>任务号 {String(item.business_no ?? "")}</small></div>;
         if (type === "SECURITY_EVENT") return <div className="agent-facts" key={String(item.id ?? index)}><b>{String(item.location ?? "安防事件")}</b><span>{statusLabel(item.status)}</span><p>{String(item.description ?? "")}</p><small>{confirmationValues[String(item.event_type)] ?? String(item.event_type ?? "")} · {confirmationValues[String(item.risk_level)] ?? String(item.risk_level ?? "")}</small></div>;
         if (type === "ANNOUNCEMENT") return <div className="agent-facts" key={String(item.id ?? index)}><b>{String(item.title)}</b><span>{statusLabel(item.status)}</span><p>{String(item.body ?? "")}</p><small>{item.published_at ? `发布时间 ${String(item.published_at)}` : "社区公告"}</small></div>;
@@ -262,10 +240,10 @@ export function HomePage() {
     setActiveConversationId(conversation.conversation_id);
   }
   return (
-    <div className="agent-workspace">
+    <><RoleOverview /><div className="section-intro"><span>社区助手</span><h2>需要时，让 Agent 帮你继续处理</h2><p>查询、办理与确认都连接真实业务记录。</p></div><div className="agent-workspace">
       <AgentConversationRail activeId={activeConversationId} refreshKey={historyRefresh} onNew={startNewConversation} onSelect={selectConversation} />
       <section className="agent-panel agent-main">
-        <div className="panel-title"><span className="bot-orb"><Bot /></span><div><h1>今天想处理什么？</h1><p><span className="online-dot" /> 社区 Agent 可以查询、办理并持续跟进社区事务</p></div><button className="button ghost human-handoff"><Headphones size={16} />转人工</button><span className="ai-label"><Sparkles size={14} /> Agent 在线</span></div>
+        <div className="panel-title"><span className="bot-orb"><Bot /></span><div><h2>今天想处理什么？</h2><p><span className="online-dot" /> 社区 Agent 可以查询、办理并持续跟进社区事务</p></div><button className="button ghost human-handoff"><Headphones size={16} />转人工</button><span className="ai-label"><Sparkles size={14} /> Agent 在线</span></div>
         {messages.length === 1 && <div className="agent-suggestions">
           <span>你可以直接这样说</span>
           <button type="button" onClick={() => void sendAgent("我家厨房漏水，需要报修")}>帮我报修</button>
@@ -288,6 +266,6 @@ export function HomePage() {
       </section>
       <AgentContextPanel />
       {action && <ConfirmDialog title={action.summary} summary={<dl className="summary-list">{confirmationEntries(action.params, action.tool).map(({ key, label, value }) => <div key={key}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>} onClose={() => setAction(undefined)} onCancel={() => void cancelConfirmation()} onConfirm={() => resolveConfirmation(true)} />}
-    </div>
+    </div></>
   );
 }

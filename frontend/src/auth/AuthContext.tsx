@@ -49,7 +49,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
         const houses = response.house_ids.map((id, index) => ({
           id,
-          label: `房屋 ${index + 1} · ${id.slice(0, 8)}`,
+          label: id === response.current_house_id ? "当前房屋" : `可选房屋 ${index + 1}`,
         }));
         const next: Session = {
           access_token: response.access_token,
@@ -86,4 +86,8 @@ export function useAuth(): AuthValue {
   const value = useContext(AuthContext);
   if (!value) throw new Error("useAuth must be used inside AuthProvider");
   return value;
+}
+
+export function useOptionalAuth(): AuthValue | null {
+  return useContext(AuthContext);
 }

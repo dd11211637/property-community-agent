@@ -1,27 +1,50 @@
 import {
   Bell, Bot, Building2, ClipboardCheck, FileText, Gauge, LogOut,
-  Menu, ReceiptText, Settings, Wrench, X,
+  Menu, ReceiptText, Wrench, X,
 } from "lucide-react";
 import { useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { workspaceFor, workspaceLabel, type WorkspaceKind } from "../ui/roles";
 import { EnvironmentBadge } from "./EnvironmentBadge";
 
-const navigation = [
-  { title: "Agent", items: [["/", "社区 Agent", Bot, "首页 / 智能体"]] },
-  { title: "我的事项", items: [["/repairs", "报修服务", Wrench], ["/billing", "账单费用", ReceiptText]] },
-  { title: "社区协作", items: [["/announcements", "社区公告", FileText], ["/inspection", "巡检与事件", ClipboardCheck], ["/messages", "消息中心", Bell]] },
-  { title: "运营", items: [["/admin", "管理工作台", Gauge]] },
-] as const;
+type NavItem = readonly [string, string, typeof Bot, string?];
+type NavGroup = { title: string; items: NavItem[] };
+
+const shared = {
+  agent: ["/", "社区助手", Bot, "首页 / 智能体"] as NavItem,
+  repairs: ["/repairs", "报修服务", Wrench] as NavItem,
+  announcements: ["/announcements", "社区公告", FileText] as NavItem,
+  inspection: ["/inspection", "巡检与事件", ClipboardCheck] as NavItem,
+  messages: ["/messages", "消息中心", Bell] as NavItem,
+};
+
+function navigationFor(workspace: WorkspaceKind): NavGroup[] {
+  if (workspace === "admin") return [
+    { title: "运营概览", items: [shared.agent, ["/admin", "管理工作台", Gauge]] },
+    { title: "业务调度", items: [shared.repairs, shared.announcements, shared.inspection] },
+    { title: "协作", items: [shared.messages] },
+  ];
+  if (workspace === "maintenance") return [
+    { title: "今日工作", items: [shared.agent, shared.repairs, shared.inspection] },
+    { title: "协作", items: [shared.messages] },
+  ];
+  return [
+    { title: "我的社区", items: [shared.agent, shared.repairs, ["/billing", "账单费用", ReceiptText], shared.announcements] },
+    { title: "服务消息", items: [shared.messages] },
+  ];
+}
 
 export function AppShell() {
   const { session, logout, selectHouse } = useAuth();
   const [open, setOpen] = useState(false);
+  const workspace = workspaceFor(session?.actor.roles);
+  const navigation = navigationFor(workspace);
   return (
-    <div className="app-shell">
+    <div className={`app-shell workspace-${workspace}`}>
       <EnvironmentBadge />
       <aside className={open ? "sidebar open" : "sidebar"}>
-        <div className="brand"><span className="brand-mark"><Building2 /></span><div><b>栖邻</b><small>Agent 驱动的社区服务</small></div></div>
+        <div className="brand"><span className="brand-mark"><Building2 /></span><div><b>栖邻</b><small>{workspaceLabel(workspace)}</small></div></div>
         <button className="mobile-close" aria-label="关闭菜单" onClick={() => setOpen(false)}><X /></button>
         <nav>
           {navigation.map((group) => <div className="nav-group" key={group.title}>
@@ -52,8 +75,7 @@ export function AppShell() {
               {session?.houses.map((house) => <option value={house.id} key={house.id}>{house.label}</option>)}
             </select>
           </div>
-          <div className="profile"><span className="avatar">{session?.actor.display_name.slice(0, 1)}</span><div><b>{session?.actor.display_name}</b><small>{session?.actor.community_name}</small></div></div>
-          <button className="icon-button" aria-label="设置"><Settings size={19} /></button>
+          <div className="profile"><span className="avatar">{session?.actor.display_name.slice(0, 1)}</span><div><b>{session?.actor.display_name}</b><small>{workspaceLabel(workspace)} · {session?.actor.community_name}</small></div></div>
           <button className="icon-button" aria-label="退出登录" onClick={logout}><LogOut size={19} /></button>
         </header>
         <div className="page"><Outlet /></div>
