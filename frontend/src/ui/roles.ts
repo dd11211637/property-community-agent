@@ -26,4 +26,3 @@ export function workspaceLabel(kind: WorkspaceKind): string {
     admin: "社区运营空间",
   }[kind];
 }
-

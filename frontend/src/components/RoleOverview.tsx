@@ -69,4 +69,3 @@ export function RoleOverview() {
   if (workspace === "maintenance") return <MaintenanceOverview />;
   return <ResidentOverview />;
 }
-

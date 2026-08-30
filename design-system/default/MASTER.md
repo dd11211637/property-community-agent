@@ -91,4 +91,3 @@ and high-risk events. Management health is secondary evidence, not the headline.
 - Lucide SVG family only; decorative icons use `aria-hidden`.
 - Role navigation and home priorities verified with resident, maintenance, admin.
 - Loading, empty, error, confirmation, pending, and success states verified.
-

@@ -107,4 +107,3 @@ Unknown roles fail closed to the smallest safe navigation set.
 - Respect reduced motion and do not hide focused controls behind sticky UI.
 - No new visual dependency. Lucide remains the single icon family. Route/page code
   stays statically simple; long lists can be paginated/limited by existing APIs.
-

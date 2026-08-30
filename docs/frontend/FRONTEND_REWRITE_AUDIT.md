@@ -60,4 +60,3 @@
   semantic DOM changes, never reduced coverage.
 - Demo-specific entry points, quick login, tours, promotional pages, or fabricated
   data are out of scope.
-
