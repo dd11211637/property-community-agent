@@ -125,7 +125,12 @@ def test_model_cannot_override_server_write_or_trusted_authority(forbidden, name
 
 
 def test_write_capability_inputs_contain_only_business_semantics():
-    assert set(RepairCreateInput.model_fields) == {"description", "location", "urgency"}
+    assert set(RepairCreateInput.model_fields) == {
+        "category",
+        "description",
+        "location",
+        "urgency",
+    }
     assert set(BillingConsultInput.model_fields) == {"subject", "description", "bill_id"}
 
 

@@ -22,11 +22,14 @@ class RepairSpecialist(StatelessSpecialist):
         if capability == "repair_get":
             return {"work_order_id": str(values.get("work_order_id") or "")}
         if capability == "repair_create":
-            return {
+            parameters = {
                 "description": str(values.get("description") or ""),
                 "location": str(values.get("location") or ""),
                 "urgency": str(values.get("urgency") or "NORMAL"),
             }
+            if values.get("category"):
+                parameters["category"] = str(values["category"])
+            return parameters
         return {
             "statuses": tuple(values.get("statuses") or ()),
             "limit": int(values.get("limit") or 20),

@@ -13,7 +13,7 @@ from property_agent.agent.announcement_time import (
 )
 from property_agent.agent.model_contracts import ModelAnalysis, ModelGatewayError
 from property_agent.agent.policies import Intent
-from property_agent.repair.domain.classification import classify_repair_category
+from property_agent.agent.repair_semantics import normalize_repair_create
 
 _BUSINESS_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
@@ -104,8 +104,7 @@ def _deterministic_repair_slots(text: str) -> dict[str, Any]:
         "无法",
     )
     if text not in generic and any(cue in text for cue in symptom_cues):
-        slots["description"] = text
-        slots["category"] = classify_repair_category(text).value
+        slots.update(normalize_repair_create(text, slots))
     return slots
 
 

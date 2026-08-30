@@ -69,6 +69,7 @@ class RepairGetOutput(CapabilityOutput):
 
 
 class RepairCreateInput(CapabilityInput):
+    category: str = "OTHER"
     description: str = Field(min_length=1, max_length=2000)
     location: str = Field(min_length=1, max_length=255)
     urgency: str = "NORMAL"

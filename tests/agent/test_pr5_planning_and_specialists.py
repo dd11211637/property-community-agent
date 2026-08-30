@@ -104,6 +104,73 @@ def test_planner_builds_minimal_repair_billing_multi_domain_plan():
     assert [step.capability for step in plan.steps] == ["repair_list", "billing_query"]
 
 
+def test_query_language_cannot_be_promoted_to_repair_creation():
+    planner = SupervisorPlanner(
+        StaticPlanningGateway(
+            proposal(
+                step("repair-read", "repair", "repair_create", "查询未完成报修"),
+                step("billing-read", "billing", "billing_query", "查询待处理账单"),
+            )
+        )
+    )
+
+    plan = planner.create_plan(
+        _state("帮我看看我现在有哪些未完成报修和需要处理的账单。"), _runtime()
+    )
+
+    assert plan.objective_classification is ObjectiveClassification.MULTI_DOMAIN
+    assert [item.capability for item in plan.steps] == ["repair_list", "billing_query"]
+    assert plan.steps[0].parameters["statuses"] == (
+        "PENDING_ASSIGNMENT",
+        "PENDING_ACCEPTANCE",
+        "PROCESSING",
+        "PENDING_VERIFICATION",
+        "REWORKING",
+    )
+
+
+def test_explicit_repair_creation_normalizes_business_semantics():
+    planner = SupervisorPlanner(
+        StaticPlanningGateway(
+            proposal(
+                step(
+                    "repair-create",
+                    "repair",
+                    "repair_create",
+                    "提交报修",
+                    parameters={
+                        "description": "帮我报修，1栋1单元101卫生间水管漏水，比较急。",
+                        "location": "卫生间",
+                        "urgency": "NORMAL",
+                    },
+                )
+            )
+        )
+    )
+
+    plan = planner.create_plan(_state("帮我报修，1栋1单元101卫生间水管漏水，比较急。"), _runtime())
+
+    assert plan.steps[0].parameters == {
+        "category": "WATER_PLUMBING",
+        "location": "卫生间",
+        "description": "水管漏水",
+        "urgency": "URGENT",
+    }
+
+
+def test_repair_write_without_explicit_write_language_fails_closed():
+    planner = SupervisorPlanner(
+        StaticPlanningGateway(
+            proposal(step("repair-create", "repair", "repair_create", "提交报修"))
+        )
+    )
+
+    plan = planner.create_plan(_state("卫生间水管漏水。"), _runtime())
+
+    assert plan.objective_classification is ObjectiveClassification.UNCERTAIN
+    assert plan.steps == ()
+
+
 def test_planner_builds_conditional_inspection_to_announcement_plan():
     semantic = proposal(
         step("inspection-read", "inspection", "inspection_list", "核验电梯巡检发现"),

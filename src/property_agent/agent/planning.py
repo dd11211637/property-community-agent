@@ -7,6 +7,7 @@ from inspect import signature
 from typing import Any
 from uuid import uuid4
 
+from property_agent.agent.capabilities.catalog import default_capability_registry
 from property_agent.agent.model_contracts import ModelAnalysis, ModelGatewayError
 from property_agent.agent.orchestration import (
     ObjectiveClassification,
@@ -21,6 +22,12 @@ from property_agent.agent.planning_contracts import (
     RelevanceDecision,
     RelevanceJudgment,
 )
+from property_agent.agent.repair_semantics import (
+    explicit_repair_creation,
+    normalize_repair_create,
+    normalize_repair_list,
+    repair_query_requested,
+)
 from property_agent.agent.runtime import RuntimeContext
 from property_agent.agent.state import AgentState
 
@@ -33,6 +40,10 @@ _DOMAIN_SPECIALIST = {
 _CONDITIONS = {
     "no-equivalent-active-repair": "if_no_equivalent_active_repair",
     "relevant-inspection-issue": "if_relevant_inspection_issue",
+}
+_CAPABILITY_PARAMETERS = {
+    spec.name: frozenset(spec.input_type.model_fields)
+    for spec in default_capability_registry().inventory()
 }
 
 
@@ -170,7 +181,9 @@ class SupervisorPlanner:
         proposal: PlanProposal,
         semantic_slots: dict[str, Any],
     ) -> Plan:
-        steps = tuple(self._normalize_step(step, semantic_slots) for step in proposal.steps)
+        steps = tuple(
+            self._normalize_step(objective, step, semantic_slots) for step in proposal.steps
+        )
         classification = self._classification(proposal, {step.domain for step in steps})
         return Plan(
             plan_id=f"plan-{uuid4()}",
@@ -181,27 +194,49 @@ class SupervisorPlanner:
         )
 
     @staticmethod
-    def _normalize_step(proposal: PlanStepProposal, semantic_slots: dict[str, Any]) -> PlanStep:
+    def _normalize_step(
+        objective: str,
+        proposal: PlanStepProposal,
+        semantic_slots: dict[str, Any],
+    ) -> PlanStep:
         condition = proposal.condition or {}
         condition_kind = condition.get("kind")
         internal_condition = _CONDITIONS.get(condition_kind) if condition_kind else None
         if condition_kind and internal_condition is None:
             raise ValueError("unknown planning condition")
+        capability = proposal.capability
+        allowed = _CAPABILITY_PARAMETERS.get(capability, frozenset())
+        proposed_parameters = {
+            key: value
+            for key, value in proposal.parameters.items()
+            if key not in {"user_text", "action"}
+        }
+        parameters = {
+            **{
+                key: value
+                for key, value in semantic_slots.items()
+                if key in allowed and key not in _NON_PARAMETER_KEYS and not key.startswith("_")
+            },
+            **proposed_parameters,
+        }
+        if capability == "repair_create":
+            if repair_query_requested(objective):
+                capability = "repair_list"
+                parameters = normalize_repair_list(objective, parameters)
+            elif not explicit_repair_creation(objective):
+                raise ValueError("repair creation requires explicit user write intent")
+            else:
+                parameters = normalize_repair_create(objective, parameters)
+        elif capability == "repair_list":
+            parameters = normalize_repair_list(objective, parameters)
         return PlanStep(
             step_id=proposal.step_id,
             domain=proposal.domain,
             specialist=SpecialistName(proposal.specialist),
             goal=proposal.goal,
             dependencies=proposal.dependencies,
-            capability=proposal.capability,
-            parameters={
-                **{
-                    key: value
-                    for key, value in semantic_slots.items()
-                    if key not in _TRUSTED_KEYS and not key.startswith("_")
-                },
-                **proposal.parameters,
-            },
+            capability=capability,
+            parameters=parameters,
             condition=internal_condition,
             condition_parameters=(
                 {"semantic_goal": condition["semantic_goal"]} if condition else {}
@@ -230,7 +265,7 @@ class SupervisorPlanner:
         capability = _legacy_capability(domain, action, slots)
         if domain not in _DOMAIN_SPECIALIST or capability is None:
             return None
-        parameters = {key: value for key, value in slots.items() if key not in _TRUSTED_KEYS}
+        parameters = {key: value for key, value in slots.items() if key not in _NON_PARAMETER_KEYS}
         return PlanStepProposal(
             step_id=f"{domain}-legacy",
             goal="执行明确的单领域兼容请求",
@@ -285,8 +320,17 @@ class SupervisorPlanner:
         )
 
 
-_TRUSTED_KEYS = frozenset(
-    {"actor_id", "community_id", "house_id", "roles", "runtime_version", "approval_ref"}
+_NON_PARAMETER_KEYS = frozenset(
+    {
+        "actor_id",
+        "community_id",
+        "house_id",
+        "roles",
+        "runtime_version",
+        "approval_ref",
+        "user_text",
+        "action",
+    }
 )
 
 

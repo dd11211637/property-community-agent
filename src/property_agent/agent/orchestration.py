@@ -250,6 +250,9 @@ class PlanValidator:
         self._max_steps = max_steps
         registry = default_capability_registry()
         self._capability_domains = {spec.name: spec.domain for spec in registry.inventory()}
+        self._capability_parameters = {
+            spec.name: frozenset(spec.input_type.model_fields) for spec in registry.inventory()
+        }
 
     def validate(self, plan: Plan, *, global_intent: str | None = None) -> Plan:
         del global_intent  # top-level context is deliberately not step execution authority
@@ -284,6 +287,9 @@ class PlanValidator:
                 raise ValueError("step capability does not match its domain")
         if set(step.parameters) & self._FORBIDDEN_PARAMETER_KEYS:
             raise ValueError("step parameters contain server-owned authority fields")
+        allowed_parameters = self._capability_parameters.get(step.capability or "", frozenset())
+        if set(step.parameters) - allowed_parameters:
+            raise ValueError("step parameters do not match the capability input contract")
         if step.condition is not None:
             expected_condition_target = self._CONDITIONS.get(step.condition)
             if expected_condition_target != (step.domain, step.capability):
