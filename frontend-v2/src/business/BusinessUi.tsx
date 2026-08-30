@@ -117,7 +117,7 @@ export function ActionWorkbench({
     return (
       <Card>
         <strong>当前没有可执行操作</strong>
-        <p>操作由服务端状态、角色与 available_actions 共同决定。</p>
+        <p>当前状态或你的权限范围内没有下一步操作。</p>
       </Card>
     );
   async function submit(event: FormEvent<HTMLFormElement>) {

@@ -65,8 +65,8 @@ export function MemoryPanel({ conversationId }: { conversationId: string | null 
 
   if (session.status !== "authenticated") return null;
   return <section className={styles.memory} aria-labelledby="memory-heading">
-    <h2 id="memory-heading">长期记忆</h2>
-    <p>这些内容由真实 Memory API 保存，不包含模型向量或内部检索信息。</p>
+    <h2 id="memory-heading">AI 与记忆</h2>
+    <p>管理生活助理记住的服务偏好和沟通习惯。</p>
     {conflict ? <InlineAlert>{conflict}</InlineAlert> : null}
     <div className={styles.memoryForm}>
       <Field label="类型"><select value={type} onChange={(event) => setType(event.target.value as MemoryType)}>{Object.entries(memoryLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
@@ -85,5 +85,5 @@ export function MemoryPanel({ conversationId }: { conversationId: string | null 
 function MemoryRow({ memory, busy, onUpdate, onDelete }: { memory: AgentMemory; busy: boolean; onUpdate(next: string): void; onDelete(): void }) {
   const [editing, setEditing] = useState(false);
   const [next, setNext] = useState(memory.content);
-  return <Card><strong>{memoryLabels[memory.memoryType]}</strong><p>{memory.content}</p><small>版本 {memory.version} · {memory.houseId ? `房屋 ${memory.houseId.slice(0, 8)}` : "不限房屋"}{memory.sourceConversationId ? ` · 来源会话 ${memory.sourceConversationId}` : ""}{memory.expiresAt ? ` · 到期 ${memory.expiresAt}` : ""}</small><div className={styles.actions}>{editing ? <><Input maxLength={500} value={next} onChange={(event) => setNext(event.target.value)} /><Button disabled={busy || !next.trim()} onClick={() => { onUpdate(next.trim()); setEditing(false); }}>提交更新</Button></> : <Button disabled={busy} onClick={() => setEditing(true)}>编辑</Button>}<Button tone="danger" disabled={busy} onClick={onDelete}>删除</Button></div></Card>;
+  return <Card><strong>{memoryLabels[memory.memoryType]}</strong><p>{memory.content}</p><small>{memory.houseId ? "适用于指定房屋" : "适用于全部房屋"}{memory.expiresAt ? ` · 有效至 ${memory.expiresAt}` : ""}</small><div className={styles.actions}>{editing ? <><Input maxLength={500} value={next} onChange={(event) => setNext(event.target.value)} /><Button disabled={busy || !next.trim()} onClick={() => { onUpdate(next.trim()); setEditing(false); }}>提交更新</Button></> : <Button disabled={busy} onClick={() => setEditing(true)}>编辑</Button>}<Button tone="danger" disabled={busy} onClick={onDelete}>删除</Button></div></Card>;
 }

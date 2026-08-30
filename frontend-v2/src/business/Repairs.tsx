@@ -46,6 +46,39 @@ function cardModel(item: WorkOrder) {
   };
 }
 
+function AttachmentLinks({ ids, label }: { ids: string[]; label: string }) {
+  const client = useBusinessClient();
+  const [error, setError] = useState<unknown>(null);
+  async function download(id: string, index: number) {
+    setError(null);
+    try {
+      const blob = await client.downloadAttachment(id);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${label}-${index + 1}`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (caught) {
+      setError(caught);
+    }
+  }
+  if (!ids.length) return null;
+  return (
+    <Card>
+      <h2>{label}</h2>
+      <div className={styles.actions}>
+        {ids.map((id, index) => (
+          <Button key={id} onClick={() => void download(id, index)}>
+            下载附件 {index + 1}
+          </Button>
+        ))}
+      </div>
+      <MutationNotice error={error} />
+    </Card>
+  );
+}
+
 function CreateRepairForm({ onCreated }: { onCreated(): void }) {
   const client = useBusinessClient();
   const { session } = useSession();
@@ -55,25 +88,38 @@ function CreateRepairForm({ onCreated }: { onCreated(): void }) {
     return <InlineAlert>请选择当前房屋后再创建报修。</InlineAlert>;
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const form = event.currentTarget;
     setBusy(true);
     setError(null);
-    const data = new FormData(event.currentTarget);
+    const data = new FormData(form);
     const category = String(
       data.get("category"),
     ) as ApiSchemas["RepairCategory"];
     const location = String(data.get("location"));
     const description = String(data.get("description"));
     const urgency = String(data.get("urgency")) as ApiSchemas["Urgency"];
-    const parameters = {
+    const selectedFile = data.get("attachment");
+    try {
+      const attachmentIds =
+        selectedFile instanceof File && selectedFile.size > 0
+          ? [(await client.uploadAttachment(selectedFile)).id]
+          : [];
+      const parameters = {
       house_id:
         session.status === "authenticated" ? session.currentHouseId : "",
       category,
       location,
       description,
       urgency,
-      attachment_ids: [],
-    };
-    try {
+        contact_name: String(data.get("contact_name") || "") || null,
+        contact_phone: String(data.get("contact_phone") || "") || null,
+        access_instructions: String(data.get("access_instructions") || "") || null,
+        preferred_time_windows: String(data.get("preferred_time_windows") || "")
+          .split("、")
+          .map((value) => value.trim())
+          .filter(Boolean),
+        attachment_ids: attachmentIds,
+      };
       const confirmation = await client.confirm({
         action: "CREATE_WORK_ORDER",
         parameters,
@@ -86,7 +132,7 @@ function CreateRepairForm({ onCreated }: { onCreated(): void }) {
         },
         newIdempotencyKey(),
       );
-      event.currentTarget.reset();
+      form.reset();
       onCreated();
     } catch (caught) {
       setError(caught);
@@ -120,6 +166,21 @@ function CreateRepairForm({ onCreated }: { onCreated(): void }) {
             <option value="HIGH_RISK">高风险（将进入人工接管）</option>
           </select>
         </Field>
+        <Field label="联系人">
+          <Input name="contact_name" placeholder="选填" />
+        </Field>
+        <Field label="联系电话">
+          <Input name="contact_phone" type="tel" placeholder="选填" />
+        </Field>
+        <Field label="方便服务时间">
+          <Input name="preferred_time_windows" placeholder="如：工作日晚上、周末上午" />
+        </Field>
+        <Field label="入户说明">
+          <Textarea name="access_instructions" placeholder="门禁、宠物或其他注意事项" />
+        </Field>
+        <Field label="现场照片或附件">
+          <Input name="attachment" type="file" accept="image/jpeg,image/png,image/webp,image/heic,video/mp4,application/pdf" />
+        </Field>
         <Button tone="primary" type="submit" disabled={busy}>
           {busy ? "正在确认并创建…" : "审阅并确认创建"}
         </Button>
@@ -129,7 +190,7 @@ function CreateRepairForm({ onCreated }: { onCreated(): void }) {
   );
 }
 
-export function RealRepairsPage() {
+export function RealRepairsPage({ fieldService = false }: { fieldService?: boolean }) {
   const client = useBusinessClient();
   const { session } = useSession();
   const queryClient = useQueryClient();
@@ -145,6 +206,7 @@ export function RealRepairsPage() {
           : null,
       limit: 50,
       offset: 0,
+      assigned_to_me: fieldService || null,
     },
   });
   const query = useQuery({
@@ -159,6 +221,7 @@ export function RealRepairsPage() {
               : null,
           limit: 50,
           offset: 0,
+          assigned_to_me: fieldService || null,
         },
         signal,
       ),
@@ -169,10 +232,12 @@ export function RealRepairsPage() {
   return (
     <div className={styles.page}>
       <BusinessHeader
-        eyebrow={staffMode ? "REPAIR OPERATIONS" : "RESIDENT REPAIRS"}
-        title={staffMode ? "工单队列" : "报修与进度"}
+        eyebrow={fieldService ? "现场服务" : staffMode ? "维修运营" : "居民报修"}
+        title={fieldService ? "我的现场任务" : staffMode ? "工单队列" : "报修与进度"}
         description={
-          staffMode
+          fieldService
+            ? "查看地址、联系人、预约和现场推进操作。"
+            : staffMode
             ? "社区队列、本人分派与服务端允许的操作。"
             : "仅显示当前房屋的真实工单，不跨房屋复用缓存。"
         }
@@ -223,9 +288,23 @@ const repairSpecs: Record<
     fields: [{ name: "reason", label: "拒绝原因", required: true }],
   },
   RECORD_PROGRESS: {
-    label: "记录进度",
+    label: "记录现场进展",
     action: "record-progress",
-    fields: [{ name: "note", label: "进度说明", required: true }],
+    fields: [
+      {
+        name: "record_type",
+        label: "记录类型",
+        required: true,
+        choices: [
+          { value: "APPOINTMENT", label: "预约服务" },
+          { value: "ARRIVAL", label: "已到场" },
+          { value: "PROGRESS", label: "处理进度" },
+          { value: "BLOCKED", label: "现场受阻" },
+        ],
+      },
+      { name: "appointment_at", label: "预约时间（预约时填写）" },
+      { name: "note", label: "说明", required: true },
+    ],
   },
   SUBMIT_COMPLETION: {
     label: "提交完工",
@@ -323,7 +402,8 @@ export function RealRepairDetailPage() {
         body = {
           expected_version: version,
           note: values.note,
-          record_type: "PROGRESS",
+          record_type: values.record_type as ApiSchemas["ProcessRecordType"],
+          appointment_at: values.appointment_at || null,
           attachment_ids: [],
         };
       else if (
@@ -416,11 +496,26 @@ export function RealRepairDetailPage() {
                       item.assigneeName ??
                         (item.assigneeId ? "人员信息未解析" : "待分派"),
                     ],
-                    ["版本", item.version],
+                    ["服务阶段", labelFor(item.servicePhase)],
+                    [
+                      "当前预约",
+                      item.currentAppointment
+                        ? formatDate(item.currentAppointment.appointmentAt)
+                        : "尚未预约",
+                    ],
+                    ["联系人", item.contactName ?? "未填写"],
+                    ["联系电话", item.contactPhone ?? "未填写"],
+                    [
+                      "方便时间",
+                      item.preferredTimeWindows.join("、") || "未填写",
+                    ],
+                    ["入户说明", item.accessInstructions ?? "无"],
                     ["更新时间", formatDate(item.updatedAt)],
                   ]}
                 />
               </Card>
+              <AttachmentLinks ids={item.requestAttachmentIds} label="报修附件" />
+              <AttachmentLinks ids={item.completionAttachmentIds} label="完工附件" />
               <Card>
                 <h2>状态时间线</h2>
                 <QueryBoundary

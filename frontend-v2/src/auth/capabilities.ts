@@ -14,10 +14,15 @@ export const knownRoles = [
 ] as const;
 
 export type KnownRole = (typeof knownRoles)[number];
-export type Capability = "resident-experience" | "operations" | "admin";
+export type Capability =
+  | "resident-experience"
+  | "field-service"
+  | "operations"
+  | "admin";
 
 const capabilityRoles: Record<Capability, ReadonlySet<ActorRole>> = {
   "resident-experience": new Set(["RESIDENT"]),
+  "field-service": new Set(["REPAIR_WORKER"]),
   operations: new Set([
     "CUSTOMER_SERVICE",
     "REPAIR_WORKER",

@@ -15,6 +15,14 @@ export type WorkOrder = {
   version: number;
   assigneeId: string | null;
   assigneeName: string | null;
+  contactName: string | null;
+  contactPhone: string | null;
+  accessInstructions: string | null;
+  preferredTimeWindows: string[];
+  requestAttachmentIds: string[];
+  completionAttachmentIds: string[];
+  servicePhase: string;
+  currentAppointment: { appointmentAt: string; note: string | null } | null;
   hasReview: boolean;
   availableActions: string[];
   createdAt: string;
@@ -29,6 +37,8 @@ export type TimelineEntry = {
   operatorId: string | null;
   note: string | null;
   reason: string | null;
+  appointmentAt: string | null;
+  attachmentIds: string[];
   createdAt: string;
 };
 
@@ -161,6 +171,23 @@ export function parseWorkOrder(value: unknown): WorkOrder {
     version: integer(item.version, "workOrder.version"),
     assigneeId: optionalText(item.assignee_id),
     assigneeName: optionalText(item.assignee_name),
+    contactName: optionalText(item.contact_name),
+    contactPhone: optionalText(item.contact_phone),
+    accessInstructions: optionalText(item.access_instructions),
+    preferredTimeWindows: strings(item.preferred_time_windows),
+    requestAttachmentIds: strings(item.request_attachment_ids),
+    completionAttachmentIds: strings(item.completion_attachment_ids),
+    servicePhase: optionalText(item.service_phase) ?? text(item.status, "workOrder.status"),
+    currentAppointment:
+      typeof item.current_appointment === "object" && item.current_appointment !== null
+        ? {
+            appointmentAt: text(
+              (item.current_appointment as BusinessRecord).appointment_at,
+              "workOrder.current_appointment.appointment_at",
+            ),
+            note: optionalText((item.current_appointment as BusinessRecord).note),
+          }
+        : null,
     hasReview: item.has_review === true,
     availableActions: strings(item.available_actions),
     createdAt: dateText(item.created_at),
@@ -182,6 +209,8 @@ export function parseTimeline(value: unknown): TimelineEntry[] {
       operatorId: optionalText(item.operator_id),
       note: optionalText(item.note),
       reason: optionalText(item.reason),
+      appointmentAt: optionalText(item.appointment_at),
+      attachmentIds: strings(item.attachment_ids),
       createdAt: dateText(item.created_at),
     };
   });

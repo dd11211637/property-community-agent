@@ -12,6 +12,7 @@ import {
   ReceiptText,
   ShieldCheck,
   Wrench,
+  Settings,
 } from "lucide-react";
 import { NavLink, Outlet } from "react-router-dom";
 import { routeCapabilities } from "../app/routeConfig";
@@ -26,11 +27,13 @@ const icons: Record<string, React.ReactNode> = {
   "/": <Home size={19} />,
   "/agent": <Bot size={19} />,
   "/repairs": <Wrench size={19} />,
+  "/field": <Wrench size={19} />,
   "/billing": <ReceiptText size={19} />,
   "/community": <Megaphone size={19} />,
   "/operations": <ShieldCheck size={19} />,
   "/messages": <Mail size={19} />,
   "/admin": <CircleGauge size={19} />,
+  "/settings/ai-memory": <Settings size={19} />,
 };
 
 function Navigation() {
@@ -38,13 +41,16 @@ function Navigation() {
   if (session.status !== "authenticated") return null;
   const resident = hasCapability(session.actor.roles, "resident-experience");
   const operations = hasCapability(session.actor.roles, "operations");
+  const fieldService = hasCapability(session.actor.roles, "field-service");
   const admin = hasCapability(session.actor.roles, "admin");
   const routes = routeCapabilities.filter((route) => {
     if (route.navigation === "none") return false;
     if (route.path === "/") return true;
     if (route.navigation === "resident" && !resident) return false;
     if (route.navigation === "operations" && !operations) return false;
-    if (route.navigation === "both" && !resident && !operations) return false;
+    if (route.navigation === "field-service" && !fieldService) return false;
+    if (route.navigation === "both" && !resident && !operations && !fieldService)
+      return false;
     if (route.requiredCapability === "admin" && !admin) return false;
     return true;
   });
@@ -77,7 +83,7 @@ function Brand() {
       </span>
       <span>
         <strong>邻里方舟</strong>
-        <small>Agentic Community</small>
+        <small>社区服务中心</small>
       </span>
     </NavLink>
   );
@@ -90,11 +96,11 @@ function SidebarContent() {
       <Brand />
       <Navigation />
       <div className={styles.sidebarFoot}>
-        <p>{mode === "demo" ? "设计预览" : "Frontend V2 真实业务"}</p>
+        <p>{mode === "demo" ? "设计预览" : "本地社区服务"}</p>
         <span>
           {mode === "demo"
             ? "Demo 数据 · 非生产"
-            : "真实业务与 Agent 已接入"}
+            : "业务办理与生活助理"}
         </span>
       </div>
     </>
@@ -185,9 +191,7 @@ export function AppShell() {
             </MenuItem>
             <MenuItem>
               <ShieldCheck size={16} />
-              {session.actor.roles.length
-                ? session.actor.roles.join(" · ")
-                : "无已知角色"}
+              {session.actor.roles.length ? "已认证社区成员" : "普通用户"}
             </MenuItem>
             <DropdownMenu.Separator />
             <MenuItem onSelect={() => void signOut()}>

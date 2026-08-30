@@ -369,7 +369,7 @@ export function RealBusinessHomePage() {
       <BusinessHeader
         eyebrow={operations ? "OPERATIONS HOME" : "COMMUNITY HOME"}
         title={`欢迎回来，${authenticated.actor.displayName}`}
-        description={`${authenticated.actor.communityName} · 以下摘要均来自真实业务服务，单个服务失败不会转换成 Demo 成功数据。`}
+        description={`${authenticated.actor.communityName} · 汇总社区待处理事项与服务状态。`}
       />
       {sessionNotice ? <InlineAlert>{sessionNotice}</InlineAlert> : null}
       {!authenticated.currentHouseId && authenticated.houses.length ? (

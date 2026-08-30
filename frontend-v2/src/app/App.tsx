@@ -54,6 +54,7 @@ import { RuntimeModeProvider } from "./runtimeMode";
 import { useRuntimeMode, type RuntimeMode } from "./runtimeModeDefinition";
 import { AgentRuntimeProvider } from "../agent/runtime";
 import { AgentWorkspace } from "../agent/AgentWorkspace";
+import { MemoryPanel } from "../agent/MemoryPanel";
 
 export type ApplicationServices = {
   sessionStore: SessionStore;
@@ -136,6 +137,14 @@ export function AppRoutes() {
               demo={<RepairsPage />}
               real={<RealRepairDetailPage />}
             />
+          }
+        />
+        <Route
+          path="field"
+          element={
+            <CapabilityRoute capability="field-service">
+              <BusinessPage demo={<RepairsPage />} real={<RealRepairsPage fieldService />} />
+            </CapabilityRoute>
           }
         />
         <Route
@@ -227,6 +236,10 @@ export function AppRoutes() {
             </CapabilityRoute>
           }
         />
+        <Route
+          path="settings/ai-memory"
+          element={<BusinessPage demo={<HomePage />} real={<MemoryPanel conversationId={null} />} />}
+        />
       </Route>
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
@@ -250,9 +263,7 @@ function OptionalShowcase({
 function RealHome() {
   const { session } = useSession();
   if (session.status !== "authenticated") return null;
-  return hasCapability(session.actor.roles, "operations")
-    ? <AgentWorkspace />
-    : <RealBusinessHomePage />;
+  return <RealBusinessHomePage />;
 }
 
 export function AppProviders({

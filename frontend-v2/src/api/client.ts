@@ -94,7 +94,11 @@ export class ApiClient {
       const response = await fetcher(this.resolveUrl(path), {
         ...options,
         body:
-          options.body === undefined ? undefined : JSON.stringify(options.body),
+          options.body === undefined
+            ? undefined
+            : options.body instanceof FormData
+              ? options.body
+              : JSON.stringify(options.body),
         headers: this.headers(descriptor, context, options),
         signal: controller.signal,
       });
@@ -178,6 +182,30 @@ export class ApiClient {
     }
   }
 
+  async download(
+    descriptor: RequestDescriptor,
+    path: string,
+    signal?: AbortSignal,
+  ): Promise<Blob> {
+    const context = this.requireContext(descriptor);
+    const response = await this.fetcher(this.resolveUrl(path), {
+      headers: this.headers(descriptor, context, {}),
+      signal,
+    });
+    if (response.status === 401 && descriptor.invalidateSessionOn401)
+      await this.invalidateAuthenticatedSession();
+    if (!response.ok) {
+      let payload: unknown = null;
+      try {
+        payload = await response.json();
+      } catch {
+        /* The stable HTTP error below is enough for a binary response. */
+      }
+      throw this.httpError(response.status, payload);
+    }
+    return response.blob();
+  }
+
   private requireContext(descriptor: RequestDescriptor): RequestContext {
     const context = this.getContext();
     if (descriptor.authentication === "required" && !context.accessToken) {
@@ -215,7 +243,7 @@ export class ApiClient {
       "X-Request-ID",
       options.requestId ?? `web_v2_${crypto.randomUUID()}`,
     );
-    if (options.body !== undefined)
+    if (options.body !== undefined && !(options.body instanceof FormData))
       headers.set("Content-Type", "application/json");
     if (descriptor.authentication === "required")
       headers.set("Authorization", `Bearer ${context.accessToken}`);

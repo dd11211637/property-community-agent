@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Menu, PanelRight, Plus, Send, Square, X } from "lucide-react";
+import { Bot, Menu, Plus, Send, Square, X } from "lucide-react";
 import { useEffect, useReducer, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { ApiError } from "../api/client";
@@ -9,7 +9,6 @@ import { Drawer } from "../shared/overlays";
 import { Button, Card, EmptyState, ErrorState, InlineAlert, LoadingState, Textarea } from "../shared/ui";
 import { AgentFacts } from "./facts";
 import { useAgentKey, useAgentService } from "./hooks";
-import { MemoryPanel } from "./MemoryPanel";
 import { initialTurnState, turnReducer } from "./reducer";
 import { reconcileTrustedFacts } from "./reconcile";
 import { useAgentRuntime } from "./runtimeDefinition";
@@ -19,14 +18,13 @@ import styles from "../styles/agent-real.module.css";
 
 function safeError(error: unknown): string {
   if (error instanceof ApiError) {
-    const request = error.requestId ? `（请求 ${error.requestId}）` : "";
-    if (error.kind === "forbidden") return `当前账号无权使用此 Agent 操作，登录仍然有效。${request}`;
-    if (error.kind === "rate-limited") return `Agent 当前繁忙，请稍后再试。${request}`;
-    if (error.kind === "unavailable") return `Agent 运行时暂不可用，请稍后恢复。${request}`;
+    if (error.kind === "forbidden") return "当前账号无权使用此项服务，登录仍然有效。";
+    if (error.kind === "rate-limited") return "生活助理当前繁忙，请稍后再试。";
+    if (error.kind === "unavailable") return "生活助理暂不可用，请稍后恢复。";
     if (error.kind === "network") return "网络中断；正在以会话状态和历史确认本轮结果。";
     if (error.kind === "timeout") return "Agent 流长时间没有事件；正在恢复权威状态。";
     if (error.kind === "cancelled") return "已停止接收本轮结果；后台执行不一定已回滚。";
-    return `${error.message}${request}`;
+    return error.message;
   }
   return "Agent 发生未知错误，请恢复会话状态后重试。";
 }
@@ -221,14 +219,14 @@ export function AgentWorkspace() {
     <main className={styles.conversation}>
       <header className={styles.workspaceHeader}>
         <div className={styles.mobileTools}><Drawer title="对话列表" trigger={<Button iconOnly aria-label="打开对话列表"><Menu /></Button>}><ConversationRail items={list.data ?? []} selected={conversationId} loading={list.isLoading} error={list.error} onSelect={(id) => navigate(`/agent/conversations/${id}`)} onNew={() => navigate("/agent")} /></Drawer></div>
-        <div><span>REAL AGENT WORKSPACE</span><h1>{status.data ? status.data.status : "新对话"}</h1></div>
-        <div className={styles.actions}>{conversationId ? <Button tone="ghost" onClick={() => void close()}><X size={16} />关闭会话</Button> : null}<div className={styles.mobileTools}><Drawer title="上下文与记忆" trigger={<Button iconOnly aria-label="打开上下文面板"><PanelRight /></Button>}><MemoryPanel conversationId={conversationId} /></Drawer></div></div>
+        <div><span>物业生活助理</span><h1>{conversationId ? "当前对话" : "新对话"}</h1></div>
+        <div className={styles.actions}>{conversationId ? <Button tone="ghost" onClick={() => void close()}><X size={16} />关闭会话</Button> : null}</div>
       </header>
       {transitioning ? <InlineAlert>房屋上下文切换中，Agent 提交暂时停用。</InlineAlert> : null}
       {status.isLoading && conversationId ? <LoadingState label="恢复会话状态" /> : null}
       {status.error ? <ErrorState description={safeError(status.error)} /> : null}
       <section className={styles.transcript} aria-label="Agent 对话历史">
-        {!conversationId ? <EmptyState title="开始真实 Agent 对话" description="会话 ID 将在首次提交时生成，并通过地址保持稳定。" /> : null}
+        {!conversationId ? <EmptyState title="开始对话" description="可以咨询报修、账单、公告和社区服务。" /> : null}
         {history.data?.map((message) => <article key={message.id} className={`${styles.message} ${styles[message.role]}`}><strong>{message.role === "user" ? "你" : message.role === "assistant" ? "Agent" : "系统"}</strong><p>{message.content}</p>{message.createdAt ? <time>{message.createdAt}</time> : null}</article>)}
         {turn.reply ? <article className={`${styles.message} ${styles.assistant}`}><strong>Agent</strong><p>{turn.reply}</p></article> : null}
         <AgentFacts facts={turn.facts} />
@@ -240,16 +238,15 @@ export function AgentWorkspace() {
       <section className={styles.composer}>
         {turn.phase === "clarifying" ? <><strong>{turn.slotPrompt?.prompt ?? `请补充 ${turn.requestedSlot ?? turn.missingSlots.join("、")}`}</strong>{turn.slotPrompt?.options.length ? <div className={styles.slotOptions}>{turn.slotPrompt.options.map((option) => <Button key={option.label} tone="ghost" onClick={() => { setSelectedSlotValue(option.value); setDraft(option.label); }}>{option.label}</Button>)}</div> : null}</> : null}
         <label><span className="sr-only">发送给 Agent</span><Textarea rows={3} maxLength={2000} value={draft} onChange={(event) => setDraft(event.target.value)} placeholder={turn.phase === "clarifying" ? "补充所需信息" : "描述你的业务需求…"} /></label>
-        <div className={styles.composerActions}><label><input type="checkbox" checked={compatibilityMode} onChange={(event) => setCompatibilityMode(event.target.checked)} /> 无流式兼容模式</label>{streaming ? <Button onClick={() => active.current?.abort()}><Square size={15} />停止接收</Button> : <Button tone="primary" disabled={!draft.trim() || transitioning || confirming} onClick={() => void submit()}><Send size={16} />发送</Button>}</div>
+        <div className={styles.composerActions}><label><input type="checkbox" checked={compatibilityMode} onChange={(event) => setCompatibilityMode(event.target.checked)} /> 网络不稳定模式</label>{streaming ? <Button onClick={() => active.current?.abort()}><Square size={15} />停止接收</Button> : <Button tone="primary" disabled={!draft.trim() || transitioning || confirming} onClick={() => void submit()}><Send size={16} />发送</Button>}</div>
       </section>
       <div className="sr-only" aria-live="polite">{turn.phase === "failed" ? turn.error : turn.phase === "handed-over" ? "已转人工处理" : ""}</div>
     </main>
-    <aside className={styles.context}><MemoryPanel conversationId={conversationId} /></aside>
   </div>;
 }
 
 function ConversationRail({ items, selected, loading, error, onSelect, onNew }: { items: ConversationSummary[]; selected: string | null; loading: boolean; error: unknown; onSelect(id: string): void; onNew(): void }) {
-  return <div className={styles.railInner}><div className={styles.railHeader}><strong>真实对话</strong><Button iconOnly tone="ghost" aria-label="新对话" onClick={onNew}><Plus /></Button></div>{loading ? <LoadingState /> : null}{error ? <ErrorState description={safeError(error)} /> : null}{items.map((item) => <button key={item.conversationId} className={`${styles.conversationItem} ${selected === item.conversationId ? styles.selected : ""}`} onClick={() => onSelect(item.conversationId)}><Bot size={17} /><span><strong>{item.title ?? "未命名对话"}</strong><small>{item.status}{item.currentHouseId ? ` · 房屋 ${item.currentHouseId.slice(0, 8)}` : ""}</small></span></button>)}{!loading && !error && !items.length ? <EmptyState title="暂无对话" description="创建第一段真实 Agent 会话。" /> : null}</div>;
+  return <div className={styles.railInner}><div className={styles.railHeader}><strong>历史对话</strong><Button iconOnly tone="ghost" aria-label="新对话" onClick={onNew}><Plus /></Button></div>{loading ? <LoadingState /> : null}{error ? <ErrorState description={safeError(error)} /> : null}{items.map((item) => <button key={item.conversationId} className={`${styles.conversationItem} ${selected === item.conversationId ? styles.selected : ""}`} onClick={() => onSelect(item.conversationId)}><Bot size={17} /><span><strong>{item.title ?? "未命名对话"}</strong><small>物业生活助理</small></span></button>)}{!loading && !error && !items.length ? <EmptyState title="暂无对话" description="可以从新对话开始咨询。" /> : null}</div>;
 }
 
 export function ResidentAgentEntry() {

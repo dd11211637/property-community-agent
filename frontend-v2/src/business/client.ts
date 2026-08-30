@@ -59,6 +59,8 @@ export const endpoints = {
   workOrders: business("/api/work-orders"),
   workOrder: business("/api/work-orders/{work_order_id}"),
   workOrderTimeline: business("/api/work-orders/{work_order_id}/timeline"),
+  attachments: business("/api/attachments"),
+  attachment: business("/api/attachments/{attachment_id}"),
   bills: business("/api/billing/bills", "required"),
   bill: business("/api/billing/bills/{bill_id}", "required"),
   billRule: business("/api/billing/bills/rules/{fee_type}", "required"),
@@ -255,6 +257,23 @@ export class BusinessClient {
       body,
       key,
     ).then(parseWorkOrder);
+  }
+  uploadAttachment(file: File) {
+    const form = new FormData();
+    form.set("file", file);
+    form.set("business_type", "REPAIR");
+    return this.api.request<ApiSchemas["AttachmentResponse"]>(
+      endpoints.attachments.descriptor,
+      path(endpoints.attachments),
+      { method: "POST", body: form },
+    );
+  }
+  downloadAttachment(id: string, signal?: AbortSignal) {
+    return this.api.download(
+      endpoints.attachment.descriptor,
+      path(endpoints.attachment, { attachment_id: id }),
+      signal,
+    );
   }
 
   listBills(signal?: AbortSignal) {

@@ -5,7 +5,7 @@ export type RouteCapability = {
   label: string;
   public: boolean;
   requiredCapability?: Capability;
-  navigation: "resident" | "operations" | "both" | "none";
+  navigation: "resident" | "field-service" | "operations" | "both" | "none";
 };
 
 export const routeCapabilities: RouteCapability[] = [
@@ -13,6 +13,13 @@ export const routeCapabilities: RouteCapability[] = [
   { path: "/", label: "首页", public: false, navigation: "both" },
   { path: "/agent", label: "Agent", public: false, navigation: "both" },
   { path: "/repairs", label: "报修", public: false, navigation: "both" },
+  {
+    path: "/field",
+    label: "现场任务",
+    public: false,
+    requiredCapability: "field-service",
+    navigation: "field-service",
+  },
   { path: "/billing", label: "账单", public: false, navigation: "both" },
   { path: "/community", label: "社区", public: false, navigation: "both" },
   {
@@ -23,6 +30,7 @@ export const routeCapabilities: RouteCapability[] = [
     navigation: "operations",
   },
   { path: "/messages", label: "消息", public: false, navigation: "both" },
+  { path: "/settings/ai-memory", label: "AI 与记忆", public: false, navigation: "both" },
   {
     path: "/admin",
     label: "管理",
