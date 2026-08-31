@@ -31,7 +31,9 @@ export function HouseSwitcher({ workspace }: { workspace: WorkspaceKind }) {
     <small>{pending ? "正在切换房屋…" : "切换房屋"}</small>
     <select
       aria-label="当前房屋"
+      aria-describedby={!session?.current_house_id ? "house-selection-help" : undefined}
       aria-busy={pending}
+      autoFocus={!session?.current_house_id}
       disabled={pending}
       value={session?.current_house_id ?? ""}
       onChange={(event) => void changeHouse(event.target.value)}

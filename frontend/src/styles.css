@@ -133,6 +133,11 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .state-card { min-height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; border: 1px dashed #d7ddd6; border-radius: 12px; color: #84918b; text-align: center; }
 .state-card strong { color: #53625c; }
 .state-card p { margin: 0; font-size: 12px; }
+.house-required { min-height: 320px; display: flex; align-items: center; justify-content: center; gap: 22px; padding: clamp(28px, 6vw, 72px); border: 1px solid var(--line); border-radius: 18px; background: var(--surface); box-shadow: 0 16px 45px #17332f0a; }
+.house-required-icon { width: 58px; height: 58px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 16px; color: var(--brand); background: var(--brand-soft); }
+.house-required-icon svg { width: 28px; height: 28px; }
+.house-required h1 { margin: 6px 0 10px; color: var(--ink-strong); font-size: clamp(24px, 3vw, 36px); }
+.house-required p { max-width: 680px; margin: 0; color: var(--ink-muted); line-height: 1.8; }
 .error-state svg { color: #c4624f; }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -269,6 +274,7 @@ textarea { min-height: 90px; resize: vertical; }
   .message { max-width: 88%; }
   .health-list > div { grid-template-columns: 25px 1fr 80px; }
   .health-list small { grid-column: 2 / -1; }
+  .house-required { min-height: 280px; align-items: flex-start; flex-direction: column; padding: 28px 22px; }
 }
 
 /* Frontend release rewrite: role-aware application hierarchy. */

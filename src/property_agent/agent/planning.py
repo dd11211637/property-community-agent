@@ -7,6 +7,7 @@ from inspect import signature
 from typing import Any
 from uuid import uuid4
 
+from property_agent.agent.deterministic_gateway import deterministic_repair_slots
 from property_agent.agent.model_contracts import ModelAnalysis, ModelGatewayError
 from property_agent.agent.orchestration import (
     ObjectiveClassification,
@@ -196,6 +197,20 @@ class SupervisorPlanner:
         internal_condition = _CONDITIONS.get(condition_kind) if condition_kind else None
         if condition_kind and internal_condition is None:
             raise ValueError("unknown planning condition")
+        parameters = {
+            **{
+                key: value
+                for key, value in semantic_slots.items()
+                if key not in _TRUSTED_KEYS and not key.startswith("_")
+            },
+            **proposal.parameters,
+        }
+        if proposal.capability == "repair_create":
+            user_text = str(semantic_slots.get("user_text") or "")
+            explicit = deterministic_repair_slots(user_text)
+            for key in ("location", "description"):
+                if explicit.get(key):
+                    parameters[key] = explicit[key]
         return PlanStep(
             step_id=proposal.step_id,
             domain=proposal.domain,
@@ -203,14 +218,7 @@ class SupervisorPlanner:
             goal=proposal.goal,
             dependencies=proposal.dependencies,
             capability=proposal.capability,
-            parameters={
-                **{
-                    key: value
-                    for key, value in semantic_slots.items()
-                    if key not in _TRUSTED_KEYS and not key.startswith("_")
-                },
-                **proposal.parameters,
-            },
+            parameters=parameters,
             condition=internal_condition,
             condition_parameters=(
                 {"semantic_goal": condition["semantic_goal"]} if condition else {}

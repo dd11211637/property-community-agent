@@ -1,12 +1,14 @@
 import { expect, type Page, test } from "@playwright/test";
 
-async function login(page: Page, account: string) {
+async function login(page: Page, account: string, houseSelectionRequired = false) {
   await page.goto("/login");
   await page.getByLabel("账号").fill(account);
   await page.getByLabel("密码").fill("123456");
   await page.getByRole("button", { name: "登录并选择房屋" }).click();
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("heading", { name: "今天想处理什么？" })).toBeVisible();
+  await expect(page.getByRole("heading", {
+    name: houseSelectionRequired ? "请先选择要服务的房屋" : "今天想处理什么？",
+  })).toBeVisible();
 }
 
 async function authenticatedHeaders(page: Page) {
@@ -153,7 +155,7 @@ test("住户通过 Agent 确认上报高风险事件后进入人工接管", asyn
 test("报修确认框只展示住户可理解的中文字段", async ({ page }) => {
   await login(page, "zhangsan");
 
-  await page.getByLabel("发送给社区智能体").fill("客厅电灯坏了，需要报修");
+  await page.getByLabel("发送给社区智能体").fill("客厅电灯不亮了");
   await page.getByRole("button", { name: "发送" }).click();
   await waitForAgent(page);
 
@@ -201,10 +203,12 @@ test("可使用业务工单号查询真实状态和进度", async ({ page }) => 
 });
 
 test("多房屋住户必须选择房屋且切换后服务可用", async ({ page }) => {
-  await login(page, "lisi");
+  await login(page, "lisi", true);
 
   const picker = page.getByLabel("当前房屋");
   await expect(picker).toHaveValue("");
+  await expect(picker).toBeFocused();
+  await expect(page.getByText(/Multiple houses available/)).toHaveCount(0);
   await expect(picker.locator("option")).toHaveCount(3);
   await picker.selectOption({ index: 2 });
   await expect(picker).not.toHaveValue("");

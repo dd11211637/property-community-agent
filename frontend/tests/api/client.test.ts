@@ -42,6 +42,21 @@ describe("apiRequest", () => {
     });
   });
 
+  it("localizes FastAPI house-selection errors", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      detail: {
+        code: "HOUSE_SELECTION_REQUIRED",
+        message: "Multiple houses available. Please select one via X-Current-House-Id header.",
+      },
+    }), { status: 400, headers: { "Content-Type": "application/json" } }));
+
+    await expect(apiRequest("/api/work-orders")).rejects.toMatchObject({
+      status: 400,
+      code: "HOUSE_SELECTION_REQUIRED",
+      message: "请先选择要服务的房屋。",
+    });
+  });
+
   it("aborts stalled requests and returns a user-facing timeout error", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => new Promise((_resolve, reject) => {
       init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));

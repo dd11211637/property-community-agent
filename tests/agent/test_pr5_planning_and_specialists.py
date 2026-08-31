@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
+import pytest
 
 from property_agent.agent.capabilities.catalog import default_capability_registry
 from property_agent.agent.capabilities.contracts import (
@@ -172,6 +173,33 @@ def test_contextual_repair_followup_uses_history_and_prior_semantic_slots():
 
     assert [step.capability for step in plan.steps] == ["repair_create"]
     assert plan.steps[0].parameters["location"] == "厨房"
+
+
+@pytest.mark.parametrize(
+    ("user_text", "location"),
+    [
+        ("客厅电灯不亮了", "客厅"),
+        ("主卧室的插座没电", "主卧"),
+        ("洗手间的马桶漏水", "卫生间"),
+        ("厨房水槽下面在滴水", "厨房水槽下面"),
+    ],
+)
+def test_repair_plan_restores_explicit_location_omitted_by_model(user_text, location):
+    semantic = proposal(
+        step(
+            "repair-create",
+            "repair",
+            "repair_create",
+            "提交灯具报修",
+            parameters={"description": "电灯故障"},
+        )
+    )
+
+    plan = SupervisorPlanner(StaticPlanningGateway(semantic)).create_plan(
+        _state(user_text), _runtime()
+    )
+
+    assert plan.steps[0].parameters["location"] == location
 
 
 def test_explicit_inspection_and_announcement_actions_map_to_canonical_capabilities():

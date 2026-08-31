@@ -13,6 +13,7 @@ from property_agent.agent.announcement_time import (
 )
 from property_agent.agent.model_contracts import ModelAnalysis, ModelGatewayError
 from property_agent.agent.policies import Intent
+from property_agent.agent.repair_location import extract_repair_location
 from property_agent.repair.domain.classification import classify_repair_category
 
 _BUSINESS_TIMEZONE = ZoneInfo("Asia/Shanghai")
@@ -56,7 +57,7 @@ def _deterministic_billing_slots(text: str, today: date) -> dict[str, Any]:
     return slots
 
 
-def _deterministic_repair_slots(text: str) -> dict[str, Any]:
+def deterministic_repair_slots(text: str) -> dict[str, Any]:
     """Extract observable repair facts; category remains application-derived."""
 
     text = (text or "").strip()
@@ -80,21 +81,21 @@ def _deterministic_repair_slots(text: str) -> dict[str, Any]:
     ):
         slots["action"] = "query"
         return slots
-    create_markers = ("报修", "维修", "坏了", "故障", "漏水", "漏电", "破损", "堵塞")
+    create_markers = (
+        "报修",
+        "维修",
+        "坏了",
+        "故障",
+        "漏水",
+        "漏电",
+        "破损",
+        "堵塞",
+        "不亮",
+        "没亮",
+    )
     if any(marker in text for marker in create_markers):
         slots["action"] = "create"
-    locations = (
-        "厨房",
-        "卫生间",
-        "客厅",
-        "卧室",
-        "阳台",
-        "玄关",
-        "楼道",
-        "地下车库",
-        "车库",
-    )
-    location = next((value for value in locations if value in text), None)
+    location = extract_repair_location(text)
     if location:
         slots["location"] = location
     generic = {"我要报修", "需要报修", "申请报修", "报修", "我要保修", "帮我报修"}
@@ -107,6 +108,8 @@ def _deterministic_repair_slots(text: str) -> dict[str, Any]:
         "堵塞",
         "停电",
         "跳闸",
+        "不亮",
+        "没亮",
         "故障",
         "破损",
         "异响",
@@ -276,6 +279,8 @@ class DeterministicModelGateway:
             "故障",
             "破损",
             "堵塞",
+            "不亮",
+            "没亮",
         ],
         "ANNOUNCEMENT": ["公告", "通知", "通告", "发布", "告示", "停水", "停电", "供水", "供电"],
         "BILLING": ["账单", "缴费", "物业费", "费用", "收费", "欠费"],
@@ -370,7 +375,7 @@ class DeterministicModelGateway:
     def _slots_for_intent(self, text: str, intent: str) -> dict[str, Any]:
         today = self._today_provider()
         if intent == Intent.REPAIR.value:
-            return _deterministic_repair_slots(text)
+            return deterministic_repair_slots(text)
         if intent == Intent.BILLING.value:
             return _deterministic_billing_slots(text, today)
         if intent == Intent.ANNOUNCEMENT.value:

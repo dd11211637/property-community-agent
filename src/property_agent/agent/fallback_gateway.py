@@ -9,7 +9,7 @@ from typing import Any
 from property_agent.agent.deterministic_gateway import (
     DeterministicModelGateway,
     _deterministic_inspection_slots,
-    _deterministic_repair_slots,
+    deterministic_repair_slots,
 )
 from property_agent.agent.model_contracts import ModelAnalysis, ModelGateway, ModelGatewayError
 from property_agent.agent.planning_contracts import PlanProposal, RelevanceJudgment
@@ -72,7 +72,7 @@ def _guard_repair_slots(
     deterministic_slots: dict[str, Any] | None,
 ) -> ModelAnalysis:
     slots = dict(result.slots)
-    guarded = deterministic_slots or _deterministic_repair_slots(text)
+    guarded = deterministic_slots or deterministic_repair_slots(text)
     for key in ("action", "work_order_id", "location", "description"):
         if guarded.get(key):
             slots[key] = guarded[key]

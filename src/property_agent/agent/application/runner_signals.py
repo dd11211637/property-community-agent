@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from property_agent.agent.policies import Intent
+from property_agent.agent.repair_location import extract_repair_location
 from property_agent.agent.state import GraphState
 from property_agent.agent.working_state import (
     DomainWorkingState,
@@ -146,10 +147,9 @@ def explicit_repair_corrections(text: str) -> dict[str, str]:
     if not any(marker in text for marker in ("不是", "改成", "换成")):
         return {}
     corrections: dict[str, str] = {}
-    locations = ("厨房", "卫生间", "客厅", "卧室", "阳台", "玄关", "楼道", "车库")
-    mentioned_locations = [value for value in locations if value in text]
-    if mentioned_locations:
-        corrections["location"] = mentioned_locations[-1]
+    location = extract_repair_location(text, prefer_last=True)
+    if location:
+        corrections["location"] = location
     symptom_cues = (
         "漏电",
         "电路",

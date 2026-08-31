@@ -41,6 +41,8 @@ export function AppShell() {
   const [open, setOpen] = useState(false);
   const workspace = workspaceFor(session?.actor.roles);
   const navigation = navigationFor(workspace, session?.actor.roles ?? []);
+  const houseSelectionRequired = workspace === "resident" &&
+    (session?.houses.length ?? 0) > 1 && !session?.current_house_id;
   return (
     <div className={`app-shell workspace-${workspace}`}>
       <EnvironmentBadge />
@@ -66,7 +68,18 @@ export function AppShell() {
           <div className="profile"><span className="avatar">{session?.actor.display_name.slice(0, 1)}</span><div><b>{session?.actor.display_name}</b><small>{workspaceLabel(workspace)} · {session?.actor.community_name}</small></div></div>
           <button className="icon-button" aria-label="退出登录" onClick={logout}><LogOut size={19} /></button>
         </header>
-        <div className="page"><Outlet /></div>
+        <div className="page">
+          {houseSelectionRequired
+            ? <section className="house-required" aria-labelledby="house-required-title">
+                <span className="house-required-icon"><Building2 aria-hidden="true" /></span>
+                <div>
+                  <span className="eyebrow">访问房屋服务前</span>
+                  <h1 id="house-required-title">请先选择要服务的房屋</h1>
+                  <p id="house-selection-help">你绑定了多套房屋。请在页面上方选择一套，系统再加载对应的报修、账单和 Agent 会话。</p>
+                </div>
+              </section>
+            : <Outlet />}
+        </div>
       </main>
       {open && <button className="sidebar-scrim" aria-label="关闭菜单" onClick={() => setOpen(false)} />}
     </div>

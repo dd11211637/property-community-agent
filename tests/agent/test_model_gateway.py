@@ -488,6 +488,14 @@ def test_keyword_guard_fills_explicit_repair_slots_when_model_omits_them():
     assert result.slots["description"] == "客厅电灯坏了，需要报修"
 
 
+def test_deterministic_repair_extracts_unlit_room_location_and_description():
+    result = DeterministicModelGateway().analyze("客厅电灯不亮了")
+
+    assert result.intent == "REPAIR"
+    assert result.slots["location"] == "客厅"
+    assert result.slots["description"] == "客厅电灯不亮了"
+
+
 def test_keyword_guard_rejects_model_location_not_stated_by_user():
     class ContextLeakingAnalysis:
         def ready(self):
