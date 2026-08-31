@@ -5,10 +5,18 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import create_engine, text
 
+from property_agent.config import settings
 from property_agent.repair.application.ports import RequestContext
 from property_agent.repair.application.service import WorkOrderService
 from property_agent.repair.domain.enums import Role
 from tests.support import Harness
+
+
+@pytest.fixture(autouse=True)
+def _use_explicit_test_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep deterministic model behavior confined to the explicit test profile."""
+    monkeypatch.setattr(settings, "env", "test")
+    monkeypatch.setattr(settings, "deepseek_api_key", "")
 
 
 @pytest.fixture(scope="session", autouse=True)

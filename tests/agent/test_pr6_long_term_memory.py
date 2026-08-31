@@ -37,6 +37,7 @@ from property_agent.agent.state import AgentState
 from property_agent.platform.adapters.api.dependencies import RequestContext
 from property_agent.platform.context import ExecutionSource
 from property_agent.platform.infrastructure.orm_models import Base
+from tests.support_graph_engine import TestGraphEngine
 
 
 @dataclass(frozen=True)
@@ -611,11 +612,11 @@ class _Conversations:
     def get(self, _conversation_id):
         return None
 
-    def start(self, *, conversation_id, context, current_house_id, runtime_version):
+    def start(self, *, conversation_id, context, current_house_id, runtime_version="v2"):
         return self._snapshot(conversation_id, current_house_id, runtime_version)
 
     def sync_from_state(self, state, *, waiting_confirm):
-        return self._snapshot(state.conversation_id, state.current_house_id, "v1")
+        return self._snapshot(state.conversation_id, state.current_house_id, "v2")
 
     def _snapshot(self, conversation_id, house_id, runtime_version):
         return ConversationSnapshot(
@@ -709,7 +710,7 @@ def test_failed_accepted_head_publication_produces_zero_writer_calls():
     context = Context(uuid4(), uuid4(), frozenset())
     writer = _WriterSpy()
     runner = AgentSessionRunner(
-        graph=_Graph(),
+        engine=TestGraphEngine(_Graph()),
         conversations=_Conversations(context),
         recovery=_Recovery(),
         checkpointer=_RejectAcceptedHead(),
@@ -729,7 +730,7 @@ def test_missing_checkpointer_cannot_count_as_accepted_for_writer():
     context = Context(uuid4(), uuid4(), frozenset())
     writer = _WriterSpy()
     runner = AgentSessionRunner(
-        graph=_Graph(),
+        engine=TestGraphEngine(_Graph()),
         conversations=_Conversations(context),
         recovery=_Recovery(),
         checkpointer=None,
@@ -745,7 +746,7 @@ def test_writer_receives_actual_published_version_and_canonical_outcome():
     context = Context(uuid4(), uuid4(), frozenset())
     writer = _WriterSpy()
     runner = AgentSessionRunner(
-        graph=_Graph(),
+        engine=TestGraphEngine(_Graph()),
         conversations=_Conversations(context),
         recovery=_Recovery(),
         checkpointer=_AcceptedHead(17),
@@ -757,7 +758,7 @@ def test_writer_receives_actual_published_version_and_canonical_outcome():
     assert writer.outcomes == [AcceptedTurnOutcome.COMPLETED]
 
 
-def test_v1_waiting_confirm_is_pending_and_writes_no_completed_plan_episode():
+def test_v2_waiting_confirm_is_pending_and_writes_no_completed_plan_episode():
     engine, factory = _factory()
     context = Context(uuid4(), uuid4(), frozenset())
     extractor = _OutcomeCapturingCandidates(
@@ -769,14 +770,14 @@ def test_v1_waiting_confirm_is_pending_and_writes_no_completed_plan_episode():
         )
     )
     runner = AgentSessionRunner(
-        graph=_WaitingGraph(),
+        engine=TestGraphEngine(_WaitingGraph()),
         conversations=_Conversations(context),
         recovery=_Recovery(),
         checkpointer=_AcceptedHead(21),
         memory_writer=AcceptedEvidenceMemoryWriter(factory, extractor),
         enforce_concurrency=False,
     )
-    turn = runner.start(conversation_id="v1-waiting-path", context=context, user_text="提交报修")
+    turn = runner.start(conversation_id="v2-waiting-path", context=context, user_text="提交报修")
     with factory() as session:
         episodes = list(session.scalars(select(AgentMemoryModel)))
     assert turn.done is False
@@ -785,10 +786,10 @@ def test_v1_waiting_confirm_is_pending_and_writes_no_completed_plan_episode():
     engine.dispose()
 
 
-def test_v1_cancelled_confirmation_writes_no_completed_plan_episode():
+def test_v2_cancelled_confirmation_writes_no_completed_plan_episode():
     engine, factory = _factory()
     context = Context(uuid4(), uuid4(), frozenset())
-    state = AgentState(conversation_id="v1-cancelled-path")
+    state = AgentState(conversation_id="v2-cancelled-path")
     extractor = _OutcomeCapturingCandidates(
         MemoryCandidate(
             MemoryKind.EPISODIC,
@@ -798,7 +799,7 @@ def test_v1_cancelled_confirmation_writes_no_completed_plan_episode():
         )
     )
     runner = AgentSessionRunner(
-        graph=_CancelledGraph(),
+        engine=TestGraphEngine(_CancelledGraph()),
         conversations=_Conversations(context),
         recovery=_Recovery(state),
         checkpointer=_AcceptedHead(22),
@@ -818,7 +819,7 @@ def test_v1_cancelled_confirmation_writes_no_completed_plan_episode():
     engine.dispose()
 
 
-def test_v1_failed_turn_is_failed_and_writes_no_completed_plan_episode():
+def test_v2_failed_turn_is_failed_and_writes_no_completed_plan_episode():
     engine, factory = _factory()
     context = Context(uuid4(), uuid4(), frozenset())
     extractor = _OutcomeCapturingCandidates(
@@ -830,14 +831,14 @@ def test_v1_failed_turn_is_failed_and_writes_no_completed_plan_episode():
         )
     )
     runner = AgentSessionRunner(
-        graph=_FailedGraph(),
+        engine=TestGraphEngine(_FailedGraph()),
         conversations=_Conversations(context),
         recovery=_Recovery(),
         checkpointer=_AcceptedHead(23),
         memory_writer=AcceptedEvidenceMemoryWriter(factory, extractor),
         enforce_concurrency=False,
     )
-    turn = runner.start(conversation_id="v1-failed-path", context=context, user_text="提交报修")
+    turn = runner.start(conversation_id="v2-failed-path", context=context, user_text="提交报修")
     with factory() as session:
         episodes = list(session.scalars(select(AgentMemoryModel)))
     assert turn.done is True

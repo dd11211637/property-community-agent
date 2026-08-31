@@ -1,5 +1,6 @@
 """Accepted-head publication and trusted runtime construction helpers."""
 
+from dataclasses import replace
 from time import perf_counter
 from typing import Any
 
@@ -33,7 +34,6 @@ def publish_accepted(
     normalized = result_from_payload(result)
     started = perf_counter()
     attributes = {"runtime": plan.runtime_version, "operation": "publish"}
-    v1_overlap = plan.runtime_version == "v1"
     try:
         value = int(
             checkpointer.publish_accepted(
@@ -49,15 +49,6 @@ def publish_accepted(
                 "agent_accepted_head_publish_total",
                 attributes={**attributes, "outcome": "FAILED_INFRASTRUCTURE"},
             )
-            if v1_overlap:
-                observability.count(
-                    "agent_checkpoint_persist_total",
-                    attributes={
-                        **attributes,
-                        "operation": "v1_accepted_snapshot",
-                        "outcome": "FAILED_INFRASTRUCTURE",
-                    },
-                )
             observability.count(
                 "agent_accepted_head_orphan_total",
                 attributes={**attributes, "reason": "publish_failure"},
@@ -70,26 +61,11 @@ def publish_accepted(
                 perf_counter() - started,
                 attributes=attributes,
             )
-            if v1_overlap:
-                observability.duration(
-                    "agent_checkpoint_persist_duration_seconds",
-                    perf_counter() - started,
-                    attributes={**attributes, "operation": "v1_accepted_snapshot"},
-                )
     if observability is not None:
         observability.count(
             "agent_accepted_head_publish_total",
             attributes={**attributes, "outcome": "COMPLETED"},
         )
-        if v1_overlap:
-            observability.count(
-                "agent_checkpoint_persist_total",
-                attributes={
-                    **attributes,
-                    "operation": "v1_accepted_snapshot",
-                    "outcome": "COMPLETED",
-                },
-            )
     return value
 
 
@@ -110,10 +86,18 @@ def runtime_for(
             plan_id=params.get("plan_id"),
             plan_step_id=params.get("plan_step_id"),
         )
+    request_context = plan.ctx
+    current_house_id = plan.state.current_house_id
+    if current_house_id is not None and hasattr(request_context, "current_house_id"):
+        bound_house_ids = getattr(request_context, "bound_house_ids", frozenset())
+        if current_house_id not in bound_house_ids:
+            raise ValueError("Agent current house is not bound to the authenticated user")
+        if request_context.current_house_id != current_house_id:
+            request_context = replace(request_context, current_house_id=current_house_id)
     return RuntimeContext.from_request_context(
-        plan.ctx,
+        request_context,
         conversation_id=plan.state.conversation_id,
-        current_house_id=plan.state.current_house_id,
+        current_house_id=current_house_id,
         observation=observation,
         prepared_write=prepared,
     )
@@ -124,7 +108,7 @@ def cursor_for(
     conversation_id: str,
     *,
     observability: Any | None = None,
-    runtime_version: str = "v1",
+    runtime_version: str = "v2",
 ) -> dict[str, Any] | None:
     if checkpointer is None:
         return None

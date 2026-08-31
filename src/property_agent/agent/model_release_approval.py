@@ -1,9 +1,9 @@
 """Shared production-owned real-model approval + effective provider-config contract.
 
-PR7-C model-release governance: ONE production contract answers "what counts as an
+V2-only model-release governance: ONE production contract answers "what counts as an
 approved real-model release" and "what is the actual effective provider configuration".
-Both PR7-B certification (``testing/pr7b/real_model_gate``) and PR7-C rollout activation
-(``runtime_rollout_activation``) consume THIS contract. Production never imports
+PR7-B certification (``testing/pr7b/real_model_gate``) consumes THIS contract.
+Production never imports
 ``testing/``; ``testing/`` imports production.
 
 Trust chain (no self-referential operator strings):
@@ -48,9 +48,9 @@ COMMITTED_BASELINE_APPROVAL_PATH = "config/pr7b_real_model_baseline_approval.jso
 PRIMARY_PROVIDER = "deepseek"
 # Bounded retry contract: the DeepSeek gateway retries once (two total attempts).
 DEEPSEEK_MAX_ATTEMPTS = 2
-# Fallback policy: DeepSeek primary degrades to DeterministicModelGateway on failure.
-FALLBACK_POLICY_VERSION = "deepseek-to-deterministic-v1"
-FALLBACK_ENABLED = True
+# V2 production is fail-closed. Deterministic gateways are test-only dependencies.
+FALLBACK_POLICY_VERSION = "provider-fail-closed-v2"
+FALLBACK_ENABLED = False
 RETRY_POLICY_VERSION = "transport-429-5xx-or-invalid-response-v1"
 # Provider request/response contract used by ``DeepSeekModelGateway``: Chat
 # Completions, JSON-object response format, thinking disabled, non-streaming. A
@@ -230,8 +230,7 @@ def primary_provider_ready(settings: Any) -> bool:
     """Whether the CERTIFIED DeepSeek primary provider can actually be constructed.
 
     ``build_model_gateway`` only constructs the DeepSeek gateway when a credential is
-    configured; otherwise production runs the deterministic fallback and the certified
-    DeepSeek release is NOT runnable. Readiness is an independent runtime eligibility
+    configured; otherwise production startup fails. Readiness is an independent runtime eligibility
     condition (NOT part of the signed rollout manifest), but activation must never
     authorize a non-zero rollout while the certified primary cannot be constructed.
 

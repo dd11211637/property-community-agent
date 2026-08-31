@@ -38,6 +38,7 @@ def test_production_profile_accepts_explicit_secure_configuration():
         env="production",
         jwt_secret="production-secret-that-is-longer-than-thirty-two-characters",
         database_url="postgresql+psycopg://property_app:strong-password@database/property_agent",
+        deepseek_api_key="configured-production-key",
         otel_exporter_endpoint="http://otel-collector:4318",
         _env_file=None,
     )

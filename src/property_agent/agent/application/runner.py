@@ -26,15 +26,9 @@ from property_agent.agent.application.conversation_service import (
     ConversationSnapshot,
 )
 from property_agent.agent.application.errors import AgentSessionError, AgentSessionErrorCode
-from property_agent.agent.application.graph_engine import (
-    GraphEngine,
-    GraphExecutionResult,
-    LegacyGraphEngine,
-)
+from property_agent.agent.application.graph_engine import GraphEngine, GraphExecutionResult
 from property_agent.agent.application.memory_outcome import accepted_turn_outcome
-from property_agent.agent.application.pending_confirmation import (
-    confirmation_envelope,
-)
+from property_agent.agent.application.pending_confirmation import confirmation_envelope
 from property_agent.agent.application.recovery import AgentRecoveryService
 from property_agent.agent.application.runner_signals import (
     first_turn_inspection_signal as _first_turn_inspection_signal,  # noqa: F401
@@ -49,7 +43,6 @@ from property_agent.agent.application.runner_telemetry import (
 )
 from property_agent.agent.application.start_state import prepare_start_state
 from property_agent.agent.application.turn_guard import TurnLeaseController
-from property_agent.agent.graph_core import CompiledGraph
 from property_agent.agent.infrastructure.checkpointer import CheckpointVersionConflict
 from property_agent.agent.infrastructure.run_lease import Lease, LeaseHeartbeat, StaleAgentRunError
 from property_agent.agent.observability import AgentObservability
@@ -61,10 +54,6 @@ logger = getLogger(__name__)
 
 ConfirmationTokenProvider = Callable[[GraphState], str]
 TurnRecorder = Callable[[AgentContext, GraphState, str, str], None]
-RuntimeRoute = Callable[
-    [ConversationSnapshot | None, AgentContext, str],
-    tuple[GraphEngine | None, str],
-]
 
 
 @dataclass(frozen=True)
@@ -98,17 +87,17 @@ class _TurnPlan:
     conversation: Any
     expected_version: int | None
     repair_followup_message: str | None
+    engine: GraphEngine
     represent_pending: bool = False
-    engine: "GraphEngine | None" = None
     heartbeat: "LeaseHeartbeat | None" = None
-    runtime_version: str = AgentRuntimeVersion.V1.value
+    runtime_version: str = AgentRuntimeVersion.V2.value
 
 
 class AgentSessionRunner:
     def __init__(
         self,
         *,
-        graph: CompiledGraph,
+        engine: GraphEngine,
         conversations: ConversationService,
         recovery: AgentRecoveryService,
         confirmation_token_provider: ConfirmationTokenProvider | None = None,
@@ -121,7 +110,7 @@ class AgentSessionRunner:
         observability: AgentObservability | None = None,
         heartbeat_interval_seconds: int = 10,
     ) -> None:
-        self._graph = graph
+        self._engine = engine
         self._conversations = conversations
         self._recovery = recovery
         self._confirmation_token_provider = confirmation_token_provider
@@ -151,9 +140,6 @@ class AgentSessionRunner:
         user_text: str,
         house_id: UUID | None = None,
         slots: dict[str, Any] | None = None,
-        engine: GraphEngine | None = None,
-        runtime_version: str = AgentRuntimeVersion.V1.value,
-        runtime_route: RuntimeRoute | None = None,
     ) -> AgentTurn:
         plan = None
         try:
@@ -163,9 +149,6 @@ class AgentSessionRunner:
                 user_text=user_text,
                 house_id=house_id,
                 slots=slots,
-                engine=engine,
-                runtime_version=runtime_version,
-                runtime_route=runtime_route,
             )
             if plan.represent_pending:
                 return self._pending_turn(plan)
@@ -212,9 +195,6 @@ class AgentSessionRunner:
         user_text: str,
         house_id: UUID | None = None,
         slots: dict[str, Any] | None = None,
-        engine: GraphEngine | None = None,
-        runtime_version: str = AgentRuntimeVersion.V1.value,
-        runtime_route: RuntimeRoute | None = None,
     ):
         """真流式发起一轮（P1 观测与流式）。
 
@@ -230,9 +210,6 @@ class AgentSessionRunner:
                 user_text=user_text,
                 house_id=house_id,
                 slots=slots,
-                engine=engine,
-                runtime_version=runtime_version,
-                runtime_route=runtime_route,
             )
             if plan.represent_pending:
                 yield AgentStreamEvent.started(conversation_id, plan.runtime_version)
@@ -292,43 +269,19 @@ class AgentSessionRunner:
         user_text: str,
         house_id: UUID | None,
         slots: dict[str, Any] | None,
-        engine: GraphEngine | None = None,
-        runtime_version: str = AgentRuntimeVersion.V1.value,
-        runtime_route: RuntimeRoute | None = None,
     ) -> "_TurnPlan":
         # P0-2: lease 必须在 turn 最外层获取——任何会修改 conversation 状态的
         # 操作（ConversationService.start、recovery.peek、confirmation_token_provider、
         # graph.invoke、sync_from_state）都必须处于 lease ownership 下。
         lease = self._turn_guard.acquire(conversation_id, uuid4())
         ctx = self._turn_guard.activate(context, lease)
-        if runtime_route is not None:
-            engine, runtime_version = runtime_route(
-                self._conversations.get(conversation_id), ctx, conversation_id
-            )
-        # PR4 §8：runtime 版本在创建时钉死；已存在会话沿用持久化值，绝不切换。
         conversation = self._conversations.start(
             conversation_id=conversation_id,
             context=ctx,
             current_house_id=house_id,
-            runtime_version=runtime_version,
         )
         current_house_id = house_id or conversation.current_house_id
         previous = self._recovery.peek(conversation_id)
-        represent_pending = bool(
-            conversation.is_v2 and previous is not None and previous.pending_action is not None
-        )
-        if represent_pending:
-            return _TurnPlan(
-                lease=lease,
-                ctx=ctx,
-                state=previous,
-                conversation=conversation,
-                expected_version=self._turn_guard.version(conversation_id),
-                repair_followup_message=None,
-                represent_pending=True,
-                engine=engine or LegacyGraphEngine(self._graph),
-                runtime_version=conversation.runtime_version,
-            )
         prepared = prepare_start_state(
             conversation_id=conversation_id,
             context=ctx,
@@ -336,6 +289,11 @@ class AgentSessionRunner:
             previous=previous,
             user_text=user_text,
             slots=slots,
+        )
+        represent_pending = bool(
+            previous is not None
+            and previous.pending_action is not None
+            and not prepared.state._continuation
         )
         # P0-3: expected_version 必须在成功 acquire lease 后读取，避免读到
         # 被并发新 run 覆盖的版本导致不必要 stale CAS。
@@ -347,11 +305,12 @@ class AgentSessionRunner:
         return _TurnPlan(
             lease=lease,
             ctx=ctx,
-            state=prepared.state,
+            state=previous if represent_pending else prepared.state,
             conversation=conversation,
             expected_version=expected_version,
             repair_followup_message=prepared.repair_followup_message,
-            engine=engine or LegacyGraphEngine(self._graph),
+            engine=self._engine,
+            represent_pending=represent_pending,
             heartbeat=heartbeat,
             runtime_version=conversation.runtime_version,
         )
@@ -381,8 +340,6 @@ class AgentSessionRunner:
         confirmed: bool,
         confirmation_token: str | None = None,
         action_hash: str | None = None,
-        engine: GraphEngine | None = None,
-        runtime_version: str = AgentRuntimeVersion.V1.value,
     ) -> AgentTurn:
         plan = None
         token = confirmation_token
@@ -393,8 +350,6 @@ class AgentSessionRunner:
                 confirmed=confirmed,
                 confirmation_token=confirmation_token,
                 action_hash=action_hash,
-                engine=engine,
-                runtime_version=runtime_version,
             )
             with observe_plan(self._observability, plan, "resume", confirmed=confirmed) as span:
                 with self._observability.span(engine_span_name(plan, "resume")):
@@ -448,8 +403,6 @@ class AgentSessionRunner:
         confirmed: bool,
         confirmation_token: str | None = None,
         action_hash: str | None = None,
-        engine: GraphEngine | None = None,
-        runtime_version: str = AgentRuntimeVersion.V1.value,
     ):
         """真流式恢复一轮（P1 观测与流式）。语义同 ``stream_start``。"""
         plan = None
@@ -461,8 +414,6 @@ class AgentSessionRunner:
                 confirmed=confirmed,
                 confirmation_token=confirmation_token,
                 action_hash=action_hash,
-                engine=engine,
-                runtime_version=runtime_version,
             )
             yield AgentStreamEvent.started(
                 conversation_id, plan.runtime_version, confirmed=confirmed
@@ -526,8 +477,6 @@ class AgentSessionRunner:
         confirmed: bool,
         confirmation_token: str | None,
         action_hash: str | None,
-        engine: GraphEngine | None = None,
-        runtime_version: str = AgentRuntimeVersion.V1.value,
     ) -> tuple["_TurnPlan", str | None]:
         # P0-2: lease 必须在最外层——restore、confirmation_token_provider（写
         # token + create_pending + approve）、graph.resume 都会修改 conversation
@@ -554,9 +503,9 @@ class AgentSessionRunner:
             conversation=None,
             expected_version=expected_version,
             repair_followup_message=None,
-            engine=engine or LegacyGraphEngine(self._graph),
+            engine=self._engine,
             heartbeat=heartbeat,
-            runtime_version=runtime_version,
+            runtime_version=AgentRuntimeVersion.V2.value,
         )
         return plan, confirmation_token
 

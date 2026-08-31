@@ -46,8 +46,6 @@ from property_agent.agent.infrastructure.run_lease import (
     StaleAgentRunError,
     assert_run_fence,
 )
-from property_agent.agent.runtime_rollout import RolloutConfig, RolloutControl, RuntimeEligibility
-from property_agent.agent.runtime_version import RuntimeSelectionPolicy
 from property_agent.agent.state import GraphState
 from property_agent.agent.working_state import RepairWorkingState
 from property_agent.platform.application.approval_service import (
@@ -157,24 +155,6 @@ def test_concurrent_new_conversation_persists_one_server_owned_runtime_pin(
         roles=frozenset({"RESIDENT"}),
         request_id="pr7c-create-race",
     )
-    policy = RuntimeSelectionPolicy(
-        control=RolloutControl(
-            RolloutConfig(
-                basis_points=10_000,
-                secret_salt=b"server-owned-rollout-secret-32bytes",
-                salt_version="salt-v1",
-                config_version="pr7c-test-v1",
-            )
-        ),
-        eligibility=RuntimeEligibility(
-            v2_engine_available=True,
-            official_saver_available=True,
-            model_config_approved=True,
-        ),
-    )
-    # Establish a fresh accepted-head health snapshot, as the production /ready
-    # probe would, so non-zero assignment is authorized under the freshness gate.
-    policy.observe_accepted_head(available=True)
     barrier = threading.Barrier(2)
     results: list[tuple[str, object]] = []
 
@@ -186,15 +166,9 @@ def test_concurrent_new_conversation_persists_one_server_owned_runtime_pin(
             results.append(("busy", exc.code))
             return
         try:
-            selected = policy.select_new(
-                community_id=context.community_id,
-                actor_id=context.actor_id,
-                conversation_id="pr7c-create-race",
-            )
             snapshot = conversations.start(
                 conversation_id="pr7c-create-race",
                 context=context,
-                runtime_version=selected.value,
             )
             results.append(("ok", snapshot.runtime_version))
             time.sleep(0.2)

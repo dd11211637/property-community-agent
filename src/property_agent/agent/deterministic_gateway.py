@@ -16,6 +16,17 @@ from property_agent.agent.policies import Intent
 from property_agent.repair.domain.classification import classify_repair_category
 
 _BUSINESS_TIMEZONE = ZoneInfo("Asia/Shanghai")
+_COMMUNITY_KNOWLEDGE_CUES = (
+    "物业电话",
+    "联系方式",
+    "联系电话",
+    "开放时间",
+    "社区规定",
+    "物业规定",
+    "停车规定",
+    "装修规定",
+    "门禁规定",
+)
 
 
 def _business_today() -> date:
@@ -32,7 +43,7 @@ def _deterministic_billing_slots(text: str, today: date) -> dict[str, Any]:
     """Extract trusted billing list filters, including relative Chinese months."""
 
     text = text or ""
-    slots: dict[str, Any] = {}
+    slots: dict[str, Any] = {"query_type": "list"}
     absolute = re.search(r"(?P<year>20\d{2})\s*(?:年|-|/)\s*(?P<month>1[0-2]|0?[1-9])\s*月?", text)
     if absolute:
         slots["period"] = f"{int(absolute.group('year')):04d}-{int(absolute.group('month')):02d}"
@@ -42,8 +53,6 @@ def _deterministic_billing_slots(text: str, today: date) -> dict[str, Any]:
         slots["period"] = _shift_month(today, -2)
     elif any(marker in text for marker in ("上月", "上个月")):
         slots["period"] = _shift_month(today, -1)
-    if "period" in slots:
-        slots["query_type"] = "list"
     return slots
 
 
@@ -110,6 +119,7 @@ def _deterministic_repair_slots(text: str) -> dict[str, Any]:
 
 
 def _deterministic_announcement_slots(text: str, today: date) -> dict[str, Any]:
+    knowledge = any(marker in text for marker in _COMMUNITY_KNOWLEDGE_CUES)
     drafting = any(
         marker in text for marker in ("帮我写公告", "写公告", "起草公告", "润色公告", "公告草稿")
     )
@@ -138,11 +148,20 @@ def _deterministic_announcement_slots(text: str, today: date) -> dict[str, Any]:
         if matched:
             action = candidate
     slots: dict[str, Any] = {"action": action} if action else {}
+    if knowledge:
+        slots.update(action="knowledge", query=text.strip())
     if any(marker in text for marker in ("停水", "供水")):
         slots["topic"] = "WATER_OUTAGE"
     elif any(marker in text for marker in ("停电", "供电")):
         slots["topic"] = "POWER_OUTAGE"
     slots.update(resolve_announcement_time_slots(text, today))
+    outage_question = "topic" in slots and any(
+        marker in text for marker in ("吗", "会不会", "会停", "有没有", "是否")
+    )
+    if "action" not in slots and (querying or outage_question):
+        slots["action"] = "list"
+    if slots.get("action") == "list" and slots.get("topic"):
+        slots["statuses"] = ("PUBLISHED",)
     building_match = re.search(r"(?P<buildings>\d+(?:\s*[,，、]\s*\d+)*)\s*栋", text)
     if building_match:
         slots["audience"] = {
@@ -343,7 +362,7 @@ class DeterministicModelGateway:
                 break
         return ModelAnalysis(
             intent=prior_intent,
-            confidence=0.65 if prior_intent != Intent.UNCERTAIN.value else result.confidence,
+            confidence=0.9 if prior_intent != Intent.UNCERTAIN.value else result.confidence,
             slots=self._slots_for_intent(text, prior_intent),
             provider="keyword_context",
         )
@@ -362,6 +381,8 @@ class DeterministicModelGateway:
 
     def classify_intent(self, text: str) -> tuple[str, float]:
         text = text or ""
+        if any(marker in text for marker in _COMMUNITY_KNOWLEDGE_CUES):
+            return Intent.ANNOUNCEMENT.value, 0.9
         scores: dict[str, int] = {}
         for intent, keywords in self.INTENT_KEYWORDS.items():
             for keyword in keywords:
@@ -370,7 +391,7 @@ class DeterministicModelGateway:
         if not scores:
             return Intent.UNCERTAIN.value, 0.3
         best = max(scores, key=scores.get)
-        confidence = min(0.95, 0.6 + 0.1 * scores[best])
+        confidence = min(0.95, 0.8 + 0.1 * scores[best])
         return best, confidence
 
     def extract_slots(self, text: str, intent: str) -> dict[str, Any]:

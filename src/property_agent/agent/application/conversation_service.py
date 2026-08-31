@@ -61,7 +61,7 @@ class ConversationSnapshot:
     handover_required: bool
     last_intent: str | None
     handover_ticket_id: UUID | None = None
-    runtime_version: str = AgentRuntimeVersion.V1.value
+    runtime_version: str = AgentRuntimeVersion.V2.value
 
     @property
     def is_closed(self) -> bool:
@@ -82,7 +82,7 @@ def _to_snapshot(row: ConversationModel) -> ConversationSnapshot:
         handover_required=row.handover_required,
         last_intent=row.last_intent,
         handover_ticket_id=row.handover_ticket_id,
-        runtime_version=row.runtime_version or AgentRuntimeVersion.V1.value,
+        runtime_version=row.runtime_version or AgentRuntimeVersion.V2.value,
     )
 
 
@@ -107,6 +107,8 @@ class ConversationService:
             raise AgentSessionError(AgentSessionErrorCode.CONVERSATION_NOT_FOUND)
         if snapshot.actor_id != context.actor_id or snapshot.community_id != context.community_id:
             raise AgentSessionError(AgentSessionErrorCode.SESSION_MISMATCH)
+        if not snapshot.is_v2:
+            raise AgentSessionError(AgentSessionErrorCode.CONVERSATION_CLOSED)
         if snapshot.is_closed:
             raise AgentSessionError(AgentSessionErrorCode.CONVERSATION_CLOSED)
         return snapshot
@@ -119,12 +121,12 @@ class ConversationService:
         conversation_id: str,
         context: AgentContext,
         current_house_id: UUID | None = None,
-        runtime_version: str = AgentRuntimeVersion.V1.value,
+        runtime_version: str = AgentRuntimeVersion.V2.value,
     ) -> ConversationSnapshot:
         """开启或复用会话（幂等）。归属他人的 conversation_id 一律拒绝。
 
-        ``runtime_version`` 在**创建**时由服务端 ``RuntimeSelectionPolicy`` 钉死，
-        之后整个生命周期不再切换；已存在会话忽略此参数（沿用持久化值）。
+        V2 is the only accepted runtime. Existing retired-runtime rows are rejected
+        and must be handled by the controlled archive workflow.
         """
         pinned = AgentRuntimeVersion.from_str(runtime_version).value
         session = self._session_factory()
@@ -144,6 +146,8 @@ class ConversationService:
             else:
                 if row.actor_id != context.actor_id or row.community_id != context.community_id:
                     raise AgentSessionError(AgentSessionErrorCode.SESSION_MISMATCH)
+                if row.runtime_version != AgentRuntimeVersion.V2.value:
+                    raise AgentSessionError(AgentSessionErrorCode.CONVERSATION_CLOSED)
                 if row.status == ConversationStatus.CLOSED.value:
                     raise AgentSessionError(AgentSessionErrorCode.CONVERSATION_CLOSED)
                 if current_house_id is not None:

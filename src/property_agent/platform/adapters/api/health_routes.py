@@ -140,17 +140,11 @@ def _database_pool_status(request: Request) -> dict[str, object]:
 def _runtime_rollout_status(request: Request) -> dict[str, str | int | bool]:
     policy = getattr(request.app.state, "agent_runtime_policy", None)
     if policy is None:
-        if settings.agent_v2_new_conversation_rollout_basis_points == 0:
-            return {
-                "state": "OPTIONAL_ZERO",
-                "ready": True,
-                "rollout_basis_points": 0,
-                "reason": "rollout_zero",
-            }
         return {
             "state": "NOT_READY",
             "ready": False,
-            "rollout_basis_points": settings.agent_v2_new_conversation_rollout_basis_points,
+            "rollout_basis_points": 10_000,
+            "fallback_runtime": "v2",
             "reason": "runtime_policy_unconfigured",
         }
     return policy.readiness()

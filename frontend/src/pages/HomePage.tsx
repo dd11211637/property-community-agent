@@ -175,8 +175,16 @@ export function HomePage() {
         setAction(status.pending_confirmation);
       })
       .catch(() => {
-        // A missing/expired conversation must not make the structured home page unusable.
+        if (!active) return;
+        const next = crypto.randomUUID();
         sessionStorage.removeItem("property_agent_conversation_id");
+        setActiveConversationId(next);
+        setAction(undefined);
+        setSlotPrompt(undefined);
+        setMessages([{
+          role: "assistant",
+          text: "会话已升级，请开始新对话。旧会话已安全归档，不会在新版 Agent 中继续执行。",
+        }]);
       });
     return () => { active = false; };
   }, [activeConversationId]);

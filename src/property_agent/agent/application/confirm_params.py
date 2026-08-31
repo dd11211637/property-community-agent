@@ -73,16 +73,17 @@ def _submit_records_params(state: GraphState) -> tuple[str, dict[str, Any]]:
 
 
 def _security_event_params(state: GraphState) -> tuple[str, dict[str, Any]]:
+    pending = dict((state.pending_action or {}).get("params") or {})
     normalized = normalize_security_event(
-        str(state.slots.get("description") or ""),
-        state.slots.get("risk_level"),
+        str(pending.get("description") or state.slots.get("description") or ""),
+        pending.get("risk_level", state.slots.get("risk_level")),
     )
     return (
         "SECURITY_EVENT_CREATE",
         {
             "event_type": normalized.event_type.value,
             "risk_level": normalized.risk_level.value,
-            "location": str(state.slots.get("location") or ""),
+            "location": str(pending.get("location") or state.slots.get("location") or ""),
         },
     )
 

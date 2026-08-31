@@ -7,50 +7,21 @@
 运行时未装配时返回 503 ``ADAPTER_NOT_CONFIGURED``，与其它业务模块一致。
 """
 
-from dataclasses import dataclass
-from uuid import UUID
-
 from fastapi import Depends, Request
 
 from property_agent.agent.application.facade import AgentRuntimeFacade
-from property_agent.platform.context import ExecutionSource, RequestContext
+from property_agent.platform.context import RequestContext
 from property_agent.platform.dependencies import get_request_context as get_request_context
 from property_agent.platform.errors import BusinessError
 
-
-@dataclass(frozen=True)
-class AgentRequestContext:
-    """平台 RequestContext 到智能体 ``AgentContext`` 协议的适配。"""
-
-    actor_id: UUID
-    community_id: UUID
-    house_ids: frozenset[UUID]
-    roles: frozenset[str]
-    request_id: str
-    current_house_id: UUID | None = None
-    agent_lease: object | None = None
-    execution_source: ExecutionSource = ExecutionSource.AGENT
-
-    @property
-    def bound_house_ids(self) -> frozenset[UUID]:
-        return self.house_ids
-
-    @classmethod
-    def from_platform(cls, context: RequestContext) -> "AgentRequestContext":
-        return cls(
-            actor_id=context.actor_id,
-            community_id=context.community_id,
-            house_ids=frozenset(context.bound_house_ids),
-            roles=frozenset(context.roles),
-            request_id=context.request_id,
-            current_house_id=context.current_house_id,
-        )
+AgentRequestContext = RequestContext
 
 
 def get_agent_context(
     context: RequestContext = Depends(get_request_context),  # noqa: B008
 ) -> AgentRequestContext:
-    return AgentRequestContext.from_platform(context)
+    """Pass through the one authenticated platform context used by every domain."""
+    return context
 
 
 def get_agent_runner(request: Request) -> AgentRuntimeFacade:

@@ -64,7 +64,7 @@ class SupervisorPlanner:
         if getattr(self._gateway, "propose_plan", None) is not None:
             proposal = self._semantic_proposal(text, state, runtime)
         else:
-            proposal = self._bounded_legacy_proposal(text, state, runtime)
+            proposal = self._bounded_analysis_proposal(text, state, runtime)
         try:
             return self._validator.validate(self._normalize(text, proposal, state.slots))
         except (KeyError, TypeError, ValueError):
@@ -130,23 +130,32 @@ class SupervisorPlanner:
             else PlanProposal(ObjectiveClassification.UNCERTAIN.value, (), "safe-fallback")
         )
 
-    def _bounded_legacy_proposal(
+    def _bounded_analysis_proposal(
         self, text: str, state: AgentState, runtime: RuntimeContext
     ) -> PlanProposal:
-        analysis = self._legacy_analysis(text, state, runtime)
+        analysis = self._bounded_analysis(text, state, runtime)
         if analysis is None:
             return PlanProposal(ObjectiveClassification.UNCERTAIN.value, (), "safe-fallback")
+        if analysis.intent == "UNCERTAIN" and state.intent in _INTENT_DOMAINS:
+            analysis = ModelAnalysis(
+                intent=state.intent,
+                confidence=0.9,
+                slots=dict(state.slots),
+                provider="bounded_context",
+            )
         if analysis.intent == "GENERAL_HELP":
             return PlanProposal(ObjectiveClassification.GENERAL_HELP.value, (), analysis.provider)
         action = str(analysis.slots.get("action") or state.slots.get("action") or "")
+        if not action and analysis.intent == "BILLING":
+            action = str(analysis.slots.get("query_type") or state.slots.get("query_type") or "")
         if analysis.confidence < 0.9 or not action:
             return PlanProposal(ObjectiveClassification.UNCERTAIN.value, (), "safe-fallback")
-        step = self._legacy_step(analysis.intent, action, {**analysis.slots, **state.slots})
+        step = self._bounded_step(analysis.intent, action, {**analysis.slots, **state.slots})
         if step is None:
             return PlanProposal(ObjectiveClassification.UNCERTAIN.value, (), "safe-fallback")
         return PlanProposal(ObjectiveClassification.SINGLE_DOMAIN.value, (step,), analysis.provider)
 
-    def _legacy_analysis(
+    def _bounded_analysis(
         self, text: str, state: AgentState, runtime: RuntimeContext
     ) -> ModelAnalysis | None:
         try:
@@ -225,15 +234,15 @@ class SupervisorPlanner:
         )
 
     @staticmethod
-    def _legacy_step(intent: str, action: str, slots: dict[str, Any]) -> PlanStepProposal | None:
+    def _bounded_step(intent: str, action: str, slots: dict[str, Any]) -> PlanStepProposal | None:
         domain = intent.lower()
-        capability = _legacy_capability(domain, action, slots)
+        capability = _bounded_capability(domain, action, slots)
         if domain not in _DOMAIN_SPECIALIST or capability is None:
             return None
         parameters = {key: value for key, value in slots.items() if key not in _TRUSTED_KEYS}
         return PlanStepProposal(
-            step_id=f"{domain}-legacy",
-            goal="执行明确的单领域兼容请求",
+            step_id=f"{domain}-v2",
+            goal="执行明确的单领域请求",
             domain=domain,
             specialist=_DOMAIN_SPECIALIST[domain].value,
             capability=capability,
@@ -288,9 +297,10 @@ class SupervisorPlanner:
 _TRUSTED_KEYS = frozenset(
     {"actor_id", "community_id", "house_id", "roles", "runtime_version", "approval_ref"}
 )
+_INTENT_DOMAINS = frozenset(intent.upper() for intent in _DOMAIN_SPECIALIST)
 
 
-def _legacy_capability(domain: str, action: str, slots: dict[str, Any]) -> str | None:
+def _bounded_capability(domain: str, action: str, slots: dict[str, Any]) -> str | None:
     mappings = {
         "repair": {
             "create": "repair_create",
@@ -304,6 +314,7 @@ def _legacy_capability(domain: str, action: str, slots: dict[str, Any]) -> str |
         },
         "announcement": {
             "list": "announcement_list",
+            "knowledge": "community_knowledge_search",
             "get": "announcement_get",
             "draft": "announcement_draft",
             "revise": "announcement_revise",
@@ -313,6 +324,7 @@ def _legacy_capability(domain: str, action: str, slots: dict[str, Any]) -> str |
         },
         "inspection": {
             "list": "inspection_list",
+            "query": "inspection_list",
             "get_task": "inspection_get_task",
             "get_event": "inspection_get_event",
             "create": "inspection_create",

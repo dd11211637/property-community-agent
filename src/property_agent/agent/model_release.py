@@ -1,13 +1,11 @@
-"""Shared production model-release metadata contract (PR7-C model-release governance).
+"""Shared production model-release metadata contract for the V2-only runtime.
 
 This is the SINGLE source of truth for the ACTUAL approved model/provider/prompt
-release identity. It is consumed by three independent production paths so that a
-rollout activation can be bound to the *real running* model/provider/prompt rather
-than to a self-referential operator-supplied deployment string:
+release identity. It binds certification to the real running model/provider/prompt
+rather than to a self-referential operator-supplied deployment string:
 
-* production model composition (``build_model_gateway`` / ``build_rollout_control``);
+* production model composition (``build_model_gateway``);
 * PR7-B certification metadata (``testing/pr7b/real_model_gate``);
-* PR7-C rollout activation (``runtime_rollout_activation``).
 
 These facts are server-owned and never operator-supplied. Do NOT redefine the
 provider/prompt facts in ``testing/`` or operator env; import them from here. Do not

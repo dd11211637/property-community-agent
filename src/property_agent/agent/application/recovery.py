@@ -21,7 +21,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Protocol
 
 from property_agent.agent.application.conversation_service import (
     AgentContext,
@@ -32,13 +32,18 @@ from property_agent.agent.application.errors import (
     AgentSessionError,
     AgentSessionErrorCode,
 )
-from property_agent.agent.graph_core import Checkpointer
 from property_agent.agent.state import GraphState
 
 # 与 platform.application.confirmation_service.CONFIRMATION_TTL_MINUTES 对齐
 DEFAULT_CONFIRMATION_TTL_SECONDS = 300
 
 Clock = Callable[[], datetime]
+
+
+class Checkpointer(Protocol):
+    """Persistence contract required by guarded V2 recovery."""
+
+    def load(self, thread_id: str) -> GraphState | None: ...
 
 
 def _utcnow() -> datetime:

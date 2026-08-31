@@ -46,6 +46,27 @@ afterEach(() => {
 });
 
 describe("Agent home flow", () => {
+  it("recovers an archived conversation into a fresh V2 conversation", async () => {
+    sessionStorage.setItem("property_agent_token", "token");
+    sessionStorage.setItem("property_agent_conversation_id", "retired-v1");
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/agent/conversations")) return Promise.resolve(envelope([]));
+      if (url.endsWith("/api/agent/memories")) return Promise.resolve(envelope([]));
+      return Promise.resolve(new Response(JSON.stringify({
+        success: false,
+        data: null,
+        error: { code: "CONVERSATION_CLOSED", message: "会话已结束" },
+        request_id: "req-upgrade",
+      }), { status: 409, headers: { "Content-Type": "application/json" } }));
+    });
+
+    render(<MemoryRouter><HomePage /></MemoryRouter>);
+
+    expect(await screen.findByText(/会话已升级，请开始新对话/)).toBeInTheDocument();
+    expect(sessionStorage.getItem("property_agent_conversation_id")).toBeNull();
+  });
+
   it("guides an incomplete repair one question at a time", async () => {
     sessionStorage.setItem("property_agent_token", "token");
     const fetchMock = mockAgentApi(

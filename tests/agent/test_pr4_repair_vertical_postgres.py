@@ -16,7 +16,6 @@ from sqlalchemy.orm import sessionmaker
 from property_agent.agent.adapters.api.presentation import turn_data, wire_events
 from property_agent.agent.adapters.api.stream_delivery import BoundedStreamBridge
 from property_agent.agent.application.composition import build_supervisor, close_runtime_resources
-from property_agent.agent.application.conversation_service import ConversationService
 from property_agent.agent.application.errors import AgentSessionError, AgentSessionErrorCode
 from property_agent.agent.application.facade import AgentRuntimeFacadeImpl
 from property_agent.agent.application.langgraph_runtime import (
@@ -27,8 +26,8 @@ from property_agent.agent.application.stream_execution import BoundedStreamExecu
 from property_agent.agent.infrastructure.checkpointer import SqlAlchemyCheckpointer
 from property_agent.agent.infrastructure.models import AgentActionApprovalModel
 from property_agent.agent.infrastructure.run_lease import RunLeaseService
-from property_agent.agent.runtime_version import RuntimeSelectionPolicy
 from property_agent.agent.stream_events import StreamEventKind
+from property_agent.config import settings
 from property_agent.platform.application.approval_service import ApprovalService
 from property_agent.platform.container import build_agent_runner, build_production_container
 from property_agent.platform.context import RequestContext
@@ -95,9 +94,11 @@ def _seed_identity(sessions: Any) -> tuple[RequestContext, Any]:
 
 
 @pytest.fixture
-def vertical_runtime() -> VerticalRuntime:
+def vertical_runtime(monkeypatch: pytest.MonkeyPatch) -> VerticalRuntime:
     if not POSTGRES_URL:
         pytest.skip("TEST_POSTGRES_URL is required")
+    monkeypatch.setattr(settings, "env", "test-postgres")
+    monkeypatch.setattr(settings, "database_url", POSTGRES_URL)
     engine = create_engine(POSTGRES_URL, pool_pre_ping=True)
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
@@ -107,17 +108,11 @@ def vertical_runtime() -> VerticalRuntime:
     build_production_container(app)
     app.state.langgraph_saver_resource.saver.setup()
     app.state.agent_model_gateway = RepairSemanticPlanningGateway()
-    production = app.state.agent_runner
-    production._v2_engine = LangGraphEngine(
+    app.state.agent_lifecycle._engine = LangGraphEngine(
         app.state.langgraph_saver_resource.saver,
         build_supervisor(app),
     )
-    facade = AgentRuntimeFacadeImpl(
-        lifecycle=app.state.agent_lifecycle,
-        conversations=ConversationService(sessions),
-        policy=RuntimeSelectionPolicy(enabled=True),
-        v2_engine=production._v2_engine,
-    )
+    facade = app.state.agent_runner
     yield VerticalRuntime(app, sessions, facade, context, house_id)
     app.state.agent_stream_executions.shutdown(2)
     close_runtime_resources(app)
@@ -172,12 +167,8 @@ def _reconstruct(runtime: VerticalRuntime) -> tuple[AgentRuntimeFacadeImpl, Any]
         resource.saver,
         build_supervisor(runtime.app),
     )
-    facade = AgentRuntimeFacadeImpl(
-        lifecycle=lifecycle,
-        conversations=ConversationService(runtime.sessions),
-        policy=RuntimeSelectionPolicy(enabled=True),
-        v2_engine=engine,
-    )
+    lifecycle._engine = engine
+    facade = AgentRuntimeFacadeImpl(lifecycle=lifecycle)
     return facade, resource
 
 

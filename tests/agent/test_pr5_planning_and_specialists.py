@@ -322,7 +322,7 @@ def test_announcement_specialist_executes_knowledge_search_through_executor_allo
     assert calls == [("物业服务电话", 5)]
     assert result.outcome is SpecialistOutcome.SUCCESS
     assert result.capability == "community_knowledge_search"
-    assert result.data["data"]["count"] == 1
+    assert result.data["count"] == 1
 
 
 def test_inspection_not_found_requests_materially_different_replan():

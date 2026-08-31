@@ -31,10 +31,3 @@ class RepairSpecialist(StatelessSpecialist):
             "statuses": tuple(values.get("statuses") or ()),
             "limit": int(values.get("limit") or 20),
         }
-
-    def success_message(self, capability, data):
-        if capability == "repair_list":
-            return f"共查到 {data.get('count', 0)} 条报修工单。"
-        if capability == "repair_get":
-            return "已查到该报修工单的详情和进度。"
-        return "报修工单已创建。"

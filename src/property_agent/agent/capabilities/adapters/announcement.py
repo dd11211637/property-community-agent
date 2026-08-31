@@ -37,6 +37,8 @@ def _translate_errors():
 class AnnouncementListInput(CapabilityInput):
     statuses: tuple[str, ...] = ()
     limit: int = Field(default=20, ge=1, le=100)
+    topic: str | None = None
+    target_date: str | None = None
 
 
 class AnnouncementGetInput(CapabilityInput):
@@ -107,8 +109,24 @@ class AnnouncementListAdapter:
                 AnnouncementSearch(statuses=request.statuses, limit=request.limit),
                 runtime.request_context,
             )
+        if request.topic:
+            terms = {
+                "WATER_OUTAGE": ("停水", "供水"),
+                "POWER_OUTAGE": ("停电", "供电"),
+            }.get(request.topic, ())
+            if terms:
+                items = [
+                    item
+                    for item in items
+                    if any(term in f"{item.title} {item.body}" for term in terms)
+                ]
         return AnnouncementDataOutput(
-            data={"count": len(items), "items": [_brief(x) for x in items]}
+            data={
+                "count": len(items),
+                "items": [_brief(x) for x in items],
+                "topic": request.topic,
+                "target_date": request.target_date,
+            }
         )
 
 

@@ -29,6 +29,7 @@ from tests.agent.test_pr6_long_term_memory import (
     _Recovery,
     _WriterSpy,
 )
+from tests.support_graph_engine import TestGraphEngine
 
 
 def test_c5_official_checkpoint_failure_never_advances_application_accepted_head(monkeypatch):
@@ -84,7 +85,7 @@ def test_c10_memory_writer_persistence_failure_does_not_rollback_accepted_turn()
     )
     context = Context(uuid4(), uuid4(), frozenset())
     runner = AgentSessionRunner(
-        graph=_Graph(),
+        engine=TestGraphEngine(_Graph()),
         conversations=_Conversations(context),
         recovery=_Recovery(),
         checkpointer=_AcceptedHead(1),
@@ -171,7 +172,7 @@ def test_c12_runner_rejects_stale_candidate_before_canonical_publication(operati
     conversations = Conversations(context)
     restored = AgentState(conversation_id=conversation_id)
     runner = AgentSessionRunner(
-        graph=_Graph(),
+        engine=TestGraphEngine(candidate_engine),
         conversations=conversations,
         recovery=_Recovery(restored),
         checkpointer=accepted,
@@ -189,7 +190,6 @@ def test_c12_runner_rejects_stale_candidate_before_canonical_publication(operati
                 conversation_id=conversation_id,
                 context=context,
                 user_text="候选结果",
-                engine=candidate_engine,
             )
         elif operation == "stream_start":
             delivered.extend(
@@ -197,7 +197,6 @@ def test_c12_runner_rejects_stale_candidate_before_canonical_publication(operati
                     conversation_id=conversation_id,
                     context=context,
                     user_text="候选结果",
-                    engine=candidate_engine,
                 )
             )
         elif operation == "resume":
@@ -205,7 +204,6 @@ def test_c12_runner_rejects_stale_candidate_before_canonical_publication(operati
                 conversation_id=conversation_id,
                 context=context,
                 confirmed=False,
-                engine=candidate_engine,
             )
         else:
             delivered.extend(
@@ -213,7 +211,6 @@ def test_c12_runner_rejects_stale_candidate_before_canonical_publication(operati
                     conversation_id=conversation_id,
                     context=context,
                     confirmed=False,
-                    engine=candidate_engine,
                 )
             )
     assert candidate_engine.internal_candidate is not None

@@ -13,16 +13,15 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
 from property_agent.agent.application.composition import build_supervisor, close_runtime_resources
-from property_agent.agent.application.conversation_service import ConversationService
 from property_agent.agent.application.facade import AgentRuntimeFacadeImpl
 from property_agent.agent.application.langgraph_runtime import LangGraphEngine
 from property_agent.agent.orchestration import PlanStatus, SpecialistName
 from property_agent.agent.planning_contracts import RelevanceDecision, RelevanceJudgment
-from property_agent.agent.runtime_version import RuntimeSelectionPolicy
 from property_agent.announcement.application.commands import ReviewActionCommand
 from property_agent.announcement.domain.enums import AnnouncementAction
 from property_agent.announcement.infrastructure.models import AnnouncementModel
 from property_agent.billing.infrastructure.orm_models import ConsultationModel
+from property_agent.config import settings
 from property_agent.inspection.infrastructure.models import (
     InspectionTaskModel,
     SecurityEventModel,
@@ -55,9 +54,11 @@ class AcceptanceRuntime:
 
 
 @pytest.fixture
-def pr5_runtime() -> AcceptanceRuntime:
+def pr5_runtime(monkeypatch: pytest.MonkeyPatch) -> AcceptanceRuntime:
     if not POSTGRES_URL:
         pytest.skip("TEST_POSTGRES_URL is required")
+    monkeypatch.setattr(settings, "env", "test-postgres")
+    monkeypatch.setattr(settings, "database_url", POSTGRES_URL)
     dispose_engine()
     engine = create_engine(POSTGRES_URL, pool_pre_ping=True)
     Base.metadata.drop_all(engine)
@@ -69,17 +70,11 @@ def pr5_runtime() -> AcceptanceRuntime:
     app.state.langgraph_saver_resource.saver.setup()
     semantic_gateway = PostgresSemanticPlanningGateway()
     app.state.agent_model_gateway = semantic_gateway
-    production = app.state.agent_runner
-    production._v2_engine = LangGraphEngine(
+    app.state.agent_lifecycle._engine = LangGraphEngine(
         app.state.langgraph_saver_resource.saver,
         build_supervisor(app),
     )
-    facade = AgentRuntimeFacadeImpl(
-        lifecycle=app.state.agent_lifecycle,
-        conversations=ConversationService(sessions),
-        policy=RuntimeSelectionPolicy(enabled=True),
-        v2_engine=production._v2_engine,
-    )
+    facade = AgentRuntimeFacadeImpl(lifecycle=app.state.agent_lifecycle)
     yield AcceptanceRuntime(app, sessions, facade, context, house_id, semantic_gateway)
     close_runtime_resources(app)
     dispose_engine()
@@ -244,7 +239,7 @@ def test_real_four_domains_cross_domain_hitl_and_human_only(pr5_runtime):
         {"action": "create", "title": "停水通知", "body": "今晚停水检修", "audience": {}},
         "announcement_create_draft",
     )
-    announcement_id = saved.state.tool_result["data"]["data"]["announcement"]["id"]
+    announcement_id = saved.state.tool_result["data"]["announcement"]["id"]
     submitted = runtime.app.state.announcement_service.submit_review(
         UUID(announcement_id),
         ReviewActionCommand(AnnouncementAction.SUBMIT_REVIEW, 1),
@@ -292,7 +287,7 @@ def test_real_four_domains_cross_domain_hitl_and_human_only(pr5_runtime):
         },
         "security_event_create",
     )
-    event_data = event.state.tool_result["data"]["data"]["event"]
+    event_data = event.state.tool_result["data"]["event"]
     assert event_data["risk_level"] == "HIGH_RISK"
 
     grounded = _start(

@@ -15,7 +15,6 @@ from opentelemetry.propagate import extract
 from opentelemetry.trace import SpanKind, Status, StatusCode, get_current_span
 
 from property_agent.agent.runtime import RuntimeObservation
-from property_agent.agent.runtime_rollout import RolloutAuditEvent
 from property_agent.agent.telemetry_provider import TelemetryProviders, TelemetryState
 from property_agent.config import Settings
 
@@ -379,7 +378,7 @@ class AgentObservability:
                 },
             )
 
-    def observe_rollout_audit_event(self, event: RolloutAuditEvent) -> None:
+    def observe_rollout_audit_event(self, event: Any) -> None:
         """Record bounded PR7-C rollout audit transitions (release_sha, no salt)."""
         outcome = (
             "activation"

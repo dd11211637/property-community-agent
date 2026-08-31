@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from time import perf_counter
@@ -26,6 +27,7 @@ from property_agent.platform.application.hashing import canonical_hash
 from property_agent.platform.domain.exceptions import PlatformError
 
 ObservationHook = Callable[[str, dict[str, Any]], None]
+logger = logging.getLogger(__name__)
 
 
 class CapabilityExecutor:
@@ -99,6 +101,7 @@ class CapabilityExecutor:
         try:
             raw_output = adapter(request, runtime)
         except Exception as exc:  # normalized public boundary; never retries or invokes twice
+            logger.exception("Capability adapter failed", extra={"capability": name})
             result = self._adapter_failure(name, decision, bounded.fingerprint, exc)
             return self._observed(name, result, started)
         try:

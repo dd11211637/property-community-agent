@@ -8,7 +8,6 @@ from time import perf_counter
 from typing import Any
 
 from property_agent.agent.application.accepted_head import cursor_for, publish_accepted, runtime_for
-from property_agent.agent.runtime_version import AgentRuntimeVersion
 from property_agent.agent.telemetry_contracts import classify_turn
 
 
@@ -64,8 +63,7 @@ def publish_result(observability: Any, checkpointer: Any, plan: Any, result: Any
 
 
 def engine_span_name(plan: Any, action: str) -> str:
-    prefix = "langgraph" if plan.runtime_version == AgentRuntimeVersion.V2.value else "legacy"
-    return f"{prefix}.{action}"
+    return f"langgraph.{action}"
 
 
 def finish_turn(observability: Any, plan: Any, turn: Any, operation: str, span: Any) -> None:

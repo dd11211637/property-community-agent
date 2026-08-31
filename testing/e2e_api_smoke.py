@@ -459,7 +459,9 @@ def run(base_url: str, *, client: Any | None = None) -> dict[str, Any]:
                 "slots": {"query_type": "list"},
             },
         )
-        assert agent_result["intent"] == "BILLING" and agent_result["facts"] is not None
+        assert agent_result["intent"] == "BILLING" and agent_result["facts"] is not None, (
+            agent_result
+        )
 
         return {
             "auth": {

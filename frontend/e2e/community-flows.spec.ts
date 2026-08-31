@@ -635,7 +635,7 @@ test("消息中心支持筛选、单条已读和全部已读", async ({ page }) 
 
 test("管理工作台展示失败消息、重试上限和人工接管", async ({ page }) => {
   await login(page, "manager");
-  await page.getByRole("link", { name: "管理工作台" }).click();
+  await page.getByRole("link", { name: "管理工作台", exact: true }).click();
   const failedPanel = page.locator("section").filter({ has: page.getByRole("heading", { name: "需要人工接管的消息" }) });
   await expect(failedPanel.getByText(/已尝试 5\/5 次/).first()).toBeVisible();
   await expect(failedPanel.getByText(/待处理/).first()).toBeVisible();

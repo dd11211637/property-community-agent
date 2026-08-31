@@ -32,7 +32,7 @@ class AnnouncementSpecialist(StatelessSpecialist):
                 f"已核验事实：{grounded}\n用户要求：{values.get('requirements', '')}"
             )
         fields = {
-            "announcement_list": ("statuses", "limit"),
+            "announcement_list": ("statuses", "limit", "topic", "target_date"),
             "announcement_get": ("announcement_id",),
             "community_knowledge_search": ("query", "limit"),
             "announcement_draft": ("topic", "audience", "requirements"),
@@ -58,11 +58,3 @@ class AnnouncementSpecialist(StatelessSpecialist):
         if capability == "community_knowledge_search":
             projected["limit"] = int(projected.get("limit") or 10)
         return projected
-
-    def success_message(self, capability, data):
-        del data
-        if capability in {"announcement_draft", "announcement_revise"}:
-            return "已根据核验事实准备公告草稿。"
-        if capability in {"announce_publish", "announcement_schedule_publish"}:
-            return "公告发布操作已完成。"
-        return "公告步骤已完成。"
