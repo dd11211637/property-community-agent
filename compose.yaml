@@ -1,7 +1,7 @@
 name: property-community-agent
 
 x-backend-environment: &backend-environment
-  ENV: demo
+  ENV: ${APP_ENV:-demo}
   DEBUG: "false"
   DATABASE_URL: postgresql+psycopg://property_agent:demo-password@postgres:5432/property_agent_demo
   JWT_SECRET: demo-only-secret-change-before-production-32chars

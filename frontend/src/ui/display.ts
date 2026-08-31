@@ -103,11 +103,13 @@ export function businessReference(value: unknown, fallback = "业务记录"): st
 export function displayDate(value: unknown, fallback = "时间待确认"): string {
   if (!value) return fallback;
   const date = new Date(String(value));
-  return Number.isNaN(date.getTime()) ? fallback : date.toLocaleString("zh-CN");
+  return Number.isNaN(date.getTime())
+    ? fallback
+    : date.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" });
 }
 
 export function localDateTimeToIso(value: string): string {
-  const date = new Date(value);
+  const date = new Date(`${value}+08:00`);
   if (Number.isNaN(date.getTime())) throw new Error("请选择有效的日期和时间。");
   return date.toISOString();
 }

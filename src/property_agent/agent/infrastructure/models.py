@@ -18,6 +18,7 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -45,6 +46,7 @@ class ConversationModel(Base):
 
     __tablename__ = "agent_conversations"
     __table_args__ = (
+        CheckConstraint("runtime_version = 'v2'", name="ck_agent_conversations_runtime_v2_only"),
         Index("ix_agent_conversations_actor", "actor_id"),
         Index("ix_agent_conversations_community_status", "community_id", "status"),
         Index("ix_agent_conversations_runtime_status", "runtime_version", "status"),
