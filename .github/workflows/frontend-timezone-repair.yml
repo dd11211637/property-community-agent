@@ -1,0 +1,60 @@
+name: Frontend timezone repair
+
+on:
+  push:
+    branches:
+      - fix/ci-quality-gates
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/ci-quality-gates
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Patch datetime-local confirmation semantics
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"Expected text not found in {path}: {old!r}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          replace(
+              "frontend/src/pages/RepairsPage.tsx",
+              'draft.appointment_at ? displayDate(draft.appointment_at) : "稍后协商"',
+              'draft.appointment_at ? displayDate(localDateTimeToIso(draft.appointment_at)) : "稍后协商"',
+          )
+          replace(
+              "frontend/tests/pages/BusinessFlows.test.tsx",
+              'const expectedAppointment = new Date("2026-08-31T21:25").toISOString();',
+              'const expectedAppointment = new Date("2026-08-31T21:25+08:00").toISOString();',
+          )
+          PY
+      - run: npm ci
+        working-directory: frontend
+      - name: Verify frontend closure
+        working-directory: frontend
+        run: |
+          npm run lint
+          npm test
+          npm run build
+      - name: Commit frontend timezone closure
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/src/pages/RepairsPage.tsx frontend/tests/pages/BusinessFlows.test.tsx
+          git commit -m "fix(frontend): normalize appointment timezone semantics"
+          git push origin HEAD:fix/ci-quality-gates
