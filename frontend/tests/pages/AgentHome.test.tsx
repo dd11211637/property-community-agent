@@ -46,6 +46,27 @@ afterEach(() => {
 });
 
 describe("Agent home flow", () => {
+  it("recovers an archived conversation into a fresh V2 conversation", async () => {
+    sessionStorage.setItem("property_agent_token", "token");
+    sessionStorage.setItem("property_agent_conversation_id", "retired-v1");
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = String(input);
+      if (url.endsWith("/api/agent/conversations")) return Promise.resolve(envelope([]));
+      if (url.endsWith("/api/agent/memories")) return Promise.resolve(envelope([]));
+      return Promise.resolve(new Response(JSON.stringify({
+        success: false,
+        data: null,
+        error: { code: "CONVERSATION_CLOSED", message: "会话已结束" },
+        request_id: "req-upgrade",
+      }), { status: 409, headers: { "Content-Type": "application/json" } }));
+    });
+
+    render(<MemoryRouter><HomePage /></MemoryRouter>);
+
+    expect(await screen.findByText(/会话已升级，请开始新对话/)).toBeInTheDocument();
+    expect(sessionStorage.getItem("property_agent_conversation_id")).toBeNull();
+  });
+
   it("guides an incomplete repair one question at a time", async () => {
     sessionStorage.setItem("property_agent_token", "token");
     const fetchMock = mockAgentApi(
@@ -53,16 +74,28 @@ describe("Agent home flow", () => {
         reply: "请描述一下具体出现了什么故障？",
         slot_prompt: {
           field: "description", label: "故障现象", prompt: "请描述一下具体出现了什么故障？",
-          allow_custom: true, step: 1, total_steps: 2, completed: [], options: [],
+          allow_custom: true, step: 1, total_steps: 3, completed: [], options: [],
         },
       },
       {
         reply: "这个故障发生在哪里？",
         slot_prompt: {
           field: "location", label: "发生地点", prompt: "这个故障发生在哪里？",
-          allow_custom: true, step: 2, total_steps: 2,
+          allow_custom: true, step: 2, total_steps: 3,
           completed: [{ field: "description", label: "故障现象", value: "插座频繁跳闸" }],
           options: [{ label: "阳台", value: "阳台" }],
+        },
+      },
+      {
+        reply: "请选择预约上门时间",
+        slot_prompt: {
+          field: "appointment_at", label: "预约上门时间", prompt: "请选择预约上门时间",
+          allow_custom: true, step: 3, total_steps: 3,
+          completed: [
+            { field: "description", label: "故障现象", value: "插座频繁跳闸" },
+            { field: "location", label: "发生地点", value: "阳台" },
+          ],
+          options: [],
         },
       },
       {
@@ -70,7 +103,10 @@ describe("Agent home flow", () => {
         pending_confirmation: {
           summary: "确认提交这条报修吗？",
           tool: "repair_create",
-          params: { category: "ELECTRICAL", location: "阳台", description: "跳闸停电" },
+          params: {
+            category: "ELECTRICAL", location: "阳台", description: "跳闸停电",
+            appointment_at: "2026-08-31T13:25:00.000Z",
+          },
           action_hash: "guided-hash",
         },
       },
@@ -82,13 +118,122 @@ describe("Agent home flow", () => {
 
     fireEvent.change(await screen.findByLabelText("发送给社区智能体"), { target: { value: "插座频繁跳闸" } });
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
-    expect(await screen.findByText("信息补充 2/2")).toBeInTheDocument();
+    expect(await screen.findByText("信息补充 2/3")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "阳台" }));
 
+    const appointmentInput = await screen.findByLabelText("发送给社区智能体");
+    expect(appointmentInput).toHaveAttribute("type", "datetime-local");
+    fireEvent.change(appointmentInput, { target: { value: "2026-08-31T21:25" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
     expect(await screen.findByText("确认提交这条报修吗？")).toBeInTheDocument();
+    expect(screen.getByText("预约上门时间").closest("div")).toHaveTextContent(/2026.*21:25/);
     const bodies = postedBodies(fetchMock);
     expect(bodies[1].slots).toEqual({ description: "插座频繁跳闸" });
     expect(bodies[2].slots).toEqual({ location: "阳台" });
+    expect(bodies[3].slots).toEqual({
+      appointment_at: "2026-08-31T13:25:00.000Z",
+    });
+  });
+
+  it("guides a new announcement through title, body, and audience", async () => {
+    sessionStorage.setItem("property_agent_token", "token");
+    const fetchMock = mockAgentApi(
+      {
+        reply: "请填写公告标题",
+        slot_prompt: {
+          field: "title", label: "公告标题", prompt: "请填写公告标题",
+          allow_custom: true, step: 1, total_steps: 3, completed: [], options: [],
+        },
+      },
+      {
+        reply: "请填写公告正文",
+        slot_prompt: {
+          field: "body", label: "公告正文", prompt: "请填写公告正文",
+          allow_custom: true, step: 2, total_steps: 3,
+          completed: [{ field: "title", label: "公告标题", value: "1栋临时停水通知" }],
+          options: [],
+        },
+      },
+      {
+        reply: "请选择公告受众，也可以输入具体楼栋",
+        slot_prompt: {
+          field: "audience", label: "受众范围", prompt: "请选择公告受众，也可以输入具体楼栋",
+          allow_custom: true, step: 3, total_steps: 3,
+          completed: [
+            { field: "title", label: "公告标题", value: "1栋临时停水通知" },
+            { field: "body", label: "公告正文", value: "今晚 22:00 至次日 06:00 停水" },
+          ],
+          options: [{ label: "全社区", value: {} }],
+        },
+      },
+      {
+        reply: "",
+        pending_confirmation: {
+          summary: "确认采用这份 AI 稿件并保存为公告草稿吗？",
+          tool: "announcement_create_draft",
+          params: { title: "1栋临时停水通知", body: "今晚停水", audience: {} },
+          action_hash: "announcement-hash",
+        },
+      },
+    );
+
+    render(<MemoryRouter><HomePage /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("发送给社区智能体"), { target: { value: "我要发布公告" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    fireEvent.change(await screen.findByLabelText("发送给社区智能体"), { target: { value: "1栋临时停水通知" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    fireEvent.change(await screen.findByLabelText("发送给社区智能体"), { target: { value: "今晚 22:00 至次日 06:00 停水" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    fireEvent.click(await screen.findByRole("button", { name: "全社区" }));
+
+    expect(await screen.findByText("确认采用这份 AI 稿件并保存为公告草稿吗？")).toBeInTheDocument();
+    const bodies = postedBodies(fetchMock);
+    expect(bodies[1].slots).toEqual({ title: "1栋临时停水通知" });
+    expect(bodies[2].slots).toEqual({ body: "今晚 22:00 至次日 06:00 停水" });
+    expect(bodies[3].slots).toEqual({ audience: {} });
+  });
+
+  it("guides inspection creation through business fields instead of internal IDs", async () => {
+    sessionStorage.setItem("property_agent_token", "token");
+    const fetchMock = mockAgentApi(
+      { reply: "请填写巡检任务标题", slot_prompt: {
+        field: "title", label: "任务标题", prompt: "请填写巡检任务标题",
+        allow_custom: true, step: 1, total_steps: 3, completed: [], options: [],
+      } },
+      { reply: "请说明本次巡检要求", slot_prompt: {
+        field: "description", label: "巡检要求", prompt: "请说明本次巡检要求",
+        allow_custom: true, step: 2, total_steps: 3,
+        completed: [{ field: "title", label: "任务标题", value: "每周小区安防巡检" }], options: [],
+      } },
+      { reply: "请选择巡检点位", slot_prompt: {
+        field: "point", label: "巡检点位", prompt: "请选择巡检点位",
+        allow_custom: true, step: 3, total_steps: 3,
+        completed: [
+          { field: "title", label: "任务标题", value: "每周小区安防巡检" },
+          { field: "description", label: "巡检要求", value: "检查消防设施和通道" },
+        ], options: [{ label: "消防通道", value: "消防通道" }],
+      } },
+      { reply: "", pending_confirmation: {
+        summary: "确认创建这项巡检任务吗？", tool: "inspection_create",
+        params: { title: "每周小区安防巡检", point: "消防通道" }, action_hash: "inspection-hash",
+      } },
+    );
+
+    render(<MemoryRouter><HomePage /></MemoryRouter>);
+    fireEvent.change(screen.getByLabelText("发送给社区智能体"), { target: { value: "发起巡检" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    fireEvent.change(await screen.findByLabelText("发送给社区智能体"), { target: { value: "每周小区安防巡检" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    fireEvent.change(await screen.findByLabelText("发送给社区智能体"), { target: { value: "检查消防设施和通道" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    fireEvent.click(await screen.findByRole("button", { name: "消防通道" }));
+
+    expect(await screen.findByText("确认创建这项巡检任务吗？")).toBeInTheDocument();
+    const bodies = postedBodies(fetchMock);
+    expect(bodies[1].slots).toEqual({ title: "每周小区安防巡检" });
+    expect(bodies[2].slots).toEqual({ description: "检查消防设施和通道" });
+    expect(bodies[3].slots).toEqual({ point: "消防通道" });
   });
 
   it("sends the selected house and renders the confirmed business result", async () => {

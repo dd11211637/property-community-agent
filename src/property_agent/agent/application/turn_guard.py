@@ -121,10 +121,7 @@ def activate_lease_context(context: Any, lease: Lease | None) -> Any:
     """
     from dataclasses import replace
 
-    from property_agent.agent.selector_context import activate_selector_context
     from property_agent.platform.context import AgentLeaseContext, ExecutionSource, RequestContext
-
-    activate_selector_context(context)
 
     agent_lease = None
     if lease is not None:

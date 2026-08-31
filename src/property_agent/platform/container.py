@@ -20,39 +20,29 @@ from sqlalchemy.ext.asyncio import (
 
 from property_agent.agent import observed_boundaries
 from property_agent.agent.application import stream_execution as stream_exec
-from property_agent.agent.application.composition import bind_runtime, close_runtime_resources
+from property_agent.agent.application.composition import (
+    bind_runtime,
+    build_v2_engine,
+    close_runtime_resources,
+)
 from property_agent.agent.application.confirmation_provider import prepare_confirmation
 from property_agent.agent.application.conversation_service import ConversationService
 from property_agent.agent.application.memory_composition import build_memory_runtime
 from property_agent.agent.application.memory_runtime import (
     _display_part as _display_part,
 )
-from property_agent.agent.application.memory_runtime import (
-    build_agent_context_loader,
-    build_turn_recorder,
-)
+from property_agent.agent.application.memory_runtime import build_turn_recorder
 from property_agent.agent.application.recovery import AgentRecoveryService
 from property_agent.agent.application.runner import AgentSessionRunner
 from property_agent.agent.capabilities.bootstrap import build_capability_executor
-from property_agent.agent.graph import build_agent_graph
 from property_agent.agent.infrastructure.checkpointer import SqlAlchemyCheckpointer
 from property_agent.agent.infrastructure.run_lease import RunLeaseService
 from property_agent.agent.model_gateway import (
     DeepSeekModelGateway,
     DeterministicModelGateway,
-    FallbackModelGateway,
     ModelGateway,
 )
-from property_agent.agent.model_release_approval import FALLBACK_ENABLED
-from property_agent.agent.read_planner import GatewayReadPlanner
-from property_agent.agent.read_tools import build_read_tools, read_tool_specs
 from property_agent.agent.state import GraphState
-from property_agent.agent.tools import (
-    build_announcement_tools,
-    build_billing_tools,
-    build_inspection_tools,
-    build_repair_tools,
-)
 from property_agent.announcement.application.scheduler import AnnouncementScheduler
 from property_agent.announcement.application.service import AnnouncementService
 from property_agent.announcement.infrastructure.shared_ports import build_announcement_ports
@@ -60,7 +50,9 @@ from property_agent.announcement.infrastructure.uow import SqlAlchemyAnnouncemen
 from property_agent.billing.application.service import BillingService, ConsultationService
 from property_agent.billing.infrastructure.unit_of_work import SqlAlchemyBillingUnitOfWork
 from property_agent.config import settings
-from property_agent.inspection.adapters.api.dependencies import to_inspection_context
+from property_agent.inspection.adapters.api.dependencies import (
+    to_inspection_context as to_inspection_context,
+)
 from property_agent.inspection.application.service import (
     InspectionTaskService,
     SecurityEventService,
@@ -452,13 +444,10 @@ def build_agent_runner(
     app.state.agent_memory_reader = memory_runtime.reader
     app.state.agent_memory_writer = memory_runtime.writer
 
-    context_loader = build_agent_context_loader(session_factory)
-    graph, *_ = _build_agent_tooling(
+    _build_agent_capabilities(
         app=app,
         session_factory=session_factory,
         gateway=gateway,
-        context_loader=context_loader,
-        checkpointer=None,
     )
     conversations = ConversationService(session_factory)
     recovery = AgentRecoveryService(conversations=conversations, checkpointer=checkpointer)
@@ -472,8 +461,9 @@ def build_agent_runner(
             announcement_service=app.state.announcement_service,
         )
 
+    engine = build_v2_engine(app)
     return AgentSessionRunner(
-        graph=graph,
+        engine=engine,
         conversations=conversations,
         recovery=recovery,
         confirmation_token_provider=confirmation_token_provider,
@@ -487,18 +477,13 @@ def build_agent_runner(
     )
 
 
-def _build_agent_tooling(
+def _build_agent_capabilities(
     *,
     app: FastAPI,
     session_factory: Any,
     gateway: ModelGateway,
-    context_loader: Any,
-    checkpointer: SqlAlchemyCheckpointer | None,
-) -> tuple:
-    """拼装 agent graph 与四个业务工具集，返回 ``(graph, repair, ... )``。"""
-
-    def context_provider(state: GraphState) -> RequestContext:
-        return resolve_agent_request_context(state)
+) -> None:
+    """Assemble the controlled business capability boundary used by V2 specialists."""
 
     def session_provider(state: GraphState) -> Any:
         return session_factory()
@@ -518,65 +503,20 @@ def _build_agent_tooling(
         observe=observed_boundaries.capability_observer(app.state.agent_observability),
     )
     app.state.agent_capability_executor = capability_executor
-    repair_tools = build_repair_tools(agent_work_orders, context_provider, capability_executor)
-    announcement_tools = build_announcement_tools(
-        app.state.announcement_service, context_provider, gateway, capability_executor
-    )
-    billing_tools = build_billing_tools(
-        app.state.billing_service,
-        app.state.consultation_service,
-        context_provider,
-        session_provider,
-        capability_executor,
-    )
-    inspection_tools = build_inspection_tools(
-        app.state.task_service,
-        app.state.event_service,
-        context_provider,
-        capability_executor,
-        inspection_context_projector=lambda context: to_inspection_context(
-            context, context.request_id
-        ),
-    )
-    controlled_read_tools = build_read_tools(
-        announcement_tools=announcement_tools,
-        billing_tools=billing_tools,
-        repair_tools=repair_tools,
-        inspection_tools=inspection_tools,
-    )
-    graph = build_agent_graph(
-        gateway=gateway,
-        repair_tools=repair_tools,
-        announcement_tools=announcement_tools,
-        billing_tools=billing_tools,
-        inspection_tools=inspection_tools,
-        checkpointer=checkpointer,
-        context_loader=context_loader,
-        read_planner=GatewayReadPlanner(gateway),
-        read_tool_specs=read_tool_specs(),
-        read_tools=controlled_read_tools,
-    )
-    return (
-        graph,
-        repair_tools,
-        announcement_tools,
-        billing_tools,
-        inspection_tools,
-        controlled_read_tools,
-    )  # noqa: E501
 
 
 def build_model_gateway(observability: Any | None = None) -> ModelGateway:
-    """Build the production model adapter without exposing the API key downstream."""
-    fallback = DeterministicModelGateway()
+    """Build the real provider; only the explicit test profile may use a fake."""
     if not settings.deepseek_api_key.strip():
-        return fallback
+        if settings.env.strip().lower().startswith("test"):
+            return DeterministicModelGateway()
+        raise RuntimeError("DEEPSEEK_API_KEY is required for the V2 Agent runtime")
     observe = (
         observed_boundaries.model_provider_observer(observability)
         if observability is not None
         else None
     )
-    primary = DeepSeekModelGateway(
+    return DeepSeekModelGateway(
         api_key=settings.deepseek_api_key,
         base_url=settings.deepseek_base_url,
         model=settings.deepseek_model,
@@ -585,9 +525,6 @@ def build_model_gateway(observability: Any | None = None) -> ModelGateway:
         total_timeout_seconds=settings.deepseek_total_timeout_seconds,
         observe=observe,
     )
-    if FALLBACK_ENABLED:
-        return FallbackModelGateway(primary, fallback, observe=observe)
-    return primary
 
 
 def resolve_agent_request_context(state: GraphState) -> RequestContext:

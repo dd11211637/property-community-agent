@@ -49,6 +49,7 @@ class WorkOrderModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    appointment_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     status_logs: Mapped[list["WorkOrderStatusLogModel"]] = relationship(
         back_populates="work_order", cascade="all, delete-orphan"

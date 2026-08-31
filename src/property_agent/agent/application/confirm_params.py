@@ -73,16 +73,17 @@ def _submit_records_params(state: GraphState) -> tuple[str, dict[str, Any]]:
 
 
 def _security_event_params(state: GraphState) -> tuple[str, dict[str, Any]]:
+    pending = dict((state.pending_action or {}).get("params") or {})
     normalized = normalize_security_event(
-        str(state.slots.get("description") or ""),
-        state.slots.get("risk_level"),
+        str(pending.get("description") or state.slots.get("description") or ""),
+        pending.get("risk_level", state.slots.get("risk_level")),
     )
     return (
         "SECURITY_EVENT_CREATE",
         {
             "event_type": normalized.event_type.value,
             "risk_level": normalized.risk_level.value,
-            "location": str(state.slots.get("location") or ""),
+            "location": str(pending.get("location") or state.slots.get("location") or ""),
         },
     )
 
@@ -186,6 +187,15 @@ def _repair_create_params(state: GraphState) -> tuple[str, dict[str, Any]]:
         urgency = Urgency(urgency_value)
     except ValueError:
         urgency = Urgency.NORMAL
+    # appointment_at 必须进入参数指纹：业务 CONSUME 侧用 asdict(CreateWorkOrderCommand)
+    # 计算哈希，而该命令含 appointment_at 字段。若此处漏掉它，PENDING 审批的
+    # params_hash 与 CONSUME 侧永远不一致，每次确认都会被 APPROVAL_PARAMS_CHANGED
+    # 拒绝。用 _optional_datetime 归一为 datetime，与命令侧 asdict 后的 isoformat
+    # 完全对齐（兼容检查点往返后变成 ISO 字符串的情况）。
+    appointment_raw = pending.get("appointment_at")
+    if appointment_raw is None:
+        appointment_raw = state.slots.get("appointment_at")
+    appointment_at = _optional_datetime(appointment_raw)
     return (
         "CREATE_WORK_ORDER",
         {
@@ -194,6 +204,7 @@ def _repair_create_params(state: GraphState) -> tuple[str, dict[str, Any]]:
             "location": location,
             "description": description,
             "urgency": urgency,
+            "appointment_at": appointment_at,
             "attachment_ids": (),
         },
     )

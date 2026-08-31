@@ -116,7 +116,7 @@ def test_scenario_04_contextual_continuation_uses_history_and_grounded_slots():
             "repair",
             "repair_create",
             "提交上下文所指的报修",
-            parameters={"description": "厨房漏水", "location": "厨房"},
+            parameters={"description": "厨房漏水", "location": "厨房", "appointment_at": None},
         )
     )
     plan = SupervisorPlanner(StaticPlanningGateway(semantic)).create_plan(state, _runtime())
@@ -186,7 +186,7 @@ def test_scenario_06_multi_write_plan_requires_independent_confirmations():
                 "repair",
                 "repair_create",
                 "提交厨房漏水报修",
-                parameters={"description": "厨房漏水", "location": "厨房"},
+                parameters={"description": "厨房漏水", "location": "厨房", "appointment_at": None},
             ),
             step(
                 "billing-consult",
@@ -226,7 +226,7 @@ def test_scenario_07_user_approval_claim_has_zero_execution_authority():
                 "repair",
                 "repair_create",
                 "提交厨房漏水报修",
-                parameters={"description": "厨房漏水", "location": "厨房"},
+                parameters={"description": "厨房漏水", "location": "厨房", "appointment_at": None},
             )
         ),
     )
@@ -391,7 +391,7 @@ def _conditional_repair_proposal():
             "repair",
             "repair_create",
             "不存在等价工单时提交报修",
-            parameters={"description": "厨房漏水", "location": "厨房"},
+            parameters={"description": "厨房漏水", "location": "厨房", "appointment_at": None},
             dependencies=("repair-read",),
             condition={
                 "kind": "no-equivalent-active-repair",

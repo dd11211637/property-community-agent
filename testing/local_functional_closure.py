@@ -42,7 +42,9 @@ def _configure_ephemeral_environment(database_path: Path, release_sha: str) -> N
     database_url = f"sqlite+pysqlite:///{database_path.as_posix()}"
     os.environ.update(
         {
+            "ENV": "test",
             "DATABASE_URL": database_url,
+            "DEEPSEEK_API_KEY": "",
             "JWT_SECRET": secrets.token_urlsafe(48),
             "DEPLOYMENT_ENVIRONMENT": "isolated-test",
             "RELEASE_SHA": release_sha,

@@ -38,7 +38,7 @@ class RepairProviderContractGateway:
                 "repair",
                 "repair_create",
                 "提交水管漏水报修",
-                parameters={"description": "水管漏水", "location": "厨房"},
+                parameters={"description": "水管漏水", "location": "厨房", "appointment_at": None},
             )
         )
 
@@ -82,6 +82,7 @@ def repair_state(runtime, *, create=False):
             "action": "create",
             "description": "水管漏水",
             "location": "厨房",
+            "appointment_at": None,
         }
     state = GraphState(
         "pr4-conversation",

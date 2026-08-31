@@ -11,11 +11,7 @@ import os
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from property_agent.agent.model_gateway import (
-    DeterministicModelGateway,
-    FallbackModelGateway,
-    UnavailableModelGateway,
-)
+from property_agent.agent.model_gateway import DeterministicModelGateway
 from property_agent.main import create_app
 from property_agent.platform import container
 from property_agent.platform.infrastructure.outbox_dispatcher import OutboxDispatcher
@@ -28,9 +24,7 @@ async def _failed_message_transport(message) -> bool:
 def _configure_demo_adapters() -> None:
     """Replace adapters only for this explicit demo entry point."""
     if _enabled("DEMO_FAIL_MODEL"):
-        container.build_model_gateway = lambda: FallbackModelGateway(
-            UnavailableModelGateway(), DeterministicModelGateway()
-        )
+        container.build_model_gateway = lambda _observability=None: DeterministicModelGateway()
     if _enabled("DEMO_FAIL_MESSAGE_TRANSPORT"):
         container.build_outbox_dispatcher = lambda: OutboxDispatcher(
             session_factory=container.get_session_factory(),

@@ -13,9 +13,41 @@ from property_agent.agent.announcement_time import (
 )
 from property_agent.agent.model_contracts import ModelAnalysis, ModelGatewayError
 from property_agent.agent.policies import Intent
+from property_agent.agent.repair_location import extract_repair_location
 from property_agent.repair.domain.classification import classify_repair_category
 
 _BUSINESS_TIMEZONE = ZoneInfo("Asia/Shanghai")
+_COMMUNITY_KNOWLEDGE_CUES = (
+    "物业电话",
+    "联系方式",
+    "联系电话",
+    "开放时间",
+    "社区规定",
+    "物业规定",
+    "停车规定",
+    "装修规定",
+    "门禁规定",
+)
+_INSPECTION_TASK_QUERY_MARKERS = (
+    "查询任务",
+    "查看任务",
+    "巡检任务",
+    "巡检记录",
+    "巡检进度",
+    "巡检安防事项",
+    "都完成",
+    "完成了吗",
+    "完成了没",
+)
+_INSPECTION_TASK_CREATE_MARKERS = (
+    "创建巡检",
+    "新建巡检",
+    "安排巡检",
+    "开展巡检",
+    "发起巡检",
+    "设定巡检",
+    "设置巡检",
+)
 
 
 def _business_today() -> date:
@@ -32,7 +64,7 @@ def _deterministic_billing_slots(text: str, today: date) -> dict[str, Any]:
     """Extract trusted billing list filters, including relative Chinese months."""
 
     text = text or ""
-    slots: dict[str, Any] = {}
+    slots: dict[str, Any] = {"query_type": "list"}
     absolute = re.search(r"(?P<year>20\d{2})\s*(?:年|-|/)\s*(?P<month>1[0-2]|0?[1-9])\s*月?", text)
     if absolute:
         slots["period"] = f"{int(absolute.group('year')):04d}-{int(absolute.group('month')):02d}"
@@ -42,12 +74,10 @@ def _deterministic_billing_slots(text: str, today: date) -> dict[str, Any]:
         slots["period"] = _shift_month(today, -2)
     elif any(marker in text for marker in ("上月", "上个月")):
         slots["period"] = _shift_month(today, -1)
-    if "period" in slots:
-        slots["query_type"] = "list"
     return slots
 
 
-def _deterministic_repair_slots(text: str) -> dict[str, Any]:
+def deterministic_repair_slots(text: str) -> dict[str, Any]:
     """Extract observable repair facts; category remains application-derived."""
 
     text = (text or "").strip()
@@ -71,21 +101,21 @@ def _deterministic_repair_slots(text: str) -> dict[str, Any]:
     ):
         slots["action"] = "query"
         return slots
-    create_markers = ("报修", "维修", "坏了", "故障", "漏水", "漏电", "破损", "堵塞")
+    create_markers = (
+        "报修",
+        "维修",
+        "坏了",
+        "故障",
+        "漏水",
+        "漏电",
+        "破损",
+        "堵塞",
+        "不亮",
+        "没亮",
+    )
     if any(marker in text for marker in create_markers):
         slots["action"] = "create"
-    locations = (
-        "厨房",
-        "卫生间",
-        "客厅",
-        "卧室",
-        "阳台",
-        "玄关",
-        "楼道",
-        "地下车库",
-        "车库",
-    )
-    location = next((value for value in locations if value in text), None)
+    location = extract_repair_location(text)
     if location:
         slots["location"] = location
     generic = {"我要报修", "需要报修", "申请报修", "报修", "我要保修", "帮我报修"}
@@ -98,6 +128,8 @@ def _deterministic_repair_slots(text: str) -> dict[str, Any]:
         "堵塞",
         "停电",
         "跳闸",
+        "不亮",
+        "没亮",
         "故障",
         "破损",
         "异响",
@@ -110,6 +142,7 @@ def _deterministic_repair_slots(text: str) -> dict[str, Any]:
 
 
 def _deterministic_announcement_slots(text: str, today: date) -> dict[str, Any]:
+    knowledge = any(marker in text for marker in _COMMUNITY_KNOWLEDGE_CUES)
     drafting = any(
         marker in text for marker in ("帮我写公告", "写公告", "起草公告", "润色公告", "公告草稿")
     )
@@ -138,11 +171,20 @@ def _deterministic_announcement_slots(text: str, today: date) -> dict[str, Any]:
         if matched:
             action = candidate
     slots: dict[str, Any] = {"action": action} if action else {}
+    if knowledge:
+        slots.update(action="knowledge", query=text.strip())
     if any(marker in text for marker in ("停水", "供水")):
         slots["topic"] = "WATER_OUTAGE"
     elif any(marker in text for marker in ("停电", "供电")):
         slots["topic"] = "POWER_OUTAGE"
     slots.update(resolve_announcement_time_slots(text, today))
+    outage_question = "topic" in slots and any(
+        marker in text for marker in ("吗", "会不会", "会停", "有没有", "是否")
+    )
+    if "action" not in slots and (querying or outage_question):
+        slots["action"] = "list"
+    if slots.get("action") == "list" and slots.get("topic"):
+        slots["statuses"] = ("PUBLISHED",)
     building_match = re.search(r"(?P<buildings>\d+(?:\s*[,，、]\s*\d+)*)\s*栋", text)
     if building_match:
         slots["audience"] = {
@@ -159,24 +201,13 @@ def _deterministic_announcement_slots(text: str, today: date) -> dict[str, Any]:
     return slots
 
 
-def _deterministic_inspection_slots(text: str) -> dict[str, Any]:
+def deterministic_inspection_slots(text: str) -> dict[str, Any]:
     text = text or ""
     slots: dict[str, Any] = {}
-    task_query = any(
-        marker in text
-        for marker in (
-            "查询任务",
-            "查看任务",
-            "巡检任务",
-            "巡检记录",
-            "巡检进度",
-            "都完成",
-            "完成了吗",
-            "完成了没",
-        )
-    )
+    task_query = any(marker in text for marker in _INSPECTION_TASK_QUERY_MARKERS)
     task_create = (
-        any(marker in text for marker in ("创建巡检", "新建巡检", "安排巡检", "开展巡检"))
+        any(marker in text for marker in _INSPECTION_TASK_CREATE_MARKERS)
+        or (any(marker in text for marker in ("创建", "新建", "安排")) and "巡检" in text)
         or ("我要" in text and "巡检" in text)
         or ("对" in text and "进行巡检" in text)
     ) and not any(marker in text for marker in ("了吗", "了没", "进度", "查询", "查看"))
@@ -257,6 +288,8 @@ class DeterministicModelGateway:
             "故障",
             "破损",
             "堵塞",
+            "不亮",
+            "没亮",
         ],
         "ANNOUNCEMENT": ["公告", "通知", "通告", "发布", "告示", "停水", "停电", "供水", "供电"],
         "BILLING": ["账单", "缴费", "物业费", "费用", "收费", "欠费"],
@@ -343,7 +376,7 @@ class DeterministicModelGateway:
                 break
         return ModelAnalysis(
             intent=prior_intent,
-            confidence=0.65 if prior_intent != Intent.UNCERTAIN.value else result.confidence,
+            confidence=0.9 if prior_intent != Intent.UNCERTAIN.value else result.confidence,
             slots=self._slots_for_intent(text, prior_intent),
             provider="keyword_context",
         )
@@ -351,17 +384,19 @@ class DeterministicModelGateway:
     def _slots_for_intent(self, text: str, intent: str) -> dict[str, Any]:
         today = self._today_provider()
         if intent == Intent.REPAIR.value:
-            return _deterministic_repair_slots(text)
+            return deterministic_repair_slots(text)
         if intent == Intent.BILLING.value:
             return _deterministic_billing_slots(text, today)
         if intent == Intent.ANNOUNCEMENT.value:
             return _deterministic_announcement_slots(text, today)
         if intent == Intent.INSPECTION.value:
-            return _deterministic_inspection_slots(text)
+            return deterministic_inspection_slots(text)
         return {}
 
     def classify_intent(self, text: str) -> tuple[str, float]:
         text = text or ""
+        if any(marker in text for marker in _COMMUNITY_KNOWLEDGE_CUES):
+            return Intent.ANNOUNCEMENT.value, 0.9
         scores: dict[str, int] = {}
         for intent, keywords in self.INTENT_KEYWORDS.items():
             for keyword in keywords:
@@ -370,7 +405,7 @@ class DeterministicModelGateway:
         if not scores:
             return Intent.UNCERTAIN.value, 0.3
         best = max(scores, key=scores.get)
-        confidence = min(0.95, 0.6 + 0.1 * scores[best])
+        confidence = min(0.95, 0.8 + 0.1 * scores[best])
         return best, confidence
 
     def extract_slots(self, text: str, intent: str) -> dict[str, Any]:

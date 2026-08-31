@@ -43,11 +43,11 @@ export function LoginPage() {
         <form className="login-card" onSubmit={submit}>
           <span className="eyebrow">社区服务入口</span>
           <h2>欢迎回来</h2>
-          <p>使用项目提供的演示账号登录</p>
-          <label>账号<input required autoComplete="username" value={account} onChange={(e) => setAccount(e.target.value)} placeholder="请输入演示账号" /></label>
+          <p>使用你的社区服务账号安全登录</p>
+          <label>账号<input required autoComplete="username" value={account} onChange={(e) => setAccount(e.target.value)} placeholder="请输入账号" /></label>
           <label>密码<input required type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="请输入密码" /></label>
           {error && <div className="inline-error" role="alert">{error}</div>}
-          <button className="button primary wide" disabled={pending}>{pending ? "正在验证…" : <>登录并选择房屋 <ArrowRight size={17} /></>}</button>
+          <button className="button primary wide" aria-label="登录并选择房屋" disabled={pending}>{pending ? "正在安全验证…" : <>进入社区服务 <ArrowRight size={17} /></>}</button>
           <small className="form-note">角色、小区和房屋权限均由后端签发，页面不会接受手工覆盖。</small>
         </form>
       </section>

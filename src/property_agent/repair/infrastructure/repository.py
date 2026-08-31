@@ -45,6 +45,7 @@ class SqlAlchemyWorkOrderRepository:
                 version=work_order.version,
                 updated_at=work_order.updated_at,
                 closed_at=work_order.closed_at,
+                appointment_at=work_order.appointment_at,
             )
             .execution_options(synchronize_session=False)
         )
@@ -199,6 +200,7 @@ class SqlAlchemyWorkOrderRepository:
                 operator_id=item.operator_id,
                 created_at=item.created_at,
                 note=item.note,
+                appointment_at=item.appointment_at,
                 attachment_ids=tuple(UUID(value) for value in item.attachment_ids),
             )
             for item in self._session.scalars(process_statement)
@@ -224,6 +226,7 @@ class SqlAlchemyWorkOrderRepository:
             created_at=work_order.created_at,
             updated_at=work_order.updated_at,
             closed_at=work_order.closed_at,
+            appointment_at=work_order.appointment_at,
         )
 
     @staticmethod
@@ -245,5 +248,6 @@ class SqlAlchemyWorkOrderRepository:
             created_at=model.created_at,
             updated_at=model.updated_at,
             closed_at=model.closed_at,
+            appointment_at=model.appointment_at,
             has_review=model.review is not None,
         )

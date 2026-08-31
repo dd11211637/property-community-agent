@@ -7,6 +7,10 @@ from inspect import signature
 from typing import Any
 from uuid import uuid4
 
+from property_agent.agent.deterministic_gateway import (
+    deterministic_inspection_slots,
+    deterministic_repair_slots,
+)
 from property_agent.agent.model_contracts import ModelAnalysis, ModelGatewayError
 from property_agent.agent.orchestration import (
     ObjectiveClassification,
@@ -61,14 +65,151 @@ class SupervisorPlanner:
                 state.retrieved_memories = MemoryContext(
                     degraded=True, degradation_reason="MEMORY_RETRIEVAL_UNAVAILABLE"
                 )
-        if getattr(self._gateway, "propose_plan", None) is not None:
+        guided = self._guided_announcement_proposal(text, state)
+        if guided is None:
+            guided = self._deterministic_inspection_proposal(text, state)
+        if guided is None:
+            guided = self._deterministic_repair_continuation(state)
+        if guided is not None:
+            proposal = guided
+        elif getattr(self._gateway, "propose_plan", None) is not None:
             proposal = self._semantic_proposal(text, state, runtime)
         else:
-            proposal = self._bounded_legacy_proposal(text, state, runtime)
+            proposal = self._bounded_analysis_proposal(text, state, runtime)
         try:
             return self._validator.validate(self._normalize(text, proposal, state.slots))
         except (KeyError, TypeError, ValueError):
             return self._uncertain(text)
+
+    @staticmethod
+    def _guided_announcement_proposal(text: str, state: AgentState) -> PlanProposal | None:
+        """Start or continue a new announcement without asking for internal IDs."""
+
+        if state.slots.get("announcement_id"):
+            return None
+        compact_text = "".join(text.split())
+        start_markers = (
+            "我要发布公告",
+            "发布公告",
+            "发公告",
+            "新建公告",
+            "创建公告",
+            "我要发通知",
+            "发布通知",
+        )
+        continuing = state.intent == "ANNOUNCEMENT" and any(
+            key in state.slots and state.slots[key] is not None
+            for key in ("title", "body", "audience")
+        )
+        if not continuing and not any(marker in compact_text for marker in start_markers):
+            return None
+        parameters = {"action": "create"}
+        for key in ("title", "body", "audience"):
+            if key in state.slots and state.slots[key] is not None:
+                parameters[key] = state.slots[key]
+        step = PlanStepProposal(
+            step_id="announcement-guided-create-v2",
+            goal="分步收集公告内容并保存为待审核草稿",
+            domain="announcement",
+            specialist=SpecialistName.ANNOUNCEMENT.value,
+            capability="announcement_create_draft",
+            parameters=parameters,
+        )
+        return PlanProposal(
+            ObjectiveClassification.SINGLE_DOMAIN.value,
+            (step,),
+            "deterministic-guided-announcement",
+        )
+
+    @staticmethod
+    def _deterministic_inspection_proposal(text: str, state: AgentState) -> PlanProposal | None:
+        """Stabilize the public task-list and guided task-creation entry points."""
+
+        if any(marker in text for marker in ("公告", "通知")):
+            return None
+        existing_action = state.slots.get("action")
+        if existing_action not in {None, "create", "query"}:
+            return None
+        detected = deterministic_inspection_slots(text)
+        continuing_create = (
+            state.intent == "INSPECTION"
+            and state.slots.get("action") == "create"
+            and not state.slots.get("task_id")
+        )
+        action = "create" if continuing_create else detected.get("action")
+        if action not in {"create", "query"}:
+            return None
+        capability = "inspection_create" if action == "create" else "inspection_list"
+        parameters: dict[str, Any] = {
+            "action": action,
+            "target": "task",
+        }
+        if action == "query":
+            parameters.update(
+                statuses=tuple(state.slots.get("statuses") or ()),
+                assigned_to_me=bool(state.slots.get("assigned_to_me", False)),
+                limit=int(state.slots.get("limit") or 20),
+            )
+        else:
+            for key in ("title", "description", "point", "route_points"):
+                if key in state.slots and state.slots[key] is not None:
+                    parameters[key] = state.slots[key]
+        step = PlanStepProposal(
+            step_id=f"inspection-{action}-v2",
+            goal="查询巡检任务状态" if action == "query" else "分步填写并创建巡检任务",
+            domain="inspection",
+            specialist=SpecialistName.INSPECTION.value,
+            capability=capability,
+            parameters=parameters,
+        )
+        return PlanProposal(
+            ObjectiveClassification.SINGLE_DOMAIN.value,
+            (step,),
+            "deterministic-inspection-entry",
+        )
+
+    @staticmethod
+    def _deterministic_repair_continuation(state: AgentState) -> PlanProposal | None:
+        """Continue an in-progress repair deterministically.
+
+        ``prepare_start_state`` (``domain_continuation``) sets
+        ``state.intent = "REPAIR"`` and copies the awaited-slot reply plus the
+        carried domain slots into ``state.slots`` whenever the user answers a
+        repair slot prompt. Without this branch, a short follow-up message
+        (e.g. an appointment time like ``2026-08-31T16:00`` or the deferral
+        phrase ``稍后协商``) is routed to the LLM intent classifier on its
+        own and gets mis-classified as UNCERTAIN, wiping out the repair
+        context — even though the bounded-analysis path has a
+        ``state.intent in _INTENT_DOMAINS`` fallback that the semantic
+        gateway path does not.
+
+        By short-circuiting straight to a ``repair_create`` step with the
+        carried slots, the capability layer re-prompts for any still-missing
+        required field and the deferral/real-time paths reach confirmation
+        as designed. ``state.intent`` only becomes ``"REPAIR"`` via the
+        runner's continuation policy, so this branch is a no-op for fresh
+        requests where the LLM should still classify intent.
+        """
+        if state.intent != "REPAIR" or state.slots.get("action") not in {"create", "submit"}:
+            return None
+        parameters: dict[str, Any] = {}
+        for key in ("description", "location", "urgency", "appointment_at"):
+            if key in state.slots:
+                parameters[key] = state.slots[key]
+        parameters.setdefault("urgency", "NORMAL")
+        step = PlanStepProposal(
+            step_id="repair-create-continuation-v2",
+            goal="分步填写并提交报修工单",
+            domain="repair",
+            specialist=SpecialistName.REPAIR.value,
+            capability="repair_create",
+            parameters=parameters,
+        )
+        return PlanProposal(
+            ObjectiveClassification.SINGLE_DOMAIN.value,
+            (step,),
+            "deterministic-repair-continuation",
+        )
 
     def relevant_issue_decision(self, step: PlanStep, data: dict[str, Any]) -> RelevanceDecision:
         semantic_goal = str(step.condition_parameters.get("semantic_goal") or "").strip()
@@ -130,23 +271,32 @@ class SupervisorPlanner:
             else PlanProposal(ObjectiveClassification.UNCERTAIN.value, (), "safe-fallback")
         )
 
-    def _bounded_legacy_proposal(
+    def _bounded_analysis_proposal(
         self, text: str, state: AgentState, runtime: RuntimeContext
     ) -> PlanProposal:
-        analysis = self._legacy_analysis(text, state, runtime)
+        analysis = self._bounded_analysis(text, state, runtime)
         if analysis is None:
             return PlanProposal(ObjectiveClassification.UNCERTAIN.value, (), "safe-fallback")
+        if analysis.intent == "UNCERTAIN" and state.intent in _INTENT_DOMAINS:
+            analysis = ModelAnalysis(
+                intent=state.intent,
+                confidence=0.9,
+                slots=dict(state.slots),
+                provider="bounded_context",
+            )
         if analysis.intent == "GENERAL_HELP":
             return PlanProposal(ObjectiveClassification.GENERAL_HELP.value, (), analysis.provider)
         action = str(analysis.slots.get("action") or state.slots.get("action") or "")
+        if not action and analysis.intent == "BILLING":
+            action = str(analysis.slots.get("query_type") or state.slots.get("query_type") or "")
         if analysis.confidence < 0.9 or not action:
             return PlanProposal(ObjectiveClassification.UNCERTAIN.value, (), "safe-fallback")
-        step = self._legacy_step(analysis.intent, action, {**analysis.slots, **state.slots})
+        step = self._bounded_step(analysis.intent, action, {**analysis.slots, **state.slots})
         if step is None:
             return PlanProposal(ObjectiveClassification.UNCERTAIN.value, (), "safe-fallback")
         return PlanProposal(ObjectiveClassification.SINGLE_DOMAIN.value, (step,), analysis.provider)
 
-    def _legacy_analysis(
+    def _bounded_analysis(
         self, text: str, state: AgentState, runtime: RuntimeContext
     ) -> ModelAnalysis | None:
         try:
@@ -187,6 +337,20 @@ class SupervisorPlanner:
         internal_condition = _CONDITIONS.get(condition_kind) if condition_kind else None
         if condition_kind and internal_condition is None:
             raise ValueError("unknown planning condition")
+        parameters = {
+            **{
+                key: value
+                for key, value in semantic_slots.items()
+                if key not in _TRUSTED_KEYS and not key.startswith("_")
+            },
+            **proposal.parameters,
+        }
+        if proposal.capability == "repair_create":
+            user_text = str(semantic_slots.get("user_text") or "")
+            explicit = deterministic_repair_slots(user_text)
+            for key in ("location", "description"):
+                if explicit.get(key):
+                    parameters[key] = explicit[key]
         return PlanStep(
             step_id=proposal.step_id,
             domain=proposal.domain,
@@ -194,14 +358,7 @@ class SupervisorPlanner:
             goal=proposal.goal,
             dependencies=proposal.dependencies,
             capability=proposal.capability,
-            parameters={
-                **{
-                    key: value
-                    for key, value in semantic_slots.items()
-                    if key not in _TRUSTED_KEYS and not key.startswith("_")
-                },
-                **proposal.parameters,
-            },
+            parameters=parameters,
             condition=internal_condition,
             condition_parameters=(
                 {"semantic_goal": condition["semantic_goal"]} if condition else {}
@@ -225,15 +382,15 @@ class SupervisorPlanner:
         )
 
     @staticmethod
-    def _legacy_step(intent: str, action: str, slots: dict[str, Any]) -> PlanStepProposal | None:
+    def _bounded_step(intent: str, action: str, slots: dict[str, Any]) -> PlanStepProposal | None:
         domain = intent.lower()
-        capability = _legacy_capability(domain, action, slots)
+        capability = _bounded_capability(domain, action, slots)
         if domain not in _DOMAIN_SPECIALIST or capability is None:
             return None
         parameters = {key: value for key, value in slots.items() if key not in _TRUSTED_KEYS}
         return PlanStepProposal(
-            step_id=f"{domain}-legacy",
-            goal="执行明确的单领域兼容请求",
+            step_id=f"{domain}-v2",
+            goal="执行明确的单领域请求",
             domain=domain,
             specialist=_DOMAIN_SPECIALIST[domain].value,
             capability=capability,
@@ -288,9 +445,10 @@ class SupervisorPlanner:
 _TRUSTED_KEYS = frozenset(
     {"actor_id", "community_id", "house_id", "roles", "runtime_version", "approval_ref"}
 )
+_INTENT_DOMAINS = frozenset(intent.upper() for intent in _DOMAIN_SPECIALIST)
 
 
-def _legacy_capability(domain: str, action: str, slots: dict[str, Any]) -> str | None:
+def _bounded_capability(domain: str, action: str, slots: dict[str, Any]) -> str | None:
     mappings = {
         "repair": {
             "create": "repair_create",
@@ -304,6 +462,7 @@ def _legacy_capability(domain: str, action: str, slots: dict[str, Any]) -> str |
         },
         "announcement": {
             "list": "announcement_list",
+            "knowledge": "community_knowledge_search",
             "get": "announcement_get",
             "draft": "announcement_draft",
             "revise": "announcement_revise",
@@ -313,6 +472,7 @@ def _legacy_capability(domain: str, action: str, slots: dict[str, Any]) -> str |
         },
         "inspection": {
             "list": "inspection_list",
+            "query": "inspection_list",
             "get_task": "inspection_get_task",
             "get_event": "inspection_get_event",
             "create": "inspection_create",

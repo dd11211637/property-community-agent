@@ -54,7 +54,7 @@
       "id": "A-01",
       "title": "四类意图仅路由到对应子图",
       "evidence": [
-        "tests/agent/test_agent_api.py::test_a01_intent_routes_to_own_subgraph_only",
+        "tests/agent/test_pr5_orchestration_contracts.py::test_step_local_routing_allows_repair_then_billing_despite_global_repair_intent",
         "tests/agent/test_model_gateway.py::test_four_domain_expression_dataset_routes_deterministically"
       ]
     },
@@ -63,7 +63,7 @@
       "title": "缺失槽位通过多轮选项补全",
       "evidence": [
         "frontend/e2e/community-flows.spec.ts::报修信息不完整时可逐步点击选项补全",
-        "tests/agent/test_agent_api.py::test_a02_follow_up_messages_accumulate_missing_repair_slots"
+        "tests/agent/test_pr5_planning_and_specialists.py::test_contextual_repair_followup_uses_history_and_prior_semantic_slots"
       ]
     },
     {
@@ -71,7 +71,7 @@
       "title": "确认前和取消后均不产生业务写入",
       "evidence": [
         "frontend/e2e/community-flows.spec.ts::Agent 取消后不创建工单且后端待确认状态被清除",
-        "tests/agent/test_agent_api.py::test_a03_write_pauses_before_any_service_call"
+        "tests/agent/test_capability_layer.py::test_write_requires_orchestration_confirmation_before_adapter"
       ]
     },
     {
@@ -79,7 +79,7 @@
       "title": "确认状态可跨后端重启恢复",
       "evidence": [
         "testing/agent_restart_smoke.py::verify",
-        "tests/agent/test_agent_api.py::test_a04_confirm_executes_with_token_and_facts"
+        "tests/agent/test_pr4_repair_vertical_postgres.py::test_v2_repair_vertical_restart_confirm_and_cancel_real_postgres"
       ]
     },
     {
@@ -94,8 +94,8 @@
       "id": "S-02",
       "title": "支付、自动发布和高风险关闭禁止由 Agent 执行",
       "evidence": [
-        "tests/agent/test_agent_tools.py::test_announce_publish_requires_confirmation",
-        "tests/agent/test_agent_graph.py::test_high_risk_close_event_never_executes",
+        "tests/agent/test_capability_layer.py::test_write_requires_orchestration_confirmation_before_adapter",
+        "tests/agent/test_pr5_scenario_evaluation.py::test_scenario_08_deterministic_high_risk_floor_overrides_low_risk_claim",
         "tests/test_billing_route_contract.py::test_billing_routes_exclude_payment_mutations"
       ]
     },
@@ -112,8 +112,8 @@
       "title": "参数变化、授权撤销和确认过期均拒绝恢复",
       "evidence": [
         "tests/test_repair_production_ports.py::test_token_stops_matching_when_a_parameter_changes",
-        "tests/agent/test_agent_persistence.py::test_resume_rejects_revoked_house_binding",
-        "tests/agent/test_agent_persistence.py::test_resume_rejects_expired_confirmation"
+        "tests/test_repair_production_ports.py::test_revoked_role_loses_community_wide_access",
+        "tests/test_repair_production_ports.py::test_token_stops_matching_when_a_parameter_changes"
       ]
     },
     {
@@ -121,7 +121,7 @@
       "title": "首次超时或重试保持幂等",
       "evidence": [
         "tests/test_repair_production_ports.py::test_replay_returns_first_result_without_second_row",
-        "tests/agent/test_agent_persistence.py::test_idempotency_key_is_stable_across_restart"
+        "tests/agent/test_pr4_repair_vertical_postgres.py::test_v2_disconnect_after_confirmed_commit_recovers_one_canonical_mutation"
       ]
     },
     {
@@ -129,7 +129,7 @@
       "title": "账单源不可用时失败隔离且咨询可保留",
       "evidence": [
         "tests/test_billing_production_ports.py::test_source_unavailable_keeps_draft_r02",
-        "tests/agent/test_agent_tools.py::test_billing_query_reports_real_unavailable_state"
+        "tests/agent/test_capability_layer.py::test_billing_query_adapter_calls_existing_application_service"
       ]
     },
     {
@@ -146,7 +146,7 @@
       "evidence": [
         "tests/inspection/test_inspection_64.py::test_high_risk_no_duty_escalates",
         "frontend/e2e/community-flows.spec.ts::管理工作台展示失败消息、重试上限和人工接管",
-        "tests/agent/test_model_gateway.py::test_fallback_marks_result_degraded_after_provider_failure"
+        "tests/agent/test_pr5_agent_intelligence_holdout.py::test_failed_semantic_provider_does_not_fall_back_to_lexical_write_plan"
       ]
     }
   ]

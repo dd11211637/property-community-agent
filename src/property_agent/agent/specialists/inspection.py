@@ -82,6 +82,8 @@ class InspectionSpecialist(StatelessSpecialist):
             "close_high_risk_event": ("event_id",),
         }[capability]
         projected = {key: values.get(key) for key in fields}
+        if capability == "inspection_create":
+            projected["route_points"] = tuple(projected.get("route_points") or ())
         if capability == "inspection_list":
             projected.update(
                 target=projected.get("target") or "task",
@@ -124,9 +126,3 @@ class InspectionSpecialist(StatelessSpecialist):
                 fingerprint=result.fingerprint,
             )
         return super().interpret_error(step, capability, parameters, params_hash, result)
-
-    def success_message(self, capability, data):
-        del data
-        if capability == "inspection_list":
-            return "已查询巡检与安防记录。"
-        return "巡检或安防步骤已完成。"

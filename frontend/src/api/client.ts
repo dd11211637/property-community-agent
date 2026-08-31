@@ -1,3 +1,5 @@
+import { createUuid } from "../platform/uuid";
+
 export type ApiErrorBody = {
   code: string;
   message: string;
@@ -33,11 +35,11 @@ export type RequestOptions = Omit<RequestInit, "body"> & {
 const baseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 
 function requestId(): string {
-  return `web_${crypto.randomUUID()}`;
+  return `web_${createUuid()}`;
 }
 
 export function createIdempotencyKey(operation: string): string {
-  return `${operation}_${crypto.randomUUID()}`;
+  return `${operation}_${createUuid()}`;
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -94,6 +96,13 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     const detail = typeof payload === "object" && payload !== null
       ? (payload as { detail?: unknown }).detail
       : null;
+    const detailRecord = typeof detail === "object" && detail !== null
+      ? detail as { code?: unknown; message?: unknown }
+      : null;
+    const detailCode = typeof detailRecord?.code === "string" ? detailRecord.code : null;
+    const businessMessages: Record<string, string> = {
+      HOUSE_SELECTION_REQUIRED: "请先选择要服务的房屋。",
+    };
     const statusMessages: Record<number, string> = {
       429: "操作过于频繁，请稍后再试。",
       502: "后端服务暂时不可用，请稍后重试。",
@@ -102,8 +111,10 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     };
     const message = typeof detail === "string"
       ? detail
-      : statusMessages[response.status] ?? "请求未成功。";
-    throw new ApiError(response.status, `HTTP_${response.status}`, message);
+      : (detailCode && businessMessages[detailCode]) ??
+        (typeof detailRecord?.message === "string" ? detailRecord.message : null) ??
+        statusMessages[response.status] ?? "请求未成功。";
+    throw new ApiError(response.status, detailCode ?? `HTTP_${response.status}`, message);
   }
   return payload as T;
 }

@@ -27,8 +27,3 @@ class BillingSpecialist(StatelessSpecialist):
             "fee_type": values.get("fee_type"),
             "bill_id": values.get("bill_id"),
         }
-
-    def success_message(self, capability, data):
-        if capability == "billing_query":
-            return f"已查询账单，找到 {data.get('count') or 0} 条记录。"
-        return "账单咨询已提交。"

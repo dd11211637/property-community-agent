@@ -19,6 +19,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import sys
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -52,6 +55,15 @@ from property_agent.platform.http_observability import observe_http_request
 from property_agent.platform.observability import configure_logging
 from property_agent.repair.adapters.api.router import router as repair_router
 from property_agent.repair.domain.errors import BusinessError as RepairBusinessError
+
+
+def configure_windows_event_loop(platform: str | None = None) -> None:
+    """Use the event loop required by psycopg async connections on Windows."""
+    if (platform or sys.platform) != "win32":
+        return
+    policy_type = getattr(asyncio, "WindowsSelectorEventLoopPolicy", None)
+    if policy_type is not None:
+        asyncio.set_event_loop_policy(policy_type())
 
 
 def create_app() -> FastAPI:
@@ -160,3 +172,23 @@ def create_app() -> FastAPI:
 
 # ── Module-level app instance for uvicorn ──────────────────────
 app = create_app()
+
+
+def run_server() -> None:
+    """Run the production app through the platform-compatible local entrypoint."""
+    configure_windows_event_loop()
+    import uvicorn
+
+    config = uvicorn.Config(
+        "property_agent.main:app", host="127.0.0.1", port=8000, access_log=False
+    )
+    server = uvicorn.Server(config)
+    if sys.platform == "win32":
+        with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
+            runner.run(server.serve())
+        return
+    server.run()
+
+
+if __name__ == "__main__":
+    run_server()

@@ -19,7 +19,6 @@ from property_agent.agent.model_gateway import (
     ModelAnalysis,
     ModelGatewayError,
 )
-from property_agent.agent.nodes import classify_intent_node
 from property_agent.agent.planning_contracts import RelevanceDecision
 from property_agent.agent.read_contracts import PlannerAction
 from property_agent.agent.state import GraphState
@@ -338,10 +337,14 @@ def test_fallback_marks_result_degraded_after_provider_failure():
     assert result.degraded is True
 
 
-def test_keyword_gateway_routes_community_knowledge_question_to_general_help():
+def test_keyword_gateway_routes_community_knowledge_question_to_grounded_search():
     result = DeterministicModelGateway().analyze("物业电话是多少")
 
-    assert result.intent == "GENERAL_HELP"
+    assert result.intent == "ANNOUNCEMENT"
+    assert result.slots == {
+        "action": "knowledge",
+        "query": "物业电话是多少",
+    }
     assert result.confidence >= 0.5
 
 
@@ -485,6 +488,14 @@ def test_keyword_guard_fills_explicit_repair_slots_when_model_omits_them():
     assert result.slots["description"] == "客厅电灯坏了，需要报修"
 
 
+def test_deterministic_repair_extracts_unlit_room_location_and_description():
+    result = DeterministicModelGateway().analyze("客厅电灯不亮了")
+
+    assert result.intent == "REPAIR"
+    assert result.slots["location"] == "客厅"
+    assert result.slots["description"] == "客厅电灯不亮了"
+
+
 def test_keyword_guard_rejects_model_location_not_stated_by_user():
     class ContextLeakingAnalysis:
         def ready(self):
@@ -532,57 +543,16 @@ def test_keyword_guard_fills_explicit_inspection_create_slots_when_model_omits_t
     assert result.slots["point"] == "1栋1单元"
 
 
-def test_model_slots_cannot_override_trusted_or_existing_values():
-    class SuggestedGateway:
-        def ready(self):
-            return True
-
-        def analyze(self, text):
-            from property_agent.agent.model_gateway import ModelAnalysis
-
-            return ModelAnalysis(
-                intent="REPAIR",
-                confidence=0.9,
-                slots={
-                    "actor_id": "attacker",
-                    "community_id": "other",
-                    "house_id": "other-house",
-                    "expected_version": 99,
-                    "tool": "announce_publish",
-                    "location": "模型位置",
-                    "description": "水管漏水",
-                },
-            )
-
-    state = GraphState(
-        conversation_id="trusted-boundary",
-        actor_id="real-user",
-        community_id="real-community",
-        current_house_id="real-house",
-        slots={"user_text": "漏水", "location": "用户位置"},
-    )
-    classify_intent_node(SuggestedGateway())(state)
-
-    assert state.actor_id == "real-user"
-    assert state.community_id == "real-community"
-    assert state.current_house_id == "real-house"
-    assert state.slots["location"] == "用户位置"
-    assert state.slots["description"] == "水管漏水"
-    assert "actor_id" not in state.slots
-    assert "house_id" not in state.slots
-    assert "expected_version" not in state.slots
-    assert "tool" not in state.slots
-
-
-def test_container_selects_keyword_without_key_and_fallback_with_key(monkeypatch):
+def test_container_uses_deterministic_only_for_explicit_tests(monkeypatch):
     monkeypatch.setattr(container.settings, "deepseek_api_key", "")
+    monkeypatch.setattr(container.settings, "env", "test")
     assert isinstance(container.build_model_gateway(), DeterministicModelGateway)
 
-    monkeypatch.setattr(container.settings, "deepseek_api_key", "configured")
-    monkeypatch.setattr(container, "FALLBACK_ENABLED", True)
-    assert isinstance(container.build_model_gateway(), FallbackModelGateway)
+    monkeypatch.setattr(container.settings, "env", "production")
+    with pytest.raises(RuntimeError, match="DEEPSEEK_API_KEY"):
+        container.build_model_gateway()
 
-    monkeypatch.setattr(container, "FALLBACK_ENABLED", False)
+    monkeypatch.setattr(container.settings, "deepseek_api_key", "configured")
     assert isinstance(container.build_model_gateway(), DeepSeekModelGateway)
 
 

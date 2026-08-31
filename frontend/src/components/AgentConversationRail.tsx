@@ -2,6 +2,7 @@ import { History, MessageSquarePlus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { apiRequest } from "../api/client";
 import type { AgentConversation } from "../api/contracts";
+import { displayLabel } from "../ui/display";
 
 type Props = {
   activeId: string;
@@ -35,7 +36,7 @@ export function AgentConversationRail({ activeId, refreshKey, onNew, onSelect }:
         onClick={() => onSelect(item)}
       >
         <b>{item.title}</b>
-        <span>{item.last_intent ?? "社区服务"}</span>
+        <span>{item.last_intent ? displayLabel(item.last_intent, "社区服务") : "社区服务"}</span>
       </button>)}
     </div>
   </aside>;

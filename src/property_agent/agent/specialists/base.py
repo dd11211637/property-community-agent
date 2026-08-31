@@ -17,7 +17,9 @@ from property_agent.agent.orchestration import (
     SpecialistResult,
 )
 from property_agent.agent.runtime import RuntimeContext
+from property_agent.agent.specialists.presentation import present_success
 from property_agent.agent.state import AgentState
+from property_agent.inspection.adapters.api.dependencies import to_inspection_context
 from property_agent.platform.application.hashing import canonical_hash
 
 
@@ -62,6 +64,9 @@ class StatelessSpecialist:
         if not result.ok:
             return self.interpret_error(step, capability, parameters, params_hash, result)
         data = result.output.model_dump(mode="json")
+        nested = data.get("data")
+        if len(data) == 1 and isinstance(nested, dict):
+            data = nested
         return SpecialistResult(
             SpecialistOutcome.SUCCESS,
             step.step_id,
@@ -130,8 +135,7 @@ class StatelessSpecialist:
         )
 
     def success_message(self, capability, data) -> str:
-        del capability, data
-        return "该步骤已完成。"
+        return present_success(capability, data)
 
     @staticmethod
     def _confirmed(runtime, state, step, capability, params_hash) -> bool:
@@ -165,6 +169,9 @@ class StatelessSpecialist:
             legacy_state=state,
             write=write,
             trusted_runtime=runtime,
+            inspection_context_projector=lambda context: to_inspection_context(
+                context, context.request_id
+            ),
         )
 
     def _unsupported(self, step, capability, code):

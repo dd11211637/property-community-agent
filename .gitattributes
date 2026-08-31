@@ -1,0 +1,8 @@
+# Evidence / config artifacts that are bound by sha256 must always be checked
+# out with LF line endings. A CRLF conversion (e.g. on Windows with
+# core.autocrlf=true) silently changes the file bytes and breaks the hash gate
+# (see PR7B real-model baseline signature gate).
+
+config/*.json            text eol=lf
+docs/evidence/*.json     text eol=lf
+testing/**/*.json        text eol=lf

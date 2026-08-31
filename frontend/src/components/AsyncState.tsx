@@ -1,4 +1,4 @@
-import { AlertTriangle, Inbox, LoaderCircle, RefreshCw } from "lucide-react";
+import { AlertTriangle, Inbox, RefreshCw } from "lucide-react";
 import { ApiError } from "../api/client";
 
 const statusCopy: Record<number, string> = {
@@ -11,7 +11,7 @@ const statusCopy: Record<number, string> = {
 };
 
 export function Loading({ label = "正在加载" }: { label?: string }) {
-  return <div className="state-card"><LoaderCircle className="spin" /><p>{label}</p></div>;
+  return <div className="state-card skeleton-state" role="status" aria-busy="true" aria-label={label}><div className="skeleton-line wide" /><div className="skeleton-line" /><div className="skeleton-line short" /><span>{label}</span></div>;
 }
 
 export function Empty({ title = "暂无数据", detail = "有新内容时会显示在这里。" }) {

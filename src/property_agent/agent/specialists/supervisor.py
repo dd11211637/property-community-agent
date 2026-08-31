@@ -49,9 +49,10 @@ class Supervisor:
         duration = timedelta(seconds=runtime.execution_policy.plan_duration_seconds)
         if state.plan is None:
             state.plan = self._planner.create_plan(state, runtime)
-            self._set_objective_context(state)
+            _set_objective_context(state)
             state.orchestration_budget = OrchestrationBudget.start(now=now, duration=duration)
-            self._emit(
+            _emit(
+                self._observe,
                 "supervisor_plan_created",
                 {
                     "plan_id": state.plan.plan_id,
@@ -125,7 +126,8 @@ class Supervisor:
             if cross_domain:
                 changes["cross_domain_steps"] = 1
             self._increment_budget(state, **changes)
-            self._emit(
+            _emit(
+                self._observe,
                 "specialist_delegated",
                 {"specialist": step.specialist.value, "capability": step.capability},
             )
@@ -177,7 +179,8 @@ class Supervisor:
             }
         if result.public_message:
             state.add_message("assistant", result.public_message)
-        self._emit(
+        _emit(
+            self._observe,
             "specialist_completed",
             {
                 "specialist": result.specialist.value,
@@ -197,9 +200,11 @@ class Supervisor:
         state._resume = None
         if state.plan is not None:
             state.plan = replace(state.plan, status=PlanStatus.ACTIVE)
-        state.add_message("assistant", "已取消当前待确认操作，未执行该业务写入。")
+        state.add_message("assistant", "已取消，未执行任何操作。")
 
     def synthesize(self, state: AgentState) -> str:
+        if state.messages and state.messages[-1].get("content") == "已取消，未执行任何操作。":
+            return "已取消，未执行任何操作。"
         plan = state.plan
         if plan is None:
             return "当前没有可汇总的任务。"
@@ -216,10 +221,16 @@ class Supervisor:
             GoalOutcome.HANDOVER: "需人工处理",
         }
         parts = []
+        results = {item.step_id: item for item in state.specialist_results}
         for step in plan.steps:
             outcome = state.goal_outcomes.get(step.step_id)
             if outcome is not None:
-                parts.append(f"{step.goal}：{labels[outcome]}")
+                result = results.get(step.step_id)
+                public_message = result.public_message if result is not None else ""
+                if public_message:
+                    parts.append(f"{public_message}（{labels[outcome]}）")
+                else:
+                    parts.append(f"{step.goal}：{labels[outcome]}")
         return "；".join(parts) if parts else "任务尚未产生可核验结果。"
 
     def _select_next_eligible(self, state: AgentState) -> None:
@@ -346,7 +357,7 @@ class Supervisor:
         if state.plan is not None:
             state.plan = replace(state.plan, status=PlanStatus.FAILED, replan_reason=reason)
         state.error = reason
-        self._emit("supervisor_budget_exhausted", {"reason": reason})
+        _emit(self._observe, "supervisor_budget_exhausted", {"reason": reason})
         return state
 
     @staticmethod
@@ -406,20 +417,25 @@ class Supervisor:
             public_message="本轮执行预算已用尽。",
         )
 
-    def _emit(self, event: str, fields: dict[str, Any]) -> None:
-        try:
-            self._observe(event, fields)
-        except Exception:
-            return
 
-    @staticmethod
-    def _set_objective_context(state: AgentState) -> None:
-        plan = state.plan
-        if plan.steps:
-            intent = plan.steps[0].domain.upper()
-        elif plan.objective_classification == ObjectiveClassification.GENERAL_HELP:
-            intent = "GENERAL_HELP"
-        else:
-            intent = "UNCERTAIN"
-        state.intent = intent
-        state.domain = domain_from_legacy(intent, state.slots)
+def _emit(
+    observer: Callable[[str, dict[str, Any]], None], event: str, fields: dict[str, Any]
+) -> None:
+    """Keep telemetry failures outside the orchestration control path."""
+    try:
+        observer(event, fields)
+    except Exception:
+        return
+
+
+def _set_objective_context(state: AgentState) -> None:
+    plan = state.plan
+    if plan.steps:
+        intent = plan.steps[0].domain.upper()
+        state.slots.update(plan.steps[0].parameters)
+    elif plan.objective_classification == ObjectiveClassification.GENERAL_HELP:
+        intent = "GENERAL_HELP"
+    else:
+        intent = "UNCERTAIN"
+    state.intent = intent
+    state.domain = domain_from_legacy(intent, state.slots)

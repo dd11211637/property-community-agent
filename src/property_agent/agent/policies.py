@@ -30,7 +30,8 @@ class OperationLevel(StrEnum):
 # 各意图的必填槽位（确定性必填校验，PRD §6.5.5 必须用确定性逻辑）。
 SLOT_SPECS: dict[str, list[str]] = {
     # Residents provide observable facts. Category is derived by the system.
-    "REPAIR": ["description", "location"],
+    # appointment_at 是报修必填槽位（可填“稍后协商”延期），编排层会追问直到用户明确答复。
+    "REPAIR": ["description", "location", "appointment_at"],
     "ANNOUNCEMENT": ["title", "body", "audience"],
     "BILLING": ["query_type"],
     "INSPECTION": ["action"],

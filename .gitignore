@@ -21,6 +21,7 @@ Desktop.ini
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.pytest-tmp-*/
 .mypy_cache/
 .ruff_cache/
 .coverage
@@ -47,3 +48,12 @@ alembic/versions/__pycache__/
 物业社区管理智能体_MVP_PRD.md
 物业社区管理智能体_PRD.md
 物业社区管理智能体_下一阶段PRD.md
+
+# Local worktree / editor mirrors and runtime artifacts
+.p0work/
+.workbuddy/
+*.log
+logs/
+
+# Node dependencies (global, not just frontend/)
+node_modules/

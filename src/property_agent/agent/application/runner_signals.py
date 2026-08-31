@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from property_agent.agent.policies import Intent
+from property_agent.agent.repair_location import extract_repair_location
 from property_agent.agent.state import GraphState
 from property_agent.agent.working_state import (
     DomainWorkingState,
@@ -29,8 +30,23 @@ _INSPECTION_ACTION_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("start_task", ("开始巡检", "开始任务", "执行巡检")),
     ("add_record", ("追加记录", "添加记录", "补充记录")),
     ("submit_records", ("提交记录", "结束巡检")),
-    ("create", ("创建巡检", "新建巡检", "安排巡检", "开展巡检", "进行巡检")),
-    ("query", ("查询任务", "查询事件", "巡检任务", "巡检记录", "都完成", "完成了吗")),
+    (
+        "create",
+        (
+            "创建巡检",
+            "新建巡检",
+            "安排巡检",
+            "开展巡检",
+            "进行巡检",
+            "发起巡检",
+            "设定巡检",
+            "设置巡检",
+        ),
+    ),
+    (
+        "query",
+        ("查询任务", "查询事件", "巡检任务", "巡检记录", "巡检安防事项", "都完成", "完成了吗"),
+    ),
 )
 
 _INSPECTION_SLOT_GROUPS = {
@@ -146,10 +162,9 @@ def explicit_repair_corrections(text: str) -> dict[str, str]:
     if not any(marker in text for marker in ("不是", "改成", "换成")):
         return {}
     corrections: dict[str, str] = {}
-    locations = ("厨房", "卫生间", "客厅", "卧室", "阳台", "玄关", "楼道", "车库")
-    mentioned_locations = [value for value in locations if value in text]
-    if mentioned_locations:
-        corrections["location"] = mentioned_locations[-1]
+    location = extract_repair_location(text, prefer_last=True)
+    if location:
+        corrections["location"] = location
     symptom_cues = (
         "漏电",
         "电路",
@@ -206,18 +221,31 @@ def resolve_repair_followup(
     user_text: str,
     explicit_corrections: dict[str, str],
 ) -> tuple[dict[str, Any], str | None]:
-    """若上一轮已有活跃工单且用户改口/回归，直接说明不重复建单。"""
+    """续接已提交的报修，不重复建单或伪造预约结果。"""
     if previous is None or not isinstance(previous.domain, RepairWorkingState):
         return {}, None
     repair = previous.domain
-    if not repair.work_order_id:
+    work_order = _active_repair_work_order(previous)
+    business_no = str(repair.work_order_id or work_order.get("business_no") or "").strip()
+    if not business_no:
         return {}, None
+    if _is_repair_appointment_request(user_text):
+        followup = {
+            "work_order_id": business_no,
+            "location": repair.location or str(work_order.get("location") or ""),
+            "description": repair.description or "",
+        }
+        message = (
+            f"工单 {business_no} 当前还在等待维修人员接单，"
+            "我不能直接确认该上门时间。维修人员接单后会与您联系确认，"
+            "您也可以在“报修服务”的工单详情中查看预约状态。"
+        )
+        return followup, message
     correction_or_return = any(
         marker in user_text for marker in ("不是", "改成", "换成", "回到", "刚才")
     )
     if not correction_or_return:
         return {}, None
-    business_no = str(repair.work_order_id)
     location = explicit_corrections.get("location") or repair.location or ""
     description = explicit_corrections.get("description") or repair.description or ""
     followup = {
@@ -230,6 +258,25 @@ def resolve_repair_followup(
         "正在处理中；如需正式修改地点或补充说明，请致电物业。"
     )
     return followup, message
+
+
+def _active_repair_work_order(previous: GraphState) -> dict[str, Any]:
+    result = previous.tool_result or {}
+    data = result.get("data")
+    if not isinstance(data, dict):
+        return {}
+    work_order = data.get("work_order")
+    return work_order if isinstance(work_order, dict) else {}
+
+
+def _is_repair_appointment_request(user_text: str) -> bool:
+    text = "".join(str(user_text or "").split())
+    visit_signal = any(marker in text for marker in ("上门", "来修", "过来修", "预约"))
+    time_signal = any(
+        marker in text
+        for marker in ("今晚", "明天", "后天", "上午", "下午", "晚上", "点", ":", "：")
+    )
+    return visit_signal and time_signal
 
 
 @dataclass(slots=True)

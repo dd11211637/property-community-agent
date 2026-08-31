@@ -401,7 +401,9 @@ def _bill_status(run):
 def _draft_body(run):
     if not run.state.specialist_results:
         return ""
-    draft = run.state.specialist_results[-1].data.get("data", {}).get("draft", {})
+    result = run.state.specialist_results[-1].data
+    payload = result.get("data") if isinstance(result.get("data"), dict) else result
+    draft = payload.get("draft", {})
     return str(draft.get("body", ""))
 
 

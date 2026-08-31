@@ -1044,6 +1044,18 @@
       "CreateWorkOrderRequest": {
         "additionalProperties": false,
         "properties": {
+          "appointment_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Appointment At"
+          },
           "attachment_ids": {
             "items": {
               "format": "uuid",

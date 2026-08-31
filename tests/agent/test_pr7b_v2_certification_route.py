@@ -2,7 +2,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 from property_agent.agent.adapters.api.certification_router import prepare_v2_conversation
-from property_agent.agent.runtime_version import AgentRuntimeVersion, RuntimeSelectionPolicy
+from property_agent.agent.runtime_version import AgentRuntimeVersion
 from property_agent.main import create_app
 
 
@@ -13,7 +13,7 @@ def test_normal_production_composition_has_no_v2_certification_route(monkeypatch
     monkeypatch.setattr(main.settings, "certification_write_enabled", False)
     app = create_app()
     assert "/api/certification/v2-conversations" not in app.openapi()["paths"]
-    assert RuntimeSelectionPolicy().select_new() is AgentRuntimeVersion.V1
+    assert AgentRuntimeVersion.from_str("v2") is AgentRuntimeVersion.V2
 
 
 def test_preproduction_certification_route_is_conditionally_mounted(monkeypatch):

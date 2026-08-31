@@ -2,7 +2,10 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Query
+from sqlalchemy.orm import Session
 
+from property_agent.platform.infrastructure.database import get_db
+from property_agent.platform.infrastructure.orm_models import HouseModel, UserModel
 from property_agent.repair.adapters.api.dependencies import get_request_context, get_service
 from property_agent.repair.adapters.api.schemas import (
     AssignRequest,
@@ -36,6 +39,36 @@ def _success(data, context: RequestContext) -> Envelope:
     return Envelope(success=True, data=data, error=None, request_id=context.request_id)
 
 
+def _visit_details(work_order, service, context: RequestContext, db: Session) -> dict:
+    """Build trusted resident, address, and appointment details for an authorized order."""
+    reporter = db.get(UserModel, work_order.reporter_id)
+    house = db.get(HouseModel, work_order.house_id)
+    if reporter is None or reporter.community_id != context.community_id:
+        reporter = None
+    if house is None or house.community_id != context.community_id:
+        house = None
+    # 当前预约时间 = max(初始预约, 改约 timeline entries)。
+    # CREATE 时的初始预约只在 work_order.appointment_at 上，timeline entry 不带
+    # （_add_status_log 不写 appointment_at）；改约通过 add_process_record 写
+    # timeline entry.appointment_at。两者合并取最新，覆盖"初始即有预约但详情显示
+    # 尚未预约"的回归。
+    candidates = [
+        item.appointment_at
+        for item in service.timeline(work_order.id, context)
+        if item.appointment_at is not None
+    ]
+    if work_order.appointment_at is not None:
+        candidates.append(work_order.appointment_at)
+    return {
+        "resident_name": reporter.display_name if reporter else None,
+        "resident_phone": reporter.phone if reporter else None,
+        "house_address": (
+            f"{house.building}栋 {house.unit}单元 {house.room_no}室" if house else None
+        ),
+        "appointment_at": max(candidates).isoformat() if candidates else None,
+    }
+
+
 @router.post("", response_model=Envelope, status_code=201)
 def create_work_order(
     payload: CreateWorkOrderRequest,
@@ -50,6 +83,7 @@ def create_work_order(
             location=payload.location,
             description=payload.description,
             urgency=payload.urgency,
+            appointment_at=payload.appointment_at,
             confirmation_token=payload.confirmation_token,
             attachment_ids=tuple(payload.attachment_ids),
         ),
@@ -94,9 +128,12 @@ def get_work_order(
     work_order_id: UUID,
     service: ServiceDependency,
     context: ContextDependency,
+    db: Session = Depends(get_db),  # noqa: B008
 ) -> Envelope:
     result = service.get(work_order_id, context)
-    return _success(work_order_data(result, service, context), context)
+    data = work_order_data(result, service, context)
+    data.update(_visit_details(result, service, context, db))
+    return _success(data, context)
 
 
 @router.get("/{work_order_id}/timeline", response_model=Envelope)

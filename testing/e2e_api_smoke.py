@@ -128,6 +128,7 @@ def run(base_url: str, *, client: Any | None = None) -> dict[str, Any]:
             "location": "1栋1单元101厨房",
             "description": "E2E：厨房水管漏水",
             "urgency": "NORMAL",
+            "appointment_at": "2026-09-01T15:00:00+08:00",
             "attachment_ids": [],
         }
         repair_token = api.confirmation(resident, "CREATE_WORK_ORDER", repair_parameters)
@@ -459,7 +460,9 @@ def run(base_url: str, *, client: Any | None = None) -> dict[str, Any]:
                 "slots": {"query_type": "list"},
             },
         )
-        assert agent_result["intent"] == "BILLING" and agent_result["facts"] is not None
+        assert agent_result["intent"] == "BILLING" and agent_result["facts"] is not None, (
+            agent_result
+        )
 
         return {
             "auth": {

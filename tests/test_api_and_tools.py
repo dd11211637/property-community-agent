@@ -33,7 +33,7 @@ def test_create_api_uses_unified_envelope(service, ids, resident_context) -> Non
 
     response = client.post(
         "/api/work-orders",
-        json=create_payload(ids),
+        json={**create_payload(ids), "appointment_at": "2026-09-01T15:00:00+08:00"},
         headers={"Idempotency-Key": "api-create", "X-Request-ID": "req_api"},
     )
 
@@ -41,6 +41,7 @@ def test_create_api_uses_unified_envelope(service, ids, resident_context) -> Non
     body = response.json()
     assert body["success"] is True
     assert body["data"]["status"] == WorkOrderStatus.PENDING_ASSIGNMENT
+    assert body["data"]["appointment_at"] == "2026-09-01T15:00:00+08:00"
     assert body["request_id"] == resident_context.request_id
 
 
