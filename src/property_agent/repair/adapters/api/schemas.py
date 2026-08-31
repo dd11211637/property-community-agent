@@ -21,6 +21,7 @@ class CreateWorkOrderRequest(StrictModel):
     location: str = Field(min_length=1, max_length=128)
     description: str = Field(min_length=1)
     urgency: Urgency
+    appointment_at: datetime | None = None
     confirmation_token: str = Field(min_length=1)
     attachment_ids: list[UUID] = Field(default_factory=list)
 

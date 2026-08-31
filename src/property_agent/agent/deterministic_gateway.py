@@ -28,6 +28,26 @@ _COMMUNITY_KNOWLEDGE_CUES = (
     "装修规定",
     "门禁规定",
 )
+_INSPECTION_TASK_QUERY_MARKERS = (
+    "查询任务",
+    "查看任务",
+    "巡检任务",
+    "巡检记录",
+    "巡检进度",
+    "巡检安防事项",
+    "都完成",
+    "完成了吗",
+    "完成了没",
+)
+_INSPECTION_TASK_CREATE_MARKERS = (
+    "创建巡检",
+    "新建巡检",
+    "安排巡检",
+    "开展巡检",
+    "发起巡检",
+    "设定巡检",
+    "设置巡检",
+)
 
 
 def _business_today() -> date:
@@ -181,24 +201,13 @@ def _deterministic_announcement_slots(text: str, today: date) -> dict[str, Any]:
     return slots
 
 
-def _deterministic_inspection_slots(text: str) -> dict[str, Any]:
+def deterministic_inspection_slots(text: str) -> dict[str, Any]:
     text = text or ""
     slots: dict[str, Any] = {}
-    task_query = any(
-        marker in text
-        for marker in (
-            "查询任务",
-            "查看任务",
-            "巡检任务",
-            "巡检记录",
-            "巡检进度",
-            "都完成",
-            "完成了吗",
-            "完成了没",
-        )
-    )
+    task_query = any(marker in text for marker in _INSPECTION_TASK_QUERY_MARKERS)
     task_create = (
-        any(marker in text for marker in ("创建巡检", "新建巡检", "安排巡检", "开展巡检"))
+        any(marker in text for marker in _INSPECTION_TASK_CREATE_MARKERS)
+        or (any(marker in text for marker in ("创建", "新建", "安排")) and "巡检" in text)
         or ("我要" in text and "巡检" in text)
         or ("对" in text and "进行巡检" in text)
     ) and not any(marker in text for marker in ("了吗", "了没", "进度", "查询", "查看"))
@@ -381,7 +390,7 @@ class DeterministicModelGateway:
         if intent == Intent.ANNOUNCEMENT.value:
             return _deterministic_announcement_slots(text, today)
         if intent == Intent.INSPECTION.value:
-            return _deterministic_inspection_slots(text)
+            return deterministic_inspection_slots(text)
         return {}
 
     def classify_intent(self, text: str) -> tuple[str, float]:

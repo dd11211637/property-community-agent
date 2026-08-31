@@ -220,6 +220,7 @@ def test_real_four_domains_cross_domain_hitl_and_human_only(pr5_runtime):
             "description": "厨房漏水",
             "location": "厨房",
             "urgency": "NORMAL",
+            "appointment_at": "2026-09-01 15:00",
         },
         "repair_create",
     )

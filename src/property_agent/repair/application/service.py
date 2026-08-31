@@ -60,18 +60,13 @@ class WorkOrderService:
         self._require_role(context, *CREATE_ROLES)
         self._require_idempotency_key(idempotency_key)
         self._validate_create(command)
-
         confirmed_parameters = asdict(command)
         confirmed_parameters.pop("confirmation_token", None)
-        # approval_ref 是服务端在确认时生成的"审批锁指针"，不是业务参数本身：
-        # 不应进入参数指纹（避免确认动作换一次 approval_ref 就被错判为参数变更）。
+        # approval_ref 是服务端审批锁指针，不属于业务参数指纹。
         confirmed_parameters.pop("approval_ref", None)
         request_hash = canonical_hash(confirmed_parameters)
-
         if command.urgency == Urgency.HIGH_RISK:
-            # PRD 6.1: a high-risk report never becomes an ordinary work order.
-            # It creates a manual-handover ticket and notifies duty staff, and
-            # the caller receives HANDOVER_REQUIRED carrying the ticket ID.
+            # PRD 6.1: high-risk reports create a manual-handover ticket.
             ticket_id, notified = self._hand_over_high_risk(
                 command,
                 context,
@@ -79,7 +74,6 @@ class WorkOrderService:
                 request_hash=request_hash,
             )
             raise handover_required(handover_ticket_id=ticket_id, notified_staff=notified)
-
         operation = "CREATE_WORK_ORDER"
         with self._unit_of_work_factory() as uow:
             replay = self._idempotent_replay(uow, context, operation, idempotency_key, request_hash)
@@ -118,6 +112,7 @@ class WorkOrderService:
                 location=command.location.strip(),
                 description=command.description.strip(),
                 urgency=command.urgency,
+                appointment_at=command.appointment_at,
                 create_idempotency_key=idempotency_key,
                 created_at=now,
                 updated_at=now,
@@ -492,8 +487,6 @@ class WorkOrderService:
             raise not_found()
         return work_order
 
-    # ── High-risk manual handover (PRD 6.1) ────────────────────────
-
     def _hand_over_high_risk(
         self,
         command: CreateWorkOrderCommand,
@@ -502,15 +495,9 @@ class WorkOrderService:
         idempotency_key: str,
         request_hash: str,
     ) -> tuple[UUID, int]:
-        """Create a manual-handover ticket for a high-risk report.
+        """Atomically create a handover ticket, notifications, and audit trail.
 
-        Performs the same authorisation, attachment and confirmation checks as
-        a normal creation, then persists the ticket, notifies every duty staff
-        member and writes the audit trail — all in one transaction. Nothing is
-        returned to the caller until the commit succeeds, so a failure never
-        produces a fake ticket number (PRD 6.1 "接口失败不生成虚假单号").
-
-        Returns the ticket ID and the number of notified staff members.
+        Returns the ticket ID and notified staff count only after commit.
         """
         operation = "CREATE_WORK_ORDER_HANDOVER"
         with self._unit_of_work_factory() as uow:
@@ -707,6 +694,9 @@ class WorkOrderService:
             "created_at": work_order.created_at.isoformat(),
             "updated_at": work_order.updated_at.isoformat(),
             "closed_at": work_order.closed_at.isoformat() if work_order.closed_at else None,
+            "appointment_at": (
+                work_order.appointment_at.isoformat() if work_order.appointment_at else None
+            ),
             "has_review": work_order.has_review,
         }
 
@@ -730,6 +720,11 @@ class WorkOrderService:
             updated_at=datetime.fromisoformat(snapshot["updated_at"]),
             closed_at=(
                 datetime.fromisoformat(snapshot["closed_at"]) if snapshot["closed_at"] else None
+            ),
+            appointment_at=(
+                datetime.fromisoformat(snapshot["appointment_at"])
+                if snapshot["appointment_at"]
+                else None
             ),
             has_review=snapshot["has_review"],
         )

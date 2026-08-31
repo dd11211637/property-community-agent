@@ -145,6 +145,7 @@ def _start(facade: Any, context: RequestContext, house_id: Any, conversation_id:
             "description": "厨房水管漏水",
             "location": "厨房",
             "urgency": "NORMAL",
+            "appointment_at": "2026-09-01 15:00",
         },
     )
     return turn, turn_data(turn)
@@ -308,6 +309,7 @@ def test_v2_stream_checkpoint_success_then_accepted_failure_has_no_public_succes
                     "description": "厨房水管漏水",
                     "location": "厨房",
                     "urgency": "NORMAL",
+                    "appointment_at": "2026-09-01 15:00",
                 },
             ),
             registry=registry,
@@ -451,6 +453,7 @@ def test_v2_sync_and_stream_paths_converge_on_canonical_state(
                 "description": "厨房水管漏水",
                 "location": "厨房",
                 "urgency": "NORMAL",
+                "appointment_at": "2026-09-01 15:00",
             },
         )
     )

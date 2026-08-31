@@ -29,6 +29,9 @@ def work_order_data(
         "created_at": work_order.created_at.isoformat(),
         "updated_at": work_order.updated_at.isoformat(),
         "closed_at": work_order.closed_at.isoformat() if work_order.closed_at else None,
+        "appointment_at": (
+            work_order.appointment_at.isoformat() if work_order.appointment_at else None
+        ),
     }
 
 
@@ -42,5 +45,6 @@ def timeline_entry_data(entry: TimelineEntry) -> dict[str, Any]:
         "to_status": entry.to_status,
         "reason": entry.reason,
         "note": entry.note,
+        "appointment_at": entry.appointment_at.isoformat() if entry.appointment_at else None,
         "attachment_ids": [str(value) for value in entry.attachment_ids],
     }

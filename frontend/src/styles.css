@@ -394,6 +394,16 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .repair-next { display: flex; align-items: center; align-self: center; gap: 6px; color: var(--ink-muted); font-size: 12px; }
 .repair-next svg { width: 15px; }
 .repair-detail-summary { padding: 18px; border-radius: 12px; background: var(--surface-muted); }
+.repair-summary-heading, .visit-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.repair-summary-heading strong { display: block; margin-top: 4px; font-size: 21px; }
+.visit-card { margin-top: 14px; padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.visit-card-heading h3 { margin: 3px 0 0; font-size: 18px; }
+.contact-button { min-height: 40px; white-space: nowrap; }
+.visit-details { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; margin: 14px 0 0; }
+.visit-details > div { padding: 12px 0; border-top: 1px solid var(--line); }
+.visit-details dt { display: flex; align-items: center; gap: 7px; color: var(--ink-muted); font-size: 13px; }
+.visit-details dt svg { width: 15px; height: 15px; }
+.visit-details dd { margin: 5px 0 0 22px; color: var(--ink-strong); font-weight: 650; line-height: 1.5; }
 .repair-detail-summary h3 { margin: 13px 0 5px; font-size: 21px; }
 .repair-detail-summary p { margin: 0 0 12px; color: var(--ink); line-height: 1.7; }
 .repair-detail-summary small { color: var(--ink-muted); }
@@ -427,4 +437,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .bill-card.current { grid-column: auto; }
   .charge-breakdown, .announcement-queue { grid-template-columns: 1fr; }
   .repair-item { grid-template-columns: 1fr; }
+  .visit-details { grid-template-columns: 1fr; }
+  .visit-card-heading { align-items: stretch; flex-direction: column; }
+  .contact-button { min-height: 44px; justify-content: center; }
 }

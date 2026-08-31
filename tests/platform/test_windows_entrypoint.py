@@ -1,6 +1,8 @@
 import asyncio
 import sys
 
+import uvicorn
+
 from property_agent import main
 from property_agent.main import configure_windows_event_loop
 
@@ -9,7 +11,7 @@ def test_windows_entrypoint_installs_selector_policy(monkeypatch):
     installed = []
     sentinel = object()
 
-    monkeypatch.setattr(asyncio, "WindowsSelectorEventLoopPolicy", lambda: sentinel)
+    monkeypatch.setattr(asyncio, "WindowsSelectorEventLoopPolicy", lambda: sentinel, raising=False)
     monkeypatch.setattr(asyncio, "set_event_loop_policy", installed.append)
 
     configure_windows_event_loop("win32")
@@ -50,8 +52,8 @@ def test_windows_server_uses_selector_runner(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(asyncio, "Runner", FakeRunner)
     monkeypatch.setattr(main, "configure_windows_event_loop", lambda: None)
-    monkeypatch.setattr("uvicorn.Config", lambda *_args, **_kwargs: object())
-    monkeypatch.setattr("uvicorn.Server", lambda _config: FakeServer())
+    monkeypatch.setattr(uvicorn, "Config", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(uvicorn, "Server", lambda _config: FakeServer())
 
     main.run_server()
 

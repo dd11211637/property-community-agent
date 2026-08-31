@@ -245,6 +245,62 @@ def test_explicit_inspection_and_announcement_actions_map_to_canonical_capabilit
     assert announcement_plan.steps[0].capability == "announce_publish"
 
 
+def test_generic_publish_announcement_starts_guided_draft_instead_of_requesting_internal_id():
+    semantic = proposal(
+        step(
+            "announcement-publish",
+            "announcement",
+            "announce_publish",
+            "发布现有公告",
+        )
+    )
+
+    plan = SupervisorPlanner(StaticPlanningGateway(semantic)).create_plan(
+        _state("我要发布公告"), _runtime()
+    )
+
+    assert plan.steps[0].capability == "announcement_create_draft"
+    assert plan.steps[0].parameters["action"] == "create"
+    assert "announcement_id" not in plan.steps[0].parameters
+
+
+def test_guided_announcement_continues_when_model_cannot_classify_field_reply():
+    state = _state("1栋临时停水通知")
+    state.intent = "ANNOUNCEMENT"
+    state.slots["title"] = "1栋临时停水通知"
+    uncertain = proposal(classification=ObjectiveClassification.UNCERTAIN.value)
+
+    plan = SupervisorPlanner(StaticPlanningGateway(uncertain)).create_plan(state, _runtime())
+
+    assert plan.steps[0].capability == "announcement_create_draft"
+    assert plan.steps[0].parameters["title"] == "1栋临时停水通知"
+
+
+@pytest.mark.parametrize("user_text", ["巡检任务完成了吗", "巡检安防事项"])
+def test_inspection_task_queries_are_stable_when_model_cannot_classify(user_text):
+    plan = SupervisorPlanner(
+        StaticPlanningGateway(proposal(classification=ObjectiveClassification.UNCERTAIN.value))
+    ).create_plan(_state(user_text), _runtime())
+
+    assert plan.steps[0].capability == "inspection_list"
+    assert plan.steps[0].parameters["target"] == "task"
+
+
+def test_generic_inspection_creation_starts_and_continues_guided_fields():
+    gateway = StaticPlanningGateway(
+        proposal(classification=ObjectiveClassification.UNCERTAIN.value)
+    )
+    first = SupervisorPlanner(gateway).create_plan(_state("发起巡检"), _runtime())
+    state = _state("每周小区安防")
+    state.intent = "INSPECTION"
+    state.slots.update(action="create", title="每周小区安防")
+    continued = SupervisorPlanner(gateway).create_plan(state, _runtime())
+
+    assert first.steps[0].capability == "inspection_create"
+    assert continued.steps[0].capability == "inspection_create"
+    assert continued.steps[0].parameters["title"] == "每周小区安防"
+
+
 def test_deepseek_knowledge_search_proposal_survives_normalization_and_validation():
     def handler(_request):
         content = json.dumps(
@@ -375,6 +431,25 @@ def test_inspection_not_found_requests_materially_different_replan():
     assert result.data["replacement_parameters"]["target"] == "task"
 
 
+def test_inspection_create_does_not_treat_optional_route_points_as_missing():
+    step_value = PlanStep(
+        "inspection-create",
+        "inspection",
+        SpecialistName.INSPECTION,
+        "create task",
+        capability="inspection_create",
+        parameters={"title": "每周安防", "description": None, "point": None},
+    )
+
+    result = InspectionSpecialist(_executor({})).invoke(
+        step_value, _state("发起巡检"), _runtime(), ()
+    )
+
+    assert result.outcome is SpecialistOutcome.NEEDS_CLARIFICATION
+    assert set(result.missing_inputs) == {"description", "point"}
+    assert "route_points" not in result.missing_inputs
+
+
 def test_inspection_event_not_found_replans_to_event_discovery_with_filters():
     def missing(_request, _runtime):
         raise CapabilityDomainError("EVENT_NOT_FOUND", "未找到安防事件")
@@ -419,7 +494,12 @@ def test_non_null_prepared_write_does_not_confirm_a_different_exact_action():
             )
         }
     )
-    parameters = {"description": "漏水", "location": "厨房", "urgency": "NORMAL"}
+    parameters = {
+        "description": "漏水",
+        "location": "厨房",
+        "urgency": "NORMAL",
+        "appointment_at": None,
+    }
     step = PlanStep(
         "write-b",
         "repair",

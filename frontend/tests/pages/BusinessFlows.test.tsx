@@ -32,6 +32,71 @@ afterEach(() => {
 });
 
 describe("M3 business pages", () => {
+  it("keeps the resident appointment unchanged from confirmation to creation", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/work-orders" && method === "GET") {
+        return envelope({ items: [], total: 0, limit: 20, offset: 0 });
+      }
+      if (url === "/api/confirmations" && method === "POST") {
+        return envelope({ token: "confirm-token" });
+      }
+      if (url === "/api/work-orders" && method === "POST") {
+        return envelope({ id: "work-created" });
+      }
+      throw new Error(`unexpected request: ${method} ${url}`);
+    });
+
+    renderAs(<RepairsPage />, ["RESIDENT"]);
+    fireEvent.click(await screen.findByRole("button", { name: "新建报修" }));
+    fireEvent.change(screen.getByLabelText("具体位置"), { target: { value: "卧室" } });
+    fireEvent.change(screen.getByLabelText("问题描述"), { target: { value: "卧室插座漏电损坏" } });
+    fireEvent.change(screen.getByLabelText("预约上门时间（可选）"), {
+      target: { value: "2026-08-31T21:25" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "核对并提交" }));
+
+    expect(await screen.findByText("确认创建报修工单")).toBeInTheDocument();
+    expect(screen.getByText("预约上门时间").closest("div")).toHaveTextContent(/2026.*21:25/);
+    fireEvent.click(screen.getByRole("button", { name: "确认提交" }));
+
+    const expectedAppointment = new Date("2026-08-31T21:25").toISOString();
+    await waitFor(() => {
+      const postBodies = fetchMock.mock.calls
+        .filter(([, init]) => init?.method === "POST")
+        .map(([, init]) => JSON.parse(String(init?.body)));
+      expect(postBodies[0].parameters.appointment_at).toBe(expectedAppointment);
+      expect(postBodies[1].appointment_at).toBe(expectedAppointment);
+    });
+  });
+
+  it("shows the worker who to contact, where to go, and when to arrive", async () => {
+    const workOrder = {
+      id: "work-visit", business_no: "WO-VISIT", house_id: "house-1", category: "ELECTRICAL",
+      location: "客厅", description: "电灯不亮", urgency: "NORMAL", status: "ACCEPTED",
+      version: 4, assignee_id: "worker-1", available_actions: ["RECORD_PROGRESS"],
+      resident_name: "张三", resident_phone: "13800000001", house_address: "2栋 1单元 1203室",
+      appointment_at: "2026-08-31T06:30:00Z",
+    };
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/work-orders") return envelope({ items: [workOrder], total: 1, limit: 20, offset: 0 });
+      if (url === "/api/work-orders/work-visit") return envelope(workOrder);
+      if (url === "/api/work-orders/work-visit/timeline") return envelope([]);
+      throw new Error(`unexpected request: ${url}`);
+    });
+
+    renderAs(<RepairsPage />, ["REPAIR_WORKER"]);
+    fireEvent.click(await screen.findByText("电灯不亮"));
+
+    expect(await screen.findByText("张三")).toBeInTheDocument();
+    expect(screen.getByText("13800000001")).toBeInTheDocument();
+    expect(screen.getByText("2栋 1单元 1203室 · 客厅")).toBeInTheDocument();
+    expect(screen.getByText(/2026\/8\/31/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "拨打电话" })).toHaveAttribute("href", "tel:13800000001");
+  });
+
   it("executes a repair action with the backend version and idempotency key", async () => {
     const workOrder = {
       id: "work-1", business_no: "WO-001", house_id: "house-1", category: "OTHER",

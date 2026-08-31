@@ -51,10 +51,14 @@ export type WorkOrder = {
   created_at?: string;
   updated_at?: string;
   assignee_id?: string | null;
+  resident_name?: string | null;
+  resident_phone?: string | null;
+  house_address?: string | null;
+  appointment_at?: string | null;
   has_review?: boolean;
   available_actions?: string[];
 };
-export type TimelineEntry = { entry_type: string; action: string; operator_id: string; created_at: string; from_status?: string | null; to_status?: string | null; reason?: string | null; note?: string | null; attachment_ids?: string[] };
+export type TimelineEntry = { entry_type: string; action: string; operator_id: string; created_at: string; from_status?: string | null; to_status?: string | null; reason?: string | null; note?: string | null; appointment_at?: string | null; attachment_ids?: string[] };
 export type Bill = {
   bill_id: string;
   bill_period: string;

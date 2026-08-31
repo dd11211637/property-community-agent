@@ -6,7 +6,7 @@ import { AgentContextPanel } from "../components/AgentContextPanel";
 import { AgentConversationRail } from "../components/AgentConversationRail";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { RoleOverview } from "../components/RoleOverview";
-import { businessReference, displayLabel, displayMoney } from "../ui/display";
+import { businessReference, displayDate, displayLabel, displayMoney, localDateTimeToIso } from "../ui/display";
 
 type AgentReply = {
   reply: string;
@@ -57,6 +57,7 @@ const confirmationLabels: Record<string, string> = {
   location: "具体位置",
   description: "问题描述",
   urgency: "紧急程度",
+  appointment_at: "预约上门时间",
   subject: "咨询主题",
   title: "标题",
   body: "公告正文",
@@ -99,9 +100,11 @@ function confirmationEntries(params: Record<string, unknown>, tool?: string) {
     .map(([key, value]) => ({
       key,
       label: key === "category" && tool?.startsWith("announcement_") ? "公告分类" : confirmationLabels[key],
-      value: key === "audience" && typeof value === "object" && value !== null && Object.keys(value).length === 0
-        ? "全社区"
-        : confirmationValues[String(value)] ?? (typeof value === "object" && value !== null ? JSON.stringify(value) : String(value)),
+      value: key === "appointment_at"
+        ? (value ? displayDate(value) : "稍后协商")
+        : key === "audience" && typeof value === "object" && value !== null && Object.keys(value).length === 0
+          ? "全社区"
+          : confirmationValues[String(value)] ?? (typeof value === "object" && value !== null ? JSON.stringify(value) : String(value)),
     }));
 }
 
@@ -214,7 +217,8 @@ export function HomePage() {
     const text = input.trim();
     if (!text) return;
     setInput("");
-    void sendAgent(text, slotPrompt ? { [slotPrompt.field]: text } : undefined);
+    const slotValue = slotPrompt?.field === "appointment_at" ? localDateTimeToIso(text) : text;
+    void sendAgent(text, slotPrompt ? { [slotPrompt.field]: slotValue } : undefined);
   };
   async function resolveConfirmation(confirmed: boolean) {
     if (!action) return;
@@ -269,7 +273,7 @@ export function HomePage() {
             {(slotPrompt.help_text || slotPrompt.allow_custom) && <small>{slotPrompt.help_text || `也可以在下方输入框中直接填写${slotPrompt.label}。`}</small>}
           </div>}
         </div>
-        <form className="chat-input" onSubmit={send}><input value={input} onChange={(e) => setInput(e.target.value)} placeholder="例如：我家厨房水管漏水，想报修" aria-label="发送给社区智能体" /><button aria-label="发送" disabled={pending}><ArrowUp /></button></form>
+        <form className="chat-input" onSubmit={send}><input type={slotPrompt?.field === "appointment_at" ? "datetime-local" : "text"} value={input} onChange={(e) => setInput(e.target.value)} placeholder={slotPrompt?.field === "appointment_at" ? "选择上门时间" : "例如：我家厨房水管漏水，想报修"} aria-label="发送给社区智能体" /><button aria-label="发送" disabled={pending}><ArrowUp /></button></form>
         <small className="agent-disclaimer">AI 可能出错；费用、状态和操作结果以后端业务记录为准。</small>
       </section>
       <AgentContextPanel />

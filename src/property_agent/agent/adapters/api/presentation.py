@@ -12,13 +12,25 @@ from typing import Any
 from property_agent.agent.application.conversation_service import ConversationSnapshot
 from property_agent.agent.application.runner import AgentTurn
 from property_agent.agent.capabilities.compatibility import migrated_presentation
-from property_agent.agent.slot_prompts import repair_slot_prompt
+from property_agent.agent.slot_prompts import (
+    announcement_slot_prompt,
+    inspection_slot_prompt,
+    repair_slot_prompt,
+)
 from property_agent.agent.state import GraphState
 from property_agent.agent.stream_events import AgentStreamEvent, StreamEventKind
 
 
 def _repair_slot_prompt(state) -> dict[str, Any] | None:
     return repair_slot_prompt(state)
+
+
+def _announcement_slot_prompt(state) -> dict[str, Any] | None:
+    return announcement_slot_prompt(state)
+
+
+def _inspection_slot_prompt(state) -> dict[str, Any] | None:
+    return inspection_slot_prompt(state)
 
 
 def _pending_card(pending: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -167,7 +179,12 @@ def turn_data(turn: AgentTurn) -> dict[str, Any]:
         "agent_trace": state.read_trace,
         "missing_slots": list(state.missing_slots),
         "requested_slot": state.requested_slot,
-        "slot_prompt": _repair_slot_prompt(state) or _generic_slot_prompt(state),
+        "slot_prompt": (
+            _repair_slot_prompt(state)
+            or _announcement_slot_prompt(state)
+            or _inspection_slot_prompt(state)
+            or _generic_slot_prompt(state)
+        ),
         "handover_required": bool(state.handover_required),
         "pending_confirmation": pending,
         "error": state.error,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -72,6 +73,9 @@ class RepairCreateInput(CapabilityInput):
     description: str = Field(min_length=1, max_length=2000)
     location: str = Field(min_length=1, max_length=255)
     urgency: str = "NORMAL"
+    # 预约上门时间是报修创建的必填槽位：用户必须明确给出时间或“稍后协商”延期，
+    # 否则输入校验失败，编排层会追问，避免出现“未说明时间就建单”的问题。
+    appointment_at: datetime | None
 
 
 class RepairCreateOutput(CapabilityOutput):
@@ -190,6 +194,7 @@ class RepairCreateAdapter:
             location=request.location,
             description=request.description,
             urgency=normalize_repair_urgency(request.urgency),
+            appointment_at=request.appointment_at,
             confirmation_token=runtime.write.confirmation_token,
             approval_ref=runtime.write.approval_ref,
         )

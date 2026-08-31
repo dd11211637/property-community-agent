@@ -152,6 +152,7 @@ def test_two_writes_receive_two_exact_interrupts_and_a_cannot_authorize_b():
                     "description": "厨房漏水",
                     "location": "厨房",
                     "urgency": "NORMAL",
+                    "appointment_at": None,
                 },
             ),
             step(

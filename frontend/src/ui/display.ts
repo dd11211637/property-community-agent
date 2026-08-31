@@ -106,6 +106,12 @@ export function displayDate(value: unknown, fallback = "时间待确认"): strin
   return Number.isNaN(date.getTime()) ? fallback : date.toLocaleString("zh-CN");
 }
 
+export function localDateTimeToIso(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) throw new Error("请选择有效的日期和时间。");
+  return date.toISOString();
+}
+
 export function displayMoney(value: unknown): string {
   const amount = Number(value);
   return Number.isFinite(amount)

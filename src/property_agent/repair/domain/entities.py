@@ -45,6 +45,7 @@ class WorkOrder:
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     closed_at: datetime | None = None
+    appointment_at: datetime | None = None
     has_review: bool = False
 
     def transition(self, action: ActionCode, *, now: datetime | None = None) -> WorkOrderStatus:

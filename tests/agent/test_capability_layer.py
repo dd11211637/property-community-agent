@@ -107,7 +107,10 @@ def test_registry_inventory_lookup_duplicate_and_unknown():
 @pytest.mark.parametrize(
     ("name", "semantic_payload"),
     [
-        ("repair_create", {"description": "pipe leaking", "location": "kitchen"}),
+        (
+            "repair_create",
+            {"description": "pipe leaking", "location": "kitchen", "appointment_at": None},
+        ),
         ("billing_consult", {"subject": "bill question", "description": "please check"}),
     ],
 )
@@ -125,7 +128,12 @@ def test_model_cannot_override_server_write_or_trusted_authority(forbidden, name
 
 
 def test_write_capability_inputs_contain_only_business_semantics():
-    assert set(RepairCreateInput.model_fields) == {"description", "location", "urgency"}
+    assert set(RepairCreateInput.model_fields) == {
+        "description",
+        "location",
+        "urgency",
+        "appointment_at",
+    }
     assert set(BillingConsultInput.model_fields) == {"subject", "description", "bill_id"}
 
 
@@ -250,6 +258,7 @@ def test_static_spec_and_dynamic_policy_are_separate():
             description="trapped resident",
             location="lift",
             urgency="EMERGENCY",
+            appointment_at=None,
         ),
         _runtime(object()),
         CapabilityInvocationState(),
@@ -263,6 +272,7 @@ def test_write_requires_orchestration_confirmation_before_adapter():
     payload = {
         "description": "pipe leaking",
         "location": "kitchen",
+        "appointment_at": None,
     }
     result = _executor({"repair_create": adapter}).execute(
         "repair_create", payload, _runtime(object(), "house")
@@ -456,6 +466,7 @@ def test_real_write_path_preserves_single_execution_and_service_invariants(
     payload = {
         "description": "客厅插座没电",
         "location": "客厅",
+        "appointment_at": None,
     }
     invocation = CapabilityInvocationState(human_confirmed=True)
     runtime = _runtime(
@@ -481,7 +492,7 @@ def test_legacy_metadata_is_derived_from_registry():
     expected_pr2 = {
         "billing_consult": ["subject", "description"],
         "billing_query": [],
-        "repair_create": ["description", "location"],
+        "repair_create": ["description", "location", "appointment_at"],
         "repair_get": ["work_order_id"],
         "repair_list": [],
     }
