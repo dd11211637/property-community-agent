@@ -21,14 +21,17 @@
 | Ruff lint | PASS | `ruff check src tests testing scripts alembic` |
 | Ruff format | PASS | 所有本次修改的 Python 文件已格式化 |
 | 结构检查 | PASS | `scripts/check_code_structure.py` |
-| 后端完整本地套件 | PASS | 648 tests collected；完整套件通过，外部/数据库分组按配置跳过 |
+| 后端完整本地套件 | PASS | 651 tests collected；完整套件通过，外部/数据库分组按配置跳过 |
 | 真实 PostgreSQL | PASS | 34/34，零跳过；独立测试库升级到 `20260830_0001` 后执行 |
 | 前端单测 | PASS | 9 files，38/38 |
 | 前端 lint/build | PASS | ESLint 通过；Vite 1760 modules 构建通过 |
 | Playwright 主业务流 | PASS | Chromium 26/26 |
 | V2 静态契约 | PASS | 活动生产源码无 `LegacyGraphEngine`、V1 selector 或 V1 runtime fallback |
-| Docker 全量重建 | NOT_RUN | Docker daemon 健康；BuildKit gRPC 首次失败，传统 builder 两次均被 `files.pythonhosted.org` TLS EOF 阻断 |
-| 真实 DeepSeek 调用 | NOT_RUN | 聊天中暴露的 Key 未使用；等待轮换后的 Key 写入被 Git 忽略的 `.env` |
+| Windows 本机启动 | PASS | 显式 SelectorEventLoop 入口；`/ready=READY`，前端 HTTP 200 |
+| Docker 全量重建 | NOT_RUN | Docker daemon 健康；BuildKit gRPC 失败，传统 builder 被 PyPI TLS EOF 阻断 |
+| 真实 DeepSeek 调用 | PASS | `provider=deepseek`、`intent=BILLING`、`degraded=false`；Key 未输出且 `.env` 未被 Git 跟踪 |
+
+当前运行状态：PostgreSQL 使用 Docker；V2 后端运行于 `127.0.0.1:8000`，最新前端运行于 `127.0.0.1:5173`。`/ready` 显示 database/services/accepted-head store 均为 `UP`，runtime 为 `V2_ONLY`、100% V2、fallback runtime 为 V2。
 
 ## 本地 V1 数据处置
 
@@ -63,6 +66,5 @@
 
 ## 待外部条件
 
-1. 立即撤销聊天中暴露的旧 DeepSeek Key。
-2. 将轮换后的 Key 仅写入交付目录中被 Git 忽略的 `.env`。
-3. Docker 网络恢复后重新全量构建，再执行 `/ready` 与真实 DeepSeek 调用；在此之前不得标记生产就绪。
+1. 确认聊天中暴露的旧 DeepSeek Key 已撤销。
+2. Docker 到 PyPI 的 TLS 网络恢复后重新执行全量镜像构建；当前本机混合栈可用，但不能将 Docker 重建门标记为 PASS。
