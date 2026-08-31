@@ -1,3 +1,5 @@
+import { createUuid } from "../platform/uuid";
+
 export type ApiErrorBody = {
   code: string;
   message: string;
@@ -33,11 +35,11 @@ export type RequestOptions = Omit<RequestInit, "body"> & {
 const baseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/$/, "");
 
 function requestId(): string {
-  return `web_${crypto.randomUUID()}`;
+  return `web_${createUuid()}`;
 }
 
 export function createIdempotencyKey(operation: string): string {
-  return `${operation}_${crypto.randomUUID()}`;
+  return `${operation}_${createUuid()}`;
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {

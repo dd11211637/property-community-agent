@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { businessReference, displayHouseAddress, displayIntegration, displayLabel, isUuid } from "../../src/ui/display";
+import {
+  businessReference,
+  displayDate,
+  displayHouseAddress,
+  displayIntegration,
+  displayLabel,
+  isUuid,
+  localDateTimeToIso,
+} from "../../src/ui/display";
 import { workspaceFor } from "../../src/ui/roles";
 
 describe("release presentation contracts", () => {
@@ -22,6 +30,15 @@ describe("release presentation contracts", () => {
   it("formats server-owned house fields without duplicating the unit suffix", () => {
     expect(displayHouseAddress({ building: "1栋", unit: "1单元", room_no: "101" })).toBe("1栋 1单元 101");
     expect(displayHouseAddress({ building: "2栋", unit: "2", room_no: "201" })).toBe("2栋 2单元 201");
+  });
+
+  it("keeps community appointment times stable across client time zones", () => {
+    expect(localDateTimeToIso("2026-08-31T21:25")).toBe("2026-08-31T13:25:00.000Z");
+    expect(displayDate("2026-08-31T13:25:00.000Z")).toMatch(/2026.*21:25/);
+  });
+
+  it("rejects invalid community appointment times", () => {
+    expect(() => localDateTimeToIso("2026-02-30T21:25")).toThrow("请选择有效的日期和时间。");
   });
 
   it("selects the role-specific workspace fail-closed", () => {

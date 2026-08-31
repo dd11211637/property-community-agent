@@ -132,7 +132,7 @@ describe("Agent home flow", () => {
     expect(bodies[1].slots).toEqual({ description: "插座频繁跳闸" });
     expect(bodies[2].slots).toEqual({ location: "阳台" });
     expect(bodies[3].slots).toEqual({
-      appointment_at: new Date("2026-08-31T21:25+08:00").toISOString(),
+      appointment_at: "2026-08-31T13:25:00.000Z",
     });
   });
 

@@ -5,6 +5,7 @@ import type { AgentConversation, AgentMessage } from "../api/contracts";
 import { AgentContextPanel } from "../components/AgentContextPanel";
 import { AgentConversationRail } from "../components/AgentConversationRail";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { createUuid } from "../platform/uuid";
 import { RoleOverview } from "../components/RoleOverview";
 import { businessReference, displayDate, displayLabel, displayMoney, localDateTimeToIso } from "../ui/display";
 
@@ -155,7 +156,7 @@ function AgentFactsCard({ facts }: { facts: AgentFacts }) {
 
 export function HomePage() {
   const [activeConversationId, setActiveConversationId] = useState(
-    () => storedConversationId() ?? crypto.randomUUID(),
+    () => storedConversationId() ?? createUuid(),
   );
   const [historyRefresh, setHistoryRefresh] = useState(0);
   const [input, setInput] = useState("");
@@ -179,7 +180,7 @@ export function HomePage() {
       })
       .catch(() => {
         if (!active) return;
-        const next = crypto.randomUUID();
+        const next = createUuid();
         sessionStorage.removeItem("property_agent_conversation_id");
         setActiveConversationId(next);
         setAction(undefined);
@@ -240,7 +241,7 @@ export function HomePage() {
     }
   }
   function startNewConversation() {
-    const next = crypto.randomUUID();
+    const next = createUuid();
     sessionStorage.setItem("property_agent_conversation_id", next);
     setActiveConversationId(next);
     setMessages([{ role: "assistant", text: "新的对话已准备好。告诉我你想查询或办理什么。" }]);

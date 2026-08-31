@@ -82,6 +82,8 @@ const statusTone: Record<string, "neutral" | "success" | "warning" | "danger"> =
   DEGRADED: "warning",
 };
 
+const communityLocalDateTimePattern = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/;
+
 export function displayLabel(value: unknown, fallback = "待确认"): string {
   const key = String(value ?? "").trim();
   return labels[key] ?? fallback;
@@ -102,16 +104,32 @@ export function businessReference(value: unknown, fallback = "业务记录"): st
 
 export function displayDate(value: unknown, fallback = "时间待确认"): string {
   if (!value) return fallback;
-  const date = new Date(String(value));
+  const text = String(value);
+  let date: Date;
+  try {
+    date = new Date(communityLocalDateTimePattern.test(text) ? localDateTimeToIso(text) : text);
+  } catch {
+    return fallback;
+  }
   return Number.isNaN(date.getTime())
     ? fallback
-    : date.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" });
+    : date.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false });
 }
 
 export function localDateTimeToIso(value: string): string {
-  const date = new Date(`${value}+08:00`);
-  if (Number.isNaN(date.getTime())) throw new Error("请选择有效的日期和时间。");
-  return date.toISOString();
+  const match = communityLocalDateTimePattern.exec(value);
+  if (!match) throw new Error("请选择有效的日期和时间。");
+
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText = "0", msText = "0"] = match;
+  const [year, month, day, hour, minute, second, millisecond] = [
+    yearText, monthText, dayText, hourText, minuteText, secondText, msText.padEnd(3, "0"),
+  ].map(Number);
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  if (month < 1 || month > 12 || day < 1 || day > daysInMonth || hour > 23 || minute > 59 || second > 59) {
+    throw new Error("请选择有效的日期和时间。");
+  }
+
+  return new Date(Date.UTC(year, month - 1, day, hour - 8, minute, second, millisecond)).toISOString();
 }
 
 export function displayMoney(value: unknown): string {

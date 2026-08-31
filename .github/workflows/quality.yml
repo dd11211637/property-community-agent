@@ -29,7 +29,7 @@ jobs:
       - name: Self-contained local functional closure
         run: python -m testing.local_functional_closure --output local-functional-closure.json
       - name: Deterministic agent eval gate (P1)
-        run: python testing/agent_harness.py tests/agent/data/controlled_read_cases.json
+        run: python -m pytest tests/agent/test_pr5_scenario_evaluation.py -q
       - name: Governed Memory paired value gate (PR6)
         run: python testing/memory_value_eval.py tests/agent/data/pr6_memory_value_cases.json
       - name: PR7-B evidence schema and bounded load harness smoke
@@ -103,6 +103,8 @@ jobs:
 
   browser-e2e:
     runs-on: ubuntu-latest
+    env:
+      DEMO_FAIL_MODEL: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -111,9 +113,9 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Start real PostgreSQL application stack
-        env:
-          APP_ENV: test
-        run: docker compose up -d --build --wait postgres backend frontend
+        run: >-
+          docker compose -f compose.yaml -f testing/compose.demo.yaml
+          up -d --build --wait postgres backend frontend
       - run: npm ci
         working-directory: frontend
       - run: npx playwright install --with-deps chromium
@@ -124,6 +126,10 @@ jobs:
           PLAYWRIGHT_BASE_URL: http://127.0.0.1:5173
       - name: Show service logs on failure
         if: failure()
-        run: docker compose logs --no-color backend frontend postgres
+        run: >-
+          docker compose -f compose.yaml -f testing/compose.demo.yaml
+          logs --no-color backend frontend postgres
       - if: always()
-        run: docker compose down --volumes
+        run: >-
+          docker compose -f compose.yaml -f testing/compose.demo.yaml
+          down --volumes

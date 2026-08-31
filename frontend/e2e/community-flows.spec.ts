@@ -28,6 +28,14 @@ async function waitForAgent(page: Page) {
   await expect(page.getByText("正在查询真实业务状态…")).toHaveCount(0, { timeout: 15_000 });
 }
 
+async function completeRepairAppointment(page: Page) {
+  const appointmentInput = page.getByLabel("发送给社区智能体");
+  await expect(appointmentInput).toHaveAttribute("type", "datetime-local");
+  await appointmentInput.fill("2026-09-02T10:30");
+  await page.getByRole("button", { name: "发送" }).click();
+  await waitForAgent(page);
+}
+
 test("住户登录后可查看真实账单并通过 Agent 查询", async ({ page }) => {
   await login(page, "zhangsan");
   await expect(page.getByLabel("当前房屋")).toHaveText("1栋 1单元 101");
@@ -158,6 +166,7 @@ test("报修确认框只展示住户可理解的中文字段", async ({ page }) 
   await page.getByLabel("发送给社区智能体").fill("客厅电灯不亮了");
   await page.getByRole("button", { name: "发送" }).click();
   await waitForAgent(page);
+  await completeRepairAppointment(page);
 
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("heading", { name: "确认提交这条报修吗？" })).toBeVisible();
@@ -182,6 +191,8 @@ test("报修信息不完整时可逐步点击选项补全", async ({ page }) => 
   await waitForAgent(page);
   await expect(page.getByText("这个故障发生在哪里？")).toBeVisible();
   await page.getByRole("button", { name: "客厅", exact: true }).click();
+  await waitForAgent(page);
+  await completeRepairAppointment(page);
   await expect(page.getByRole("heading", { name: "确认提交这条报修吗？" })).toBeVisible();
   await expect(page.getByText(/缺失：|请提供：/)).toHaveCount(0);
 });
@@ -656,6 +667,7 @@ test("Agent 取消后不创建工单且后端待确认状态被清除", async ({
   await page.getByLabel("发送给社区智能体").fill("客厅电灯坏了，需要报修");
   await page.getByRole("button", { name: "发送" }).click();
   await waitForAgent(page);
+  await completeRepairAppointment(page);
   await expect(page.getByRole("heading", { name: "确认提交这条报修吗？" })).toBeVisible();
   await page.getByRole("dialog").getByRole("button", { name: "取消" }).click();
   await expect(page.getByText("已取消，未执行任何操作。")).toBeVisible();
@@ -682,6 +694,7 @@ test("Agent 待确认操作在刷新后恢复且确认只创建一个工单", as
   await page.getByLabel("发送给社区智能体").fill("客厅电灯坏了，需要报修");
   await page.getByRole("button", { name: "发送" }).click();
   await waitForAgent(page);
+  await completeRepairAppointment(page);
   await expect(page.getByRole("heading", { name: "确认提交这条报修吗？" })).toBeVisible();
 
   await page.reload();

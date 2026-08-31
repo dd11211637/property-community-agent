@@ -61,7 +61,7 @@ describe("M3 business pages", () => {
     expect(screen.getByText("预约上门时间").closest("div")).toHaveTextContent(/2026.*21:25/);
     fireEvent.click(screen.getByRole("button", { name: "确认提交" }));
 
-    const expectedAppointment = new Date("2026-08-31T21:25+08:00").toISOString();
+    const expectedAppointment = "2026-08-31T13:25:00.000Z";
     await waitFor(() => {
       const postBodies = fetchMock.mock.calls
         .filter(([, init]) => init?.method === "POST")
