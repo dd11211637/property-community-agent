@@ -1,4 +1,5 @@
 from dataclasses import replace
+from types import SimpleNamespace
 
 from property_agent.agent.orchestration import (
     PlanStatus,
@@ -45,7 +46,10 @@ def test_specialist_allowlist_rejects_cross_domain_action_without_calling_execut
 def test_duplicate_action_guard_hands_over_after_two_identical_observations():
     decision = _act("repair_list", {"location": "1A"})
     state = _state()
-    coordinator = ReactCoordinator(DecisionGateway(decision), {})
+    coordinator = ReactCoordinator(
+        DecisionGateway(decision),
+        {SpecialistName.REPAIR: FakeSpecialist(lambda step: None)},
+    )
     goal = coordinator.ensure_goal(state)
     fingerprint = canonical_hash(decision.arguments)
     observation = ReactObservation("repair_list", True, fingerprint, "same", data={})
@@ -64,7 +68,10 @@ def test_unpreauthorized_domain_transition_requires_clarification():
         requested_domain="billing",
     )
     state = _state()
-    coordinator = ReactCoordinator(DecisionGateway(decision), {})
+    coordinator = ReactCoordinator(
+        DecisionGateway(decision),
+        {SpecialistName.REPAIR: FakeSpecialist(lambda step: None)},
+    )
     coordinator.reason(state, _runtime())
     assert state.plan.status.value == "needs-clarification"
     assert state.requested_slot == "requested_domain_authorization"
@@ -180,3 +187,39 @@ def test_billing_consult_requires_rule_absence_observation():
     coordinator.action(state, _runtime())
     assert not specialist.calls
     assert goal.observations[-1].error_code == "BILLING_RULE_NOT_PROVEN_MISSING"
+
+
+def test_required_input_placeholder_is_rejected_when_no_fact_or_observation_grounds_it():
+    state = _state("announcement", SpecialistName.ANNOUNCEMENT)
+    state.active_goal = ActiveGoalState(
+        "g1",
+        "draft notice",
+        "announcement",
+        authorized_domains=("announcement",),
+        candidate_facts={"topic": "water outage"},
+    )
+    delegate = FakeSpecialist(lambda step: None)
+    specialist = SimpleNamespace(
+        name=SpecialistName.ANNOUNCEMENT,
+        allowlist=frozenset({"announcement_draft"}),
+        capability_inventory=(
+            {
+                "name": "announcement_draft",
+                "required_inputs": ["topic", "audience"],
+                "optional_inputs": ["requirements"],
+            },
+        ),
+        arguments_valid=lambda _capability, _arguments: True,
+        invoke=delegate.invoke,
+    )
+    decision = _act(
+        "announcement_draft",
+        {"topic": "water outage", "audience": {}},
+    )
+    coordinator = ReactCoordinator(
+        DecisionGateway(decision), {SpecialistName.ANNOUNCEMENT: specialist}
+    )
+    coordinator.reason(state, _runtime())
+    coordinator.action(state, _runtime())
+    assert not delegate.calls
+    assert state.active_goal.observations[-1].error_code == "CAPABILITY_REQUIRED_INPUT_UNGROUNDED"

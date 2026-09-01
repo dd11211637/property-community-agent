@@ -33,6 +33,8 @@ def present_success(capability: str, data: dict[str, Any]) -> str:
     nested = data.get("data")
     if isinstance(nested, dict):
         data = nested
+    if capability == "billing_query" and data.get("query_type") == "rule":
+        return _present_billing_rule(data)
     for key, presenter in (
         ("work_order", _present_work_order),
         ("consultation", _present_consultation),
@@ -164,6 +166,21 @@ def _present_single_bill(item: dict[str, Any]) -> str:
     return (
         f"我查到 {item.get('period') or '该期'} 账单共 {amount} 元{breakdown}，"
         f"目前状态为{_status(item.get('status'))}。"
+    )
+
+
+def _present_billing_rule(data: dict[str, Any]) -> str:
+    rule = data.get("rule")
+    if not isinstance(rule, dict):
+        return "当前没有找到对应的有效收费规则。"
+    validity = ""
+    if rule.get("valid_from") or rule.get("valid_until"):
+        validity = (
+            f"，有效期 {rule.get('valid_from') or '未注明'} 至 {rule.get('valid_until') or '长期'}"
+        )
+    return (
+        f"收费规则“{rule.get('name')}”（版本 {rule.get('version')}）"
+        f"，参数为 {rule.get('parameters') or {}}{validity}。"
     )
 
 

@@ -29,6 +29,7 @@ from property_agent.agent.application.task_continuation import (
     has_active_inspection_event,
     inspection_event_control,
 )
+from property_agent.agent.react_contracts import ActiveGoalState
 from property_agent.agent.state import GraphState
 from property_agent.agent.working_state import (
     AnnouncementDraftingState,
@@ -136,6 +137,10 @@ def prepare_start_state(
         announcement_followup=announcement_followup,
         repair_followup=repair_followup,
     )
+    if previous is not None and previous.current_house_id == current_house_id:
+        if previous.active_goal is not None:
+            state.active_goal = ActiveGoalState.from_dict(previous.active_goal.to_dict())
+    state.goal_resolution_pending = True
     state.add_message("user", user_text)
     if repair_message:
         state.add_message("assistant", repair_message)

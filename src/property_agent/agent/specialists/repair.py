@@ -60,4 +60,7 @@ class RepairSpecialist(StatelessSpecialist):
         return {
             "statuses": tuple(values.get("statuses") or ()),
             "limit": int(values.get("limit") or 20),
+            "location": values.get("location"),
+            "category": values.get("category"),
+            "assigned_to_me": bool(values.get("assigned_to_me", False)),
         }

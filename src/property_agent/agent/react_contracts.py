@@ -37,10 +37,29 @@ _FORBIDDEN_ARGUMENTS = frozenset(
         "idempotency_key",
         "database",
         "request_context",
+        "application_service",
+        "service",
+        "session",
+        "repository",
+        "capability",
+        "tool",
+        "plan_id",
+        "plan_step_id",
+        "goal_id",
         "lease",
         "fence",
     }
 )
+
+
+def contains_forbidden_authority_fields(value: Any) -> bool:
+    if isinstance(value, dict):
+        if set(value) & _FORBIDDEN_ARGUMENTS:
+            return True
+        return any(contains_forbidden_authority_fields(item) for item in value.values())
+    if isinstance(value, list | tuple):
+        return any(contains_forbidden_authority_fields(item) for item in value)
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,7 +75,7 @@ class ReactDecision:
     requested_domain: str | None = None
 
     def __post_init__(self) -> None:
-        if set(self.arguments) & _FORBIDDEN_ARGUMENTS:
+        if contains_forbidden_authority_fields(self.arguments):
             raise ValueError("ReAct arguments contain server-owned authority fields")
         if self.decision is ReactDecisionType.ACT:
             if not self.capability or self.missing_information or self.question:
@@ -156,6 +175,8 @@ class ActiveGoalState:
     goal_id: str
     goal: str
     domain: str
+    authorized_domains: tuple[str, ...] = ()
+    constraints: tuple[str, ...] = ()
     status: GoalStatus = GoalStatus.IN_PROGRESS
     candidate_facts: dict[str, Any] = field(default_factory=dict)
     observations: tuple[ReactObservation, ...] = ()
@@ -167,6 +188,7 @@ class ActiveGoalState:
     handover: bool = False
     degraded: bool = False
     fallback_used: bool = False
+    last_public_message: str | None = None
     last_decision: ReactDecision | None = None
 
     def append_observation(self, observation: ReactObservation) -> None:
@@ -188,6 +210,8 @@ class ActiveGoalState:
             goal_id=str(value["goal_id"]),
             goal=str(value["goal"]),
             domain=str(value["domain"]),
+            authorized_domains=tuple(value.get("authorized_domains") or ()),
+            constraints=tuple(value.get("constraints") or ()),
             status=GoalStatus(value.get("status", GoalStatus.IN_PROGRESS)),
             candidate_facts=dict(value.get("candidate_facts") or {}),
             observations=tuple(
@@ -201,5 +225,6 @@ class ActiveGoalState:
             handover=bool(value.get("handover", False)),
             degraded=bool(value.get("degraded", False)),
             fallback_used=bool(value.get("fallback_used", False)),
+            last_public_message=value.get("last_public_message"),
             last_decision=ReactDecision.from_dict(decision) if decision else None,
         )

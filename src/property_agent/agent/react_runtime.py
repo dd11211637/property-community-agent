@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import date, datetime, timezone
 from typing import Any
 
 from property_agent.agent.orchestration import (
     ExecutionMode,
     GoalOutcome,
     PlanStatus,
+    PlanStep,
     PlanStepStatus,
+    SpecialistName,
     SpecialistOutcome,
 )
 from property_agent.agent.react_contracts import (
@@ -19,48 +22,39 @@ from property_agent.agent.react_contracts import (
     ReactDecisionType,
     ReactObservation,
 )
+from property_agent.agent.react_governance import ReactActionGovernance
 from property_agent.agent.state import ProposedAction
 from property_agent.platform.application.hashing import canonical_hash
 
-DOMAIN_ALLOWLISTS = {
-    "repair": frozenset({"repair_list", "repair_get", "repair_create"}),
-    "billing": frozenset({"billing_query", "billing_consult"}),
-    "announcement": frozenset(
-        {
-            "announcement_list",
-            "announcement_get",
-            "community_knowledge_search",
-            "announcement_draft",
-            "announcement_revise",
-            "announcement_create_draft",
-            "announce_publish",
-            "announcement_schedule_publish",
-        }
-    ),
-    "inspection": frozenset(
-        {
-            "inspection_list",
-            "inspection_get_task",
-            "inspection_get_event",
-            "inspection_create",
-            "inspection_start_task",
-            "inspection_add_record",
-            "inspection_submit_records",
-            "inspection_ai_suggest",
-            "security_event_create",
-            "security_event_submit_disposal",
-            "close_high_risk_event",
-        }
-    ),
-}
+_OBSERVATION_PRIVATE_FIELDS = frozenset(
+    {
+        "actor_id",
+        "community_id",
+        "house_id",
+        "confirmation_token",
+        "approval_ref",
+        "idempotency_key",
+        "lease",
+        "fence",
+    }
+)
 
 
 class ReactCoordinator:
     """Select and execute one governed capability at a time."""
 
-    def __init__(self, gateway: Any, specialists: dict[Any, Any], observe=None) -> None:
+    def __init__(
+        self,
+        gateway: Any,
+        specialists: dict[Any, Any],
+        *,
+        fallback_planner: Any | None = None,
+        observe=None,
+    ) -> None:
         self._gateway = gateway
         self._specialists = specialists
+        self._action_governance = ReactActionGovernance(specialists)
+        self._fallback_planner = fallback_planner
         self._observe = observe or (lambda _event, _fields: None)
 
     def enable(self, state: Any, runtime: Any) -> None:
@@ -77,6 +71,8 @@ class ReactCoordinator:
         state.plan = replace(state.plan, steps=steps, execution_mode=ExecutionMode.REACT)
 
     def ensure_goal(self, state: Any) -> ActiveGoalState | None:
+        if state.active_goal is not None:
+            return state.active_goal
         step = self._current_step(state)
         if step is None or step.capability is not None:
             return None
@@ -134,21 +130,40 @@ class ReactCoordinator:
 
     def action(self, state: Any, runtime: Any) -> None:
         goal = self.ensure_goal(state)
-        step = self._current_step(state)
-        if goal is None or step is None or goal.last_decision is None:
+        if goal is None or goal.last_decision is None:
             raise RuntimeError("ReAct action has no active decision")
         decision = goal.last_decision
         if decision.decision is not ReactDecisionType.ACT:
             raise RuntimeError("ReAct action requires ACT decision")
-        rejection = self._validate_action(state, runtime, goal, decision)
+        rejection = self._action_governance.validate(goal, decision, runtime)
         if rejection:
             self._append_rejection(state, goal, decision, rejection)
             return
-        explicit = replace(step, capability=decision.capability, parameters=decision.arguments)
-        specialist = self._specialists.get(step.specialist)
+        explicit = self._action_step(goal, decision)
+        specialist = self._specialists.get(explicit.specialist)
+        if specialist is None:
+            self._append_rejection(state, goal, decision, "SPECIALIST_NOT_CONFIGURED")
+            return
         result = specialist.invoke(explicit, state, runtime, state.specialist_results)
         state.specialist_results = (*state.specialist_results, result)
-        self._apply_result(state, goal, step, decision, result)
+        self._apply_result(state, goal, explicit, decision, result)
+
+    @staticmethod
+    def _action_step(goal, decision) -> PlanStep:
+        specialists = {
+            "repair": SpecialistName.REPAIR,
+            "billing": SpecialistName.BILLING,
+            "announcement": SpecialistName.ANNOUNCEMENT,
+            "inspection": SpecialistName.INSPECTION,
+        }
+        return PlanStep(
+            step_id=goal.goal_id,
+            domain=goal.domain,
+            specialist=specialists[goal.domain],
+            goal=goal.goal,
+            capability=decision.capability,
+            parameters=dict(decision.arguments),
+        )
 
     def _apply_result(self, state, goal, step, decision, result) -> None:
         params_hash = canonical_hash(decision.arguments)
@@ -167,6 +182,9 @@ class ReactCoordinator:
         goal.action_count += 1
         goal.last_action = decision.capability
         goal.last_decision = None
+        goal.last_public_message = result.public_message or goal.last_public_message
+        state.pending_action = None
+        state.proposed_action = None
         state.tool_result = {
             "ok": observation.ok,
             "tool": observation.capability,
@@ -189,28 +207,33 @@ class ReactCoordinator:
             goal.missing_information = decision.missing_information
             state.missing_slots = list(decision.missing_information)
             state.requested_slot = decision.missing_information[0]
-            state.plan = replace(state.plan, status=PlanStatus.NEEDS_CLARIFICATION)
-            state.add_message("assistant", decision.question or "请补充必要信息。")
+            if state.plan is not None:
+                state.plan = replace(state.plan, status=PlanStatus.NEEDS_CLARIFICATION)
+            goal.last_public_message = decision.question or "请补充必要信息。"
+            state.add_message("assistant", goal.last_public_message)
         elif decision.decision is ReactDecisionType.HANDOVER:
             self._handover(state, goal, decision.reason_code or "REACT_HANDOVER")
         else:
             self._finish(state, goal, decision)
 
     def _finish(self, state, goal, decision) -> None:
-        step = self._current_step(state)
         requested = decision.requested_domain
         if requested and not self._transition_allowed(state, requested):
             goal.status = GoalStatus.NEEDS_CLARIFICATION
-            state.plan = replace(state.plan, status=PlanStatus.NEEDS_CLARIFICATION)
+            if state.plan is not None:
+                state.plan = replace(state.plan, status=PlanStatus.NEEDS_CLARIFICATION)
             state.missing_slots = ["requested_domain_authorization"]
             state.requested_slot = "requested_domain_authorization"
             state.add_message("assistant", "该领域不在本次任务的预授权范围内，请明确是否新增任务。")
             return
         goal.status = decision.goal_status
         goal.last_decision = None
-        state.goal_outcomes[step.step_id] = GoalOutcome.COMPLETED
-        state.plan = state.plan.replace_step(replace(step, status=PlanStepStatus.COMPLETED))
-        state.plan = replace(state.plan, status=PlanStatus.ACTIVE, current_step_id=None)
+        if state.plan is not None:
+            step = self._current_step(state)
+            if step is not None:
+                state.goal_outcomes[step.step_id] = GoalOutcome.COMPLETED
+                state.plan = state.plan.replace_step(replace(step, status=PlanStepStatus.COMPLETED))
+                state.plan = replace(state.plan, status=PlanStatus.ACTIVE, current_step_id=None)
 
     def _fallback(self, state, runtime, reason) -> None:
         goal = self.ensure_goal(state)
@@ -219,30 +242,15 @@ class ReactCoordinator:
             return None
         goal.degraded = True
         goal.fallback_used = True
-        if state.legacy_plan is None:
+        legacy = state.legacy_plan
+        if legacy is None and self._fallback_planner is not None:
+            legacy = self._fallback_planner.create_plan(state, runtime)
+        if legacy is None:
             self._handover(state, goal, "LEGACY_PLAN_UNAVAILABLE")
             return None
-        state.plan = replace(state.legacy_plan, replan_reason=reason)
+        state.legacy_plan = legacy
+        state.plan = replace(legacy, replan_reason=reason)
         self._observe("react_fallback", {"domain": goal.domain, "reason": reason})
-        return None
-
-    def _validate_action(self, state, runtime, goal, decision) -> str | None:
-        allowed = DOMAIN_ALLOWLISTS.get(goal.domain, frozenset())
-        if decision.capability not in allowed:
-            return "CAPABILITY_NOT_IN_SPECIALIST_ALLOWLIST"
-        if runtime.execution_policy.allowlist is not None:
-            if decision.capability not in runtime.execution_policy.allowlist:
-                return "CAPABILITY_NOT_IN_RUNTIME_ALLOWLIST"
-        if self._repeat_count(goal, decision) >= runtime.execution_policy.max_react_repeats:
-            return "REACT_NO_PROGRESS"
-        if decision.capability == "repair_create":
-            repair_guard = self._repair_create_guard(goal, decision)
-            if repair_guard:
-                return repair_guard
-        if goal.domain == "inspection" and self._inspection_preread_required(goal, decision):
-            return "INSPECTION_PREREAD_REQUIRED"
-        if decision.capability == "billing_consult" and not self._billing_rule_missing(goal):
-            return "BILLING_RULE_NOT_PROVEN_MISSING"
         return None
 
     def _append_rejection(self, state, goal, decision, code) -> None:
@@ -261,61 +269,6 @@ class ReactCoordinator:
         self._observe("react_action_rejected", {"domain": goal.domain, "reason": code})
 
     @staticmethod
-    def _repair_create_guard(goal, decision) -> str | None:
-        for item in goal.observations:
-            if item.capability != "repair_list" or not item.ok:
-                continue
-            requested_location = str(decision.arguments.get("location") or "").strip()
-            requested_category = str(decision.arguments.get("category") or "").strip()
-            if (
-                requested_location
-                and str(item.data.get("query_location") or "") != requested_location
-            ):
-                continue
-            if (
-                requested_category
-                and str(item.data.get("query_category") or "") != requested_category
-            ):
-                continue
-            terminal = {"COMPLETED", "CANCELLED", "CLOSED", "REJECTED"}
-            if any(
-                str(value.get("status") or "").upper() not in terminal
-                for value in item.data.get("items") or ()
-            ):
-                return "ACTIVE_REPAIR_EXISTS"
-            return None
-        return "REPAIR_PREREAD_REQUIRED"
-
-    @staticmethod
-    def _inspection_preread_required(goal, decision) -> bool:
-        write_capabilities = {
-            "inspection_start_task",
-            "inspection_add_record",
-            "inspection_submit_records",
-            "security_event_submit_disposal",
-            "close_high_risk_event",
-        }
-        asks_existing = any(
-            term in goal.goal for term in ("查已有", "现有", "已有事件", "check existing")
-        )
-        if decision.capability not in write_capabilities or not asks_existing:
-            return False
-        reads = {"inspection_list", "inspection_get_task", "inspection_get_event"}
-        return not any(item.ok and item.capability in reads for item in goal.observations)
-
-    @staticmethod
-    def _billing_rule_missing(goal) -> bool:
-        return any(
-            item.capability == "billing_query" and item.ok and item.data.get("rule") is None
-            for item in goal.observations
-        )
-
-    @staticmethod
-    def _repeat_count(goal, decision) -> int:
-        target = (decision.capability, canonical_hash(decision.arguments))
-        return sum((item.capability, item.params_hash) == target for item in goal.observations)
-
-    @staticmethod
     def _guard_decision(goal, runtime) -> ReactDecision | None:
         if goal.action_count < runtime.execution_policy.max_react_actions:
             return None
@@ -325,11 +278,17 @@ class ReactCoordinator:
             reason_code="MAX_REACT_ACTIONS_EXCEEDED",
         )
 
-    @staticmethod
-    def _context(state, runtime, goal) -> dict[str, Any]:
-        allowed = DOMAIN_ALLOWLISTS.get(goal.domain, frozenset())
-        if runtime.execution_policy.allowlist is not None:
-            allowed &= runtime.execution_policy.allowlist
+    def _context(self, state, runtime, goal) -> dict[str, Any]:
+        allowed = self._action_governance.effective_allowlist(goal, runtime)
+        specialist = self._specialists.get(
+            {
+                "repair": SpecialistName.REPAIR,
+                "billing": SpecialistName.BILLING,
+                "announcement": SpecialistName.ANNOUNCEMENT,
+                "inspection": SpecialistName.INSPECTION,
+            }.get(goal.domain)
+        )
+        inventory = tuple(getattr(specialist, "capability_inventory", ()))
         return {
             "goal_id": goal.goal_id,
             "goal": goal.goal,
@@ -337,20 +296,39 @@ class ReactCoordinator:
             "candidate_facts": goal.candidate_facts,
             "observations": [item.to_dict() for item in goal.observations],
             "allowed_capabilities": sorted(allowed),
+            "capability_inventory": [item for item in inventory if item.get("name") in allowed],
+            "business_date": str(state.trusted_context.get("business_date") or date.today()),
             "remaining_action_budget": runtime.execution_policy.max_react_actions
             - goal.action_count,
-            "preauthorized_domains": sorted({step.domain for step in state.plan.steps}),
+            "preauthorized_domains": sorted(
+                goal.authorized_domains
+                or (
+                    {step.domain for step in state.plan.steps}
+                    if state.plan is not None
+                    else {goal.domain}
+                )
+            ),
         }
 
     @staticmethod
     def _bounded_data(data: dict[str, Any]) -> dict[str, Any]:
-        bounded = dict(data)
-        for key, value in tuple(bounded.items()):
-            if isinstance(value, list):
-                bounded[key] = value[:20]
-            elif isinstance(value, str):
-                bounded[key] = value[:2000]
-        return bounded
+        return {
+            key: ReactCoordinator._bounded_value(value)
+            for key, value in data.items()
+            if key not in _OBSERVATION_PRIVATE_FIELDS
+        }
+
+    @staticmethod
+    def _bounded_value(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: ReactCoordinator._bounded_value(item)
+                for key, item in value.items()
+                if key not in _OBSERVATION_PRIVATE_FIELDS
+            }
+        if isinstance(value, list | tuple):
+            return [ReactCoordinator._bounded_value(item) for item in value[:20]]
+        return value[:2000] if isinstance(value, str) else value
 
     @staticmethod
     def _current_step(state):
@@ -360,6 +338,8 @@ class ReactCoordinator:
 
     @staticmethod
     def _transition_allowed(state, domain) -> bool:
+        if state.active_goal is not None and state.plan is None:
+            return domain in state.active_goal.authorized_domains
         return any(
             step.domain == domain and step.status is PlanStepStatus.PENDING
             for step in state.plan.steps
@@ -368,27 +348,36 @@ class ReactCoordinator:
     def _wait_confirmation(self, state, goal, step, result) -> None:
         parameters = dict(result.data["parameters"])
         params_hash = str(result.data["params_hash"])
-        state.proposed_action = ProposedAction(result.capability, parameters, params_hash)
-        state.pending_action = {
+        issued_at = datetime.now(timezone.utc).isoformat()
+        state.proposed_action = ProposedAction(
+            result.capability, parameters, params_hash, issued_at
+        )
+        pending = {
             "tool": result.capability,
             "params": parameters,
             "params_hash": params_hash,
-            "plan_id": state.plan.plan_id,
-            "plan_step_id": step.step_id,
+            "issued_at": issued_at,
             "goal_id": goal.goal_id,
         }
+        if state.plan is not None:
+            pending.update(plan_id=state.plan.plan_id, plan_step_id=step.step_id)
+        state.pending_action = pending
         goal.status = GoalStatus.WAITING_CONFIRMATION
-        state.plan = state.plan.replace_step(
-            replace(step, status=PlanStepStatus.PENDING_CONFIRMATION)
-        )
-        state.plan = replace(state.plan, status=PlanStatus.WAITING_CONFIRMATION)
+        goal.last_public_message = result.public_message
+        if state.plan is not None:
+            state.plan = state.plan.replace_step(
+                replace(step, status=PlanStepStatus.PENDING_CONFIRMATION)
+            )
+            state.plan = replace(state.plan, status=PlanStatus.WAITING_CONFIRMATION)
 
     def _clarify_from_result(self, state, goal, result) -> None:
         goal.status = GoalStatus.NEEDS_CLARIFICATION
         goal.missing_information = result.missing_inputs
         state.missing_slots = list(result.missing_inputs)
         state.requested_slot = result.missing_inputs[0] if result.missing_inputs else None
-        state.plan = replace(state.plan, status=PlanStatus.NEEDS_CLARIFICATION)
+        goal.last_public_message = result.public_message
+        if state.plan is not None:
+            state.plan = replace(state.plan, status=PlanStatus.NEEDS_CLARIFICATION)
 
     def _handover(self, state, goal, reason) -> None:
         goal.status = GoalStatus.HANDOVER
@@ -396,7 +385,8 @@ class ReactCoordinator:
         goal.last_decision = None
         state.handover_required = True
         state.error = reason
-        state.plan = replace(state.plan, status=PlanStatus.HANDOVER, replan_reason=reason)
+        if state.plan is not None:
+            state.plan = replace(state.plan, status=PlanStatus.HANDOVER, replan_reason=reason)
 
     def _emit(self, goal, decision) -> None:
         self._observe(

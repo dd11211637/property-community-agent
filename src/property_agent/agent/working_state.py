@@ -28,6 +28,7 @@ class RepairWorkingState:
     work_order_id: str | None = None
     statuses: tuple[str, ...] = ()
     limit: int | None = None
+    assigned_to_me: bool | None = None
 
 
 @dataclass(slots=True)
@@ -49,6 +50,7 @@ class AnnouncementQueryState:
     statuses: tuple[str, ...] = ()
     target_date: str | None = None
     topic: str | None = None
+    query: str | None = None
     limit: int | None = None
 
 

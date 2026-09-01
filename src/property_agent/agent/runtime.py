@@ -56,6 +56,7 @@ class PreparedWrite:
     params_hash: str | None = None
     plan_id: str | None = None
     plan_step_id: str | None = None
+    goal_id: str | None = None
 
     def matches(
         self,
@@ -64,12 +65,15 @@ class PreparedWrite:
         params_hash: str,
         plan_id: str | None = None,
         plan_step_id: str | None = None,
+        goal_id: str | None = None,
     ) -> bool:
         if self.capability != capability or self.params_hash != params_hash:
             return False
         if plan_id is not None and self.plan_id != plan_id:
             return False
-        return plan_step_id is None or self.plan_step_id == plan_step_id
+        if plan_step_id is not None and self.plan_step_id != plan_step_id:
+            return False
+        return goal_id is None or self.goal_id == goal_id
 
 
 @dataclass(frozen=True, slots=True)

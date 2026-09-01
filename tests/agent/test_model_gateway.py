@@ -12,6 +12,7 @@ import pytest
 
 from property_agent.agent.capabilities.catalog import default_capability_registry
 from property_agent.agent.deepseek_gateway import semantic_planner_capability_inventory
+from property_agent.agent.goal_contracts import GoalResolutionType
 from property_agent.agent.model_gateway import (
     DeepSeekModelGateway,
     DeterministicModelGateway,
@@ -152,6 +153,45 @@ def test_deepseek_semantic_planning_contract_preserves_dependencies_and_conditio
     provider_input = json.loads(captured["body"]["messages"][1]["content"])
     assert provider_input["history"][0]["content"] == "此前讨论的是电梯"
     assert provider_input["capability_inventory"] == list(semantic_planner_capability_inventory())
+
+
+def test_deepseek_goal_resolution_knows_domain_without_selecting_capability():
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return _response(
+            json.dumps(
+                {
+                    "resolution": "NEW",
+                    "domain": "repair",
+                    "goal": "发起报修",
+                    "candidate_facts": {},
+                    "authorized_domains": ["repair"],
+                    "constraints": [],
+                    "question": None,
+                    "reason_code": "DOMAIN_KNOWN",
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    result = _gateway(handler).resolve_goal(
+        {
+            "user_text": "我要报修",
+            "conversation": [],
+            "active_goal": None,
+            "allowed_domains": ["repair", "billing", "announcement", "inspection"],
+        }
+    )
+
+    system_prompt = captured["body"]["messages"][0]["content"]
+    provider_input = json.loads(captured["body"]["messages"][1]["content"])
+    assert result.resolution is GoalResolutionType.NEW
+    assert result.domain == "repair"
+    assert result.candidate_facts == {}
+    assert "Missing business facts do not make a Goal uncertain" in system_prompt
+    assert "capability_inventory" not in provider_input
 
 
 def test_semantic_planner_advertises_exact_canonical_registry_inventory():

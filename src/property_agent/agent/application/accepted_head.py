@@ -85,6 +85,7 @@ def runtime_for(
             params_hash=params.get("params_hash"),
             plan_id=params.get("plan_id"),
             plan_step_id=params.get("plan_step_id"),
+            goal_id=params.get("goal_id"),
         )
     request_context = plan.ctx
     current_house_id = plan.state.current_house_id

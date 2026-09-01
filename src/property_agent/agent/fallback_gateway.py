@@ -249,6 +249,18 @@ class FallbackModelGateway:
             raise ModelGatewayError("Primary model does not support relevance judgment")
         return method(semantic_goal=semantic_goal, evidence=evidence)
 
+    def resolve_goal(self, context: dict[str, Any]):
+        method = getattr(self._primary, "resolve_goal", None)
+        if method is None:
+            raise ModelGatewayError("Primary model does not support Goal resolution")
+        return method(context)
+
+    def react_decide(self, context: dict[str, Any]):
+        method = getattr(self._primary, "react_decide", None)
+        if method is None:
+            raise ModelGatewayError("Primary model does not support ReAct decisions")
+        return method(context)
+
     def classify_intent(self, text: str) -> tuple[str, float]:
         result = self.analyze(text)
         return result.intent, result.confidence

@@ -7,6 +7,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from property_agent.agent.goal_governance import GoalSupervisorGovernance
 from property_agent.agent.orchestration import (
     GoalOutcome,
     ObjectiveClassification,
@@ -24,6 +25,7 @@ from property_agent.agent.planning_contracts import RelevanceDecision
 from property_agent.agent.react_runtime import ReactCoordinator
 from property_agent.agent.runtime import RuntimeContext
 from property_agent.agent.state import AgentState, ProposedAction
+from property_agent.agent.supervisor_presentation import synthesize_legacy_plan
 from property_agent.agent.working_state import domain_from_legacy
 
 
@@ -45,8 +47,14 @@ class Supervisor:
         self._validator = validator or PlanValidator()
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._observe = observe or (lambda _event, _fields: None)
+        self._goals = GoalSupervisorGovernance(react_gateway)
         self.react = (
-            ReactCoordinator(react_gateway, self._specialists, observe=self._observe)
+            ReactCoordinator(
+                react_gateway,
+                self._specialists,
+                fallback_planner=self._planner,
+                observe=self._observe,
+            )
             if react_gateway is not None
             else None
         )
@@ -54,11 +62,33 @@ class Supervisor:
     def prepare(self, state: AgentState, runtime: RuntimeContext) -> AgentState:
         now = self._clock()
         duration = timedelta(seconds=runtime.execution_policy.plan_duration_seconds)
-        if state.plan is None:
-            state.plan = self._planner.create_plan(state, runtime)
-            _enable_react(self.react, state, runtime)
-            _set_objective_context(state)
+        if state.orchestration_budget is None:
             state.orchestration_budget = OrchestrationBudget.start(now=now, duration=duration)
+        elif state.orchestration_budget is not None:
+            state.orchestration_budget = state.orchestration_budget.resume(
+                now=now, server_ceiling=duration
+            )
+        if self._goals.resolve(state, runtime, self._planner):
+            _set_objective_context(state)
+        if self._goals.is_direct(state, runtime):
+            _resume_react(self.react, state)
+            return self._goals.prepare_direct(
+                state,
+                runtime,
+                now,
+                budget_expired=_budget_expired,
+                limit_reached=self._limit_reached,
+                increment=self._increment_budget,
+            )
+        if state.plan is None and state.goal_resolution_kind not in {
+            "CANCEL",
+            "GENERAL_HELP",
+            "UNCERTAIN",
+        }:
+            state.plan = self._planner.create_plan(state, runtime)
+            if state.goal_resolution_kind != "LEGACY_FALLBACK":
+                _enable_react(self.react, state, runtime)
+            _set_objective_context(state)
             _emit(
                 self._observe,
                 "supervisor_plan_created",
@@ -69,11 +99,8 @@ class Supervisor:
                     "runtime": runtime.observation.runtime_version,
                 },
             )
-        elif state.orchestration_budget is not None:
+        elif state.plan is not None:
             self._planner.revalidate_memories(state, runtime)
-            state.orchestration_budget = state.orchestration_budget.resume(
-                now=now, server_ceiling=duration
-            )
             if state.retrieved_memories.basis_invalidated:
                 state.plan = replace(
                     state.plan,
@@ -81,11 +108,13 @@ class Supervisor:
                     replan_reason="MEMORY_BASIS_INVALIDATED",
                 )
         _resume_react(self.react, state)
-        if self._budget_expired(state, now):
+        if _budget_expired(state, now):
             return self._fail_plan(state, "EXECUTION_DEADLINE_EXCEEDED")
         if self._limit_reached(state, runtime, "supervisor_steps", "max_supervisor_steps"):
             return self._fail_plan(state, "MAX_SUPERVISOR_STEPS_EXCEEDED")
         self._increment_budget(state, supervisor_steps=1)
+        if state.plan is None:
+            return state
         if state.plan.status == PlanStatus.WAITING_CONFIRMATION:
             return state
         if state.plan.status != PlanStatus.ACTIVE:
@@ -214,35 +243,9 @@ class Supervisor:
         _cancel_react(self.react, state)
 
     def synthesize(self, state: AgentState) -> str:
-        if state.messages and state.messages[-1].get("content") == "已取消，未执行任何操作。":
-            return "已取消，未执行任何操作。"
-        plan = state.plan
-        if plan is None:
-            return "当前没有可汇总的任务。"
-        if plan.objective_classification == ObjectiveClassification.GENERAL_HELP:
-            return "我可以协助报修、账单、公告和巡检安防事务。涉及写入时会逐项请您确认。"
-        if plan.objective_classification == ObjectiveClassification.UNCERTAIN:
-            return "请说明您要查询或办理的是报修、账单、公告还是巡检安防事项。"
-        labels = {
-            GoalOutcome.COMPLETED: "已完成",
-            GoalOutcome.CONDITION_NOT_MET: "条件未满足，未执行",
-            GoalOutcome.PENDING_CONFIRMATION: "待确认",
-            GoalOutcome.NEEDS_CLARIFICATION: "需补充信息",
-            GoalOutcome.FAILED: "失败",
-            GoalOutcome.HANDOVER: "需人工处理",
-        }
-        parts = []
-        results = {item.step_id: item for item in state.specialist_results}
-        for step in plan.steps:
-            outcome = state.goal_outcomes.get(step.step_id)
-            if outcome is not None:
-                result = results.get(step.step_id)
-                public_message = result.public_message if result is not None else ""
-                if public_message:
-                    parts.append(f"{public_message}（{labels[outcome]}）")
-                else:
-                    parts.append(f"{step.goal}：{labels[outcome]}")
-        return "；".join(parts) if parts else "任务尚未产生可核验结果。"
+        if state.plan is None:
+            return self._goals.synthesize(state)
+        return synthesize_legacy_plan(state)
 
     def _select_next_eligible(self, state: AgentState) -> None:
         while True:
@@ -376,9 +379,6 @@ class Supervisor:
         updated = replace(step, status=status, result_reference=result_reference)
         state.plan = state.plan.replace_step(updated)
 
-    def _budget_expired(self, state, now) -> bool:
-        return bool(state.orchestration_budget and state.orchestration_budget.expired(now))
-
     @staticmethod
     def _limit_reached(state, runtime, counter, limit) -> bool:
         budget = state.orchestration_budget
@@ -432,6 +432,10 @@ class Supervisor:
 def _enable_react(react, state, runtime) -> None:
     if react is not None:
         react.enable(state, runtime)
+
+
+def _budget_expired(state, now) -> bool:
+    return bool(state.orchestration_budget and state.orchestration_budget.expired(now))
 
 
 def _resume_react(react, state) -> None:

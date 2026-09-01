@@ -22,6 +22,7 @@ _MODEL_METHODS = frozenset(
         "revise_announcement",
         "plan_read",
         "react_decide",
+        "resolve_goal",
     }
 )
 
@@ -103,6 +104,10 @@ class ObservedSpecialist:
         self._delegate = delegate
         self._telemetry = observability
         self.name = delegate.name
+        self.domain = delegate.domain
+        self.allowlist = delegate.allowlist
+        self.capability_inventory = delegate.capability_inventory
+        self.arguments_valid = delegate.arguments_valid
 
     def invoke(self, step: Any, state: Any, runtime: Any, prior_results: Any):
         attributes = {

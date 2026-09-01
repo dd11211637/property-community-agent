@@ -38,6 +38,8 @@ class InspectionSpecialist(StatelessSpecialist):
                 "risk_levels",
                 "assigned_to_me",
                 "limit",
+                "location",
+                "point",
             ),
             "inspection_get_task": ("task_id",),
             "inspection_get_event": ("event_id",),

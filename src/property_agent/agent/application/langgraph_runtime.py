@@ -149,6 +149,29 @@ def _update(state: GraphState) -> LangGraphState:
     return LangGraphStateCodec.encode(state)
 
 
+def _accept_confirmation_state(state: GraphState, supervisor: Supervisor) -> None:
+    if state.plan is None and state.active_goal is not None:
+        from property_agent.agent.react_contracts import GoalStatus
+
+        pending = state.pending_action or {}
+        if (
+            state.active_goal.status is not GoalStatus.WAITING_CONFIRMATION
+            or pending.get("goal_id") != state.active_goal.goal_id
+        ):
+            raise RuntimeError("confirmed action has no matching pending Goal")
+        state.active_goal.status = GoalStatus.IN_PROGRESS
+        return
+    step = supervisor.current_step(state)
+    if step is None or step.status != PlanStepStatus.PENDING_CONFIRMATION:
+        raise RuntimeError("confirmed action has no matching pending plan step")
+    state.plan = state.plan.replace_step(replace(step, status=PlanStepStatus.PENDING))
+    state.plan = replace(state.plan, status=PlanStatus.ACTIVE)
+    if state.active_goal is not None:
+        from property_agent.agent.react_contracts import GoalStatus
+
+        state.active_goal.status = GoalStatus.IN_PROGRESS
+
+
 def build_supervisor_graph(supervisor: Supervisor):
     """Build one sequential Supervisor graph with four explicit specialist nodes."""
     from langgraph.graph import END, START, StateGraph
@@ -183,15 +206,7 @@ def build_supervisor_graph(supervisor: Supervisor):
 
     def accept_confirmation(envelope: LangGraphState) -> LangGraphState:
         state = _state(envelope)
-        step = supervisor.current_step(state)
-        if step is None or step.status != PlanStepStatus.PENDING_CONFIRMATION:
-            raise RuntimeError("confirmed action has no matching pending plan step")
-        state.plan = state.plan.replace_step(replace(step, status=PlanStepStatus.PENDING))
-        state.plan = replace(state.plan, status=PlanStatus.ACTIVE)
-        if state.active_goal is not None:
-            from property_agent.agent.react_contracts import GoalStatus
-
-            state.active_goal.status = GoalStatus.IN_PROGRESS
+        _accept_confirmation_state(state, supervisor)
         return _update(state)
 
     def cancel(envelope: LangGraphState) -> LangGraphState:
@@ -232,7 +247,28 @@ def build_supervisor_graph(supervisor: Supervisor):
 def _supervisor_route(envelope: LangGraphState) -> str:
     state = _state(envelope)
     if state.plan is None:
-        return "synthesize"
+        goal = state.active_goal
+        if goal is None:
+            return "synthesize"
+        from property_agent.agent.react_contracts import GoalStatus
+
+        if goal.status is GoalStatus.WAITING_CONFIRMATION:
+            return "await_confirmation"
+        if goal.status in {
+            GoalStatus.COMPLETED,
+            GoalStatus.PARTIAL,
+            GoalStatus.NEEDS_CLARIFICATION,
+            GoalStatus.HANDOVER,
+            GoalStatus.FAILED,
+            GoalStatus.CANCELLED,
+        }:
+            return "synthesize"
+        decision = goal.last_decision
+        return (
+            "react_action"
+            if decision is not None and decision.decision.value == "ACT"
+            else "react_reason"
+        )
     if state.plan.status == PlanStatus.WAITING_CONFIRMATION:
         return "await_confirmation"
     terminal = {
@@ -263,7 +299,14 @@ def _supervisor_route(envelope: LangGraphState) -> str:
 
 def _react_reason_route(envelope: LangGraphState) -> str:
     state = _state(envelope)
-    if state.plan is None or state.plan.status != PlanStatus.ACTIVE:
+    if state.plan is None:
+        decision = getattr(state.active_goal, "last_decision", None)
+        return (
+            "react_action"
+            if decision is not None and decision.decision.value == "ACT"
+            else "supervisor"
+        )
+    if state.plan.status != PlanStatus.ACTIVE:
         return "supervisor"
     decision = getattr(state.active_goal, "last_decision", None)
     return (

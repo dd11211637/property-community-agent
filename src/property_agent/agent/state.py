@@ -90,6 +90,9 @@ class AgentState:
     read_trace: dict[str, Any] | None = None
     error: str | None = None
     active_goal: ActiveGoalState | None = None
+    goal_resolution_pending: bool = False
+    goal_resolution_kind: str | None = None
+    goal_resolution_message: str | None = None
     # Constructor-compatible v1 projection. The codec maps these fields to the
     # typed ``orchestration`` owner on every persistence boundary.
     _resume: Any | None = None

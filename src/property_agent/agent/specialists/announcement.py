@@ -32,7 +32,7 @@ class AnnouncementSpecialist(StatelessSpecialist):
                 f"已核验事实：{grounded}\n用户要求：{values.get('requirements', '')}"
             )
         fields = {
-            "announcement_list": ("statuses", "limit", "topic", "target_date"),
+            "announcement_list": ("statuses", "limit", "topic", "target_date", "query"),
             "announcement_get": ("announcement_id",),
             "community_knowledge_search": ("query", "limit"),
             "announcement_draft": ("topic", "audience", "requirements"),

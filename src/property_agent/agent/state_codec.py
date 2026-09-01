@@ -105,6 +105,9 @@ class CheckpointStateCodec:
             "read_trace": deepcopy(state.read_trace),
             "error": state.error,
             "active_goal": state.active_goal.to_dict() if state.active_goal else None,
+            "goal_resolution_pending": state.goal_resolution_pending,
+            "goal_resolution_kind": state.goal_resolution_kind,
+            "goal_resolution_message": state.goal_resolution_message,
         }
 
     def decode(self, raw: dict[str, Any]) -> AgentState:
@@ -234,6 +237,9 @@ class CheckpointStateCodec:
                 if payload.get("active_goal")
                 else None
             ),
+            goal_resolution_pending=bool(payload.get("goal_resolution_pending", False)),
+            goal_resolution_kind=payload.get("goal_resolution_kind"),
+            goal_resolution_message=payload.get("goal_resolution_message"),
             _resume=orchestration.resume,
             _interrupt_node=orchestration.interrupt_node,
             _continuation=orchestration.continuation,

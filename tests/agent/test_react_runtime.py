@@ -32,6 +32,16 @@ class FakeSpecialist:
     def __init__(self, result_factory):
         self.result_factory = result_factory
         self.calls = []
+        self.allowlist = frozenset(
+            {
+                "repair_list",
+                "repair_get",
+                "repair_create",
+                "billing_query",
+                "billing_consult",
+                "inspection_list",
+            }
+        )
 
     def invoke(self, step, state, runtime, prior_results):
         self.calls.append((step.capability, step.parameters))

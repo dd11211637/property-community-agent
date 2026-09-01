@@ -1,5 +1,3 @@
-"""DeepSeek adapter for structured model analysis and bounded read planning."""
-
 from __future__ import annotations
 
 import json
@@ -11,6 +9,8 @@ import httpx
 
 from property_agent.agent.capabilities.catalog import default_capability_registry
 from property_agent.agent.deepseek_parsing import parse_deepseek_analysis
+from property_agent.agent.goal_contracts import GoalResolution
+from property_agent.agent.goal_prompts import GOAL_RESOLUTION_PROMPT
 from property_agent.agent.memory_extraction import MEMORY_WRITER_PROMPT, parse_memory_candidates
 from property_agent.agent.model_contracts import ModelAnalysis, ModelGatewayError
 from property_agent.agent.model_release_approval import DEEPSEEK_MAX_ATTEMPTS
@@ -232,6 +232,15 @@ class DeepSeekModelGateway:
             operation="react_decide",
         )
         return ReactDecision.from_dict(value)
+
+    def resolve_goal(self, context: dict[str, Any]) -> GoalResolution:
+        value = self._semantic_planning.request_json(
+            GOAL_RESOLUTION_PROMPT,
+            context,
+            max_tokens=700,
+            operation="resolve_goal",
+        )
+        return GoalResolution.from_dict(value)
 
     def classify_intent(self, text: str) -> tuple[str, float]:
         result = self.analyze(text)

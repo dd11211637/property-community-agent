@@ -22,6 +22,7 @@ from property_agent.agent.observability import AgentObservability
 from property_agent.agent.observed_boundaries import (
     ObservedMemoryService,
     ObservedModelGateway,
+    ObservedSpecialist,
     model_provider_observer,
     supervisor_observer,
 )
@@ -253,6 +254,32 @@ def test_model_success_timeout_and_schema_failure_have_bounded_outcomes_and_dura
     ]
     assert outcomes == {"success", "timeout", "schema_failure"}
     assert len(durations) == 3
+
+
+def test_observed_boundaries_preserve_goal_and_specialist_governance_contracts():
+    class Gateway:
+        def resolve_goal(self, context):
+            return SimpleNamespace(degraded=False, context=context)
+
+    observation = AgentObservability.in_memory()
+    gateway = ObservedModelGateway(Gateway(), observation)
+    assert gateway.resolve_goal({"user_text": "ordinary language"}).degraded is False
+    specialist = ObservedSpecialist(
+        SimpleNamespace(
+            name="billing",
+            domain="billing",
+            allowlist=frozenset({"billing_query"}),
+            capability_inventory=({"name": "billing_query"},),
+            arguments_valid=lambda _capability, _arguments: True,
+        ),
+        observation,
+    )
+    assert specialist.domain == "billing"
+    assert specialist.allowlist == frozenset({"billing_query"})
+    assert specialist.capability_inventory == ({"name": "billing_query"},)
+    assert _points(observation, "agent_model_operation_outcome_total") == [
+        {"operation": "resolve_goal", "outcome": "success", "reason": "primary"}
+    ]
 
 
 def test_memory_reindex_emits_outcome_duration_and_backlog():

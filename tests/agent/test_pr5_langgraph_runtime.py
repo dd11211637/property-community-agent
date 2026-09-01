@@ -144,6 +144,7 @@ def test_react_hitl_resume_executes_bound_write_exactly_once():
                         "status": "PENDING",
                         "category": "WATER_PLUMBING",
                         "urgency": "NORMAL",
+                        "appointment_status": "NOT_SCHEDULED",
                     },
                     "idempotency_key": "server-key",
                 }

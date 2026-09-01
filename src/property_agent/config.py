@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     agent_run_lease_seconds: int = 30
     agent_stream_max_concurrency: int = 16
     agent_stream_shutdown_grace_seconds: float = 15.0
-    agent_react_domains: str = "repair,inspection"
+    agent_react_domains: str = "repair,inspection,billing,announcement"
     agent_react_fallback_enabled: bool = True
 
     @property

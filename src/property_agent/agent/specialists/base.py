@@ -31,9 +31,20 @@ class StatelessSpecialist:
 
     def __init__(self, executor: CapabilityExecutor) -> None:
         self._executor = executor
-        self.allowlist = frozenset(
-            spec.name for spec in executor.registry.inventory() if spec.domain == self.domain
-        )
+        specs = tuple(spec for spec in executor.registry.inventory() if spec.domain == self.domain)
+        self.allowlist = frozenset(spec.name for spec in specs)
+        self.capability_inventory = tuple(_capability_summary(spec) for spec in specs)
+        self._input_types = {spec.name: spec.input_type for spec in specs}
+
+    def arguments_valid(self, capability: str, arguments: dict) -> bool:
+        input_type = self._input_types.get(capability)
+        if input_type is None:
+            return False
+        try:
+            input_type.model_validate(arguments)
+        except ValueError:
+            return False
+        return True
 
     def invoke(
         self,
@@ -141,13 +152,15 @@ class StatelessSpecialist:
     def _confirmed(runtime, state, step, capability, params_hash) -> bool:
         prepared = runtime.prepared_write
         plan_id = getattr(state.plan, "plan_id", None)
+        goal_id = step.step_id if state.plan is None else None
         return bool(
             prepared
             and prepared.matches(
                 capability=capability,
                 params_hash=params_hash,
                 plan_id=plan_id,
-                plan_step_id=step.step_id,
+                plan_step_id=step.step_id if state.plan is not None else None,
+                goal_id=goal_id,
             )
         )
 
@@ -183,3 +196,18 @@ class StatelessSpecialist:
             public_message="该领域步骤不受支持。",
             reason_code=code,
         )
+
+
+def _capability_summary(spec):
+    fields = spec.input_type.model_fields
+    return {
+        "name": spec.name,
+        "purpose": spec.presentation.title,
+        "risk": spec.baseline_risk.value,
+        "approval_posture": spec.approval_posture.value,
+        "required_inputs": sorted(name for name, field in fields.items() if field.is_required()),
+        "optional_inputs": sorted(
+            name for name, field in fields.items() if not field.is_required()
+        ),
+        "input_schema": spec.input_type.model_json_schema().get("properties", {}),
+    }
