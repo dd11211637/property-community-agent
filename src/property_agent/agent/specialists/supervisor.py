@@ -21,6 +21,7 @@ from property_agent.agent.orchestration import (
 )
 from property_agent.agent.planning import SupervisorPlanner
 from property_agent.agent.planning_contracts import RelevanceDecision
+from property_agent.agent.react_runtime import ReactCoordinator
 from property_agent.agent.runtime import RuntimeContext
 from property_agent.agent.state import AgentState, ProposedAction
 from property_agent.agent.working_state import domain_from_legacy
@@ -37,18 +38,25 @@ class Supervisor:
         validator: PlanValidator | None = None,
         clock: Callable[[], datetime] | None = None,
         observe: Callable[[str, dict[str, Any]], None] | None = None,
+        react_gateway: Any | None = None,
     ) -> None:
         self._planner = planner
         self._specialists = dict(specialists)
         self._validator = validator or PlanValidator()
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._observe = observe or (lambda _event, _fields: None)
+        self.react = (
+            ReactCoordinator(react_gateway, self._specialists, observe=self._observe)
+            if react_gateway is not None
+            else None
+        )
 
     def prepare(self, state: AgentState, runtime: RuntimeContext) -> AgentState:
         now = self._clock()
         duration = timedelta(seconds=runtime.execution_policy.plan_duration_seconds)
         if state.plan is None:
             state.plan = self._planner.create_plan(state, runtime)
+            _enable_react(self.react, state, runtime)
             _set_objective_context(state)
             state.orchestration_budget = OrchestrationBudget.start(now=now, duration=duration)
             _emit(
@@ -72,6 +80,7 @@ class Supervisor:
                     status=PlanStatus.NEEDS_CLARIFICATION,
                     replan_reason="MEMORY_BASIS_INVALIDATED",
                 )
+        _resume_react(self.react, state)
         if self._budget_expired(state, now):
             return self._fail_plan(state, "EXECUTION_DEADLINE_EXCEEDED")
         if self._limit_reached(state, runtime, "supervisor_steps", "max_supervisor_steps"):
@@ -90,6 +99,7 @@ class Supervisor:
             )
             return state
         self._select_next_eligible(state)
+        _ensure_react_goal(self.react, state)
         return state
 
     def current_step(self, state: AgentState) -> PlanStep | None:
@@ -201,6 +211,7 @@ class Supervisor:
         if state.plan is not None:
             state.plan = replace(state.plan, status=PlanStatus.ACTIVE)
         state.add_message("assistant", "已取消，未执行任何操作。")
+        _cancel_react(self.react, state)
 
     def synthesize(self, state: AgentState) -> str:
         if state.messages and state.messages[-1].get("content") == "已取消，未执行任何操作。":
@@ -416,6 +427,26 @@ class Supervisor:
             reason_code=reason,
             public_message="本轮执行预算已用尽。",
         )
+
+
+def _enable_react(react, state, runtime) -> None:
+    if react is not None:
+        react.enable(state, runtime)
+
+
+def _resume_react(react, state) -> None:
+    if react is not None:
+        react.resume_clarification(state)
+
+
+def _ensure_react_goal(react, state) -> None:
+    if react is not None:
+        react.ensure_goal(state)
+
+
+def _cancel_react(react, state) -> None:
+    if react is not None:
+        react.cancel(state)
 
 
 def _emit(

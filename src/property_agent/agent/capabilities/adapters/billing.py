@@ -65,6 +65,29 @@ class BillingQueryOutput(CapabilityOutput):
     bill: BillBrief | None = None
     fee_type: str | None = None
     rule_known: bool | None = None
+    rule: BillingRuleBrief | None = None
+
+
+class BillingRuleBrief(CapabilityOutput):
+    name: str
+    fee_type: str
+    parameters: dict[str, Any]
+    version: int
+    valid_from: str | None = None
+    valid_until: str | None = None
+
+
+def _rule_brief(rule: Any) -> BillingRuleBrief | None:
+    if rule is None:
+        return None
+    return BillingRuleBrief(
+        name=str(rule.name),
+        fee_type=str(rule.fee_type),
+        parameters=dict(rule.parameters or {}),
+        version=int(rule.version),
+        valid_from=str(rule.valid_from) if rule.valid_from else None,
+        valid_until=str(rule.valid_until) if rule.valid_until else None,
+    )
 
 
 class BillingConsultInput(CapabilityInput):
@@ -139,13 +162,19 @@ class BillingQueryAdapter:
             bill_id = cast(str, request.bill_id)
             bill, rule = self._service.get_bill(runtime.request_context, db, bill_id)
             return BillingQueryOutput(
-                query_type="detail", bill=_bill_brief(bill), rule_known=rule is not None
+                query_type="detail",
+                bill=_bill_brief(bill),
+                rule_known=rule is not None,
+                rule=_rule_brief(rule),
             )
         if request.query_type == "rule":
             fee_type = cast(str, request.fee_type)
             rule = self._service.get_rule(runtime.request_context, db, fee_type)
             return BillingQueryOutput(
-                query_type="rule", fee_type=fee_type, rule_known=rule is not None
+                query_type="rule",
+                fee_type=fee_type,
+                rule_known=rule is not None,
+                rule=_rule_brief(rule),
             )
         bills = self._service.list_bills(
             runtime.request_context,

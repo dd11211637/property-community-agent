@@ -40,6 +40,8 @@ class InspectionListInput(CapabilityInput):
     risk_levels: tuple[str, ...] = ()
     assigned_to_me: bool = False
     limit: int = Field(default=20, ge=1, le=100)
+    location: str | None = Field(default=None, max_length=255)
+    point: str | None = Field(default=None, max_length=255)
 
 
 class InspectionTaskGetInput(CapabilityInput):
@@ -173,21 +175,36 @@ class InspectionAdapter:
                     statuses=request.statuses,
                     risk_levels=request.risk_levels,
                     assigned_to_me=request.assigned_to_me,
-                    limit=request.limit,
+                    limit=100,
                 ),
                 context,
             )
-            return {"target": "event", "count": len(items), "items": [_brief(x) for x in items]}
+            if request.location:
+                items = [x for x in items if x.location == request.location]
+            items = items[: request.limit]
+            return {
+                "target": "event",
+                "count": len(items),
+                "items": [_brief(x) for x in items],
+                "query_location": request.location,
+                "query_point": request.point,
+            }
         search = InspectionTaskSearch(
             statuses=request.statuses,
             assigned_to_me=request.assigned_to_me,
-            limit=request.limit,
+            limit=100,
         )
         items = self._tasks.search_tasks(search, context)
+        point_filter = request.point or request.location
+        if point_filter:
+            items = [x for x in items if point_filter in x.route_points]
+        items = items[: request.limit]
         return {
             "target": "task",
             "count": len(items),
             "items": [_brief(x) for x in items],
+            "query_location": request.location,
+            "query_point": request.point,
             **self._tasks.summarize_tasks(search, context),
         }
 

@@ -34,6 +34,11 @@ class PlanStatus(StrEnum):
     HANDOVER = "handover"
 
 
+class ExecutionMode(StrEnum):
+    LEGACY = "legacy"
+    REACT = "react"
+
+
 class PlanStepStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
@@ -109,6 +114,7 @@ class Plan:
     current_step_id: str | None
     status: PlanStatus = PlanStatus.ACTIVE
     replan_reason: str | None = None
+    execution_mode: ExecutionMode = ExecutionMode.LEGACY
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -119,6 +125,7 @@ class Plan:
             "current_step_id": self.current_step_id,
             "status": self.status.value,
             "replan_reason": self.replan_reason,
+            "execution_mode": self.execution_mode.value,
         }
 
     @classmethod
@@ -131,6 +138,7 @@ class Plan:
             current_step_id=value.get("current_step_id"),
             status=PlanStatus(value.get("status", PlanStatus.ACTIVE)),
             replan_reason=value.get("replan_reason"),
+            execution_mode=ExecutionMode(value.get("execution_mode", ExecutionMode.LEGACY)),
         )
 
     def replace_step(self, updated: PlanStep) -> Plan:

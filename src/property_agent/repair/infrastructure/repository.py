@@ -83,6 +83,10 @@ class SqlAlchemyWorkOrderRepository:
             statement = statement.where(WorkOrderModel.status.in_(search.statuses))
         if search.assigned_to_me:
             statement = statement.where(WorkOrderModel.assignee_id == context.actor_id)
+        if search.location:
+            statement = statement.where(WorkOrderModel.location == search.location)
+        if search.category:
+            statement = statement.where(WorkOrderModel.category == search.category)
         if context.has_any_role(Role.RESIDENT) and not context.has_any_role(
             Role.CUSTOMER_SERVICE, Role.MANAGER
         ):

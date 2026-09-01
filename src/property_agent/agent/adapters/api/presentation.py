@@ -66,6 +66,34 @@ def _facts(tool_result: dict[str, Any] | None) -> dict[str, Any] | None:
     return tool_result.get("data")
 
 
+def _agent_trace(state: GraphState) -> dict[str, Any] | None:
+    goal = state.active_goal
+    if goal is None:
+        return state.read_trace
+    decision = goal.last_decision
+    return {
+        "goal_id": goal.goal_id,
+        "domain": goal.domain,
+        "goal_status": goal.status.value,
+        "decision": decision.decision.value if decision else None,
+        "capability": decision.capability if decision else goal.last_action,
+        "reason_code": decision.reason_code if decision else state.error,
+        "action_count": goal.action_count,
+        "degraded": goal.degraded,
+        "fallback_used": goal.fallback_used,
+        "observations": [
+            {
+                "capability": item.capability,
+                "ok": item.ok,
+                "params_hash": item.params_hash,
+                "result_fingerprint": item.result_fingerprint,
+                "error_code": item.error_code,
+            }
+            for item in goal.observations
+        ],
+    }
+
+
 def _generic_slot_prompt(state: GraphState) -> dict[str, Any] | None:
     selection = state.slots.get("_selection_options")
     if isinstance(selection, dict) and selection.get("options"):
@@ -176,7 +204,7 @@ def turn_data(turn: AgentTurn) -> dict[str, Any]:
         # Trace is deliberately independent from successful business facts so
         # failed read runs remain diagnosable. It contains tool names, hashes
         # and result summaries only; never raw arguments or model reasoning.
-        "agent_trace": state.read_trace,
+        "agent_trace": _agent_trace(state),
         "missing_slots": list(state.missing_slots),
         "requested_slot": state.requested_slot,
         "slot_prompt": (

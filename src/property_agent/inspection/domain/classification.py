@@ -15,7 +15,18 @@ _EVENT_CUES: tuple[tuple[EventType, tuple[str, ...]], ...] = (
     ),
     (
         EventType.EQUIPMENT_FAULT,
-        ("设备故障", "设施故障", "设备隐患", "消防隐患", "护栏损坏", "井盖破损"),
+        (
+            "设备故障",
+            "设施故障",
+            "设备隐患",
+            "消防隐患",
+            "护栏损坏",
+            "井盖破损",
+            "安全出口",
+            "消防通道",
+            "疏散通道",
+            "杂物占道",
+        ),
     ),
 )
 
@@ -28,12 +39,31 @@ def classify_security_event(description: str) -> tuple[EventType, EventRiskLevel
         (candidate for candidate, cues in _EVENT_CUES if any(cue in text for cue in cues)),
         EventType.OTHER,
     )
-    risk = (
-        EventRiskLevel.HIGH_RISK
-        if event_type in {EventType.GAS_LEAK, EventType.FIRE, EventType.PERSONAL_SAFETY}
-        else EventRiskLevel.MEDIUM
-    )
+    high_risk = event_type in {
+        EventType.GAS_LEAK,
+        EventType.FIRE,
+        EventType.PERSONAL_SAFETY,
+    } or _severely_blocks_egress(text)
+    risk = EventRiskLevel.HIGH_RISK if high_risk else EventRiskLevel.MEDIUM
     return event_type, risk
+
+
+def _severely_blocks_egress(text: str) -> bool:
+    egress = any(cue in text for cue in ("安全出口", "消防通道", "疏散通道", "出口"))
+    blocked = any(
+        cue in text
+        for cue in (
+            "不能通行",
+            "无法通行",
+            "没法通行",
+            "完全堵住",
+            "严重堵塞",
+            "基本堵住",
+            "堵了一大半",
+            "几乎没法",
+        )
+    )
+    return egress and blocked
 
 
 @dataclass(frozen=True, slots=True)

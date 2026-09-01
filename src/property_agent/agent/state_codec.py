@@ -15,6 +15,7 @@ from property_agent.agent.orchestration import (
     Plan,
     SpecialistResult,
 )
+from property_agent.agent.react_contracts import ActiveGoalState
 from property_agent.agent.state import (
     AgentState,
     ClarificationState,
@@ -36,7 +37,7 @@ class CheckpointDecodeError(ValueError):
 
 
 class CheckpointStateCodec:
-    CURRENT_VERSION = 2
+    CURRENT_VERSION = 3
 
     def encode(self, state: AgentState) -> dict[str, Any]:
         domain = state.domain
@@ -74,6 +75,7 @@ class CheckpointStateCodec:
             "proposed_action": asdict(proposed) if proposed else None,
             "orchestration": asdict(orchestration),
             "plan": state.plan.to_dict() if state.plan else None,
+            "legacy_plan": state.legacy_plan.to_dict() if state.legacy_plan else None,
             "orchestration_budget": (
                 state.orchestration_budget.to_dict() if state.orchestration_budget else None
             ),
@@ -102,6 +104,7 @@ class CheckpointStateCodec:
             "read_facts": deepcopy(state.read_facts),
             "read_trace": deepcopy(state.read_trace),
             "error": state.error,
+            "active_goal": state.active_goal.to_dict() if state.active_goal else None,
         }
 
     def decode(self, raw: dict[str, Any]) -> AgentState:
@@ -112,6 +115,11 @@ class CheckpointStateCodec:
             raise CheckpointDecodeError("invalid checkpoint schema version") from exc
         if version == 1:
             return self._decode_legacy(payload)
+        if version == 2:
+            state = self._decode_current(payload)
+            state.schema_version = self.CURRENT_VERSION
+            state.active_goal = None
+            return state
         if version != self.CURRENT_VERSION:
             raise CheckpointDecodeError(f"unsupported checkpoint schema version: {version}")
         return self._decode_current(payload)
@@ -181,6 +189,9 @@ class CheckpointStateCodec:
             proposed_action=proposed,
             orchestration=orchestration,
             plan=Plan.from_dict(payload["plan"]) if payload.get("plan") else None,
+            legacy_plan=(
+                Plan.from_dict(payload["legacy_plan"]) if payload.get("legacy_plan") else None
+            ),
             orchestration_budget=(
                 OrchestrationBudget.from_dict(payload["orchestration_budget"])
                 if payload.get("orchestration_budget")
@@ -218,6 +229,11 @@ class CheckpointStateCodec:
             read_facts=deepcopy(payload.get("read_facts")),
             read_trace=deepcopy(payload.get("read_trace")),
             error=payload.get("error"),
+            active_goal=(
+                ActiveGoalState.from_dict(payload["active_goal"])
+                if payload.get("active_goal")
+                else None
+            ),
             _resume=orchestration.resume,
             _interrupt_node=orchestration.interrupt_node,
             _continuation=orchestration.continuation,

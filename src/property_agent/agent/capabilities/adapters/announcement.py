@@ -39,6 +39,7 @@ class AnnouncementListInput(CapabilityInput):
     limit: int = Field(default=20, ge=1, le=100)
     topic: str | None = None
     target_date: str | None = None
+    query: str | None = Field(default=None, max_length=200)
 
 
 class AnnouncementGetInput(CapabilityInput):
@@ -120,12 +121,16 @@ class AnnouncementListAdapter:
                     for item in items
                     if any(term in f"{item.title} {item.body}" for term in terms)
                 ]
+        if request.query:
+            query = request.query.strip().casefold()
+            items = [item for item in items if query in f"{item.title} {item.body}".casefold()]
         return AnnouncementDataOutput(
             data={
                 "count": len(items),
                 "items": [_brief(x) for x in items],
                 "topic": request.topic,
                 "target_date": request.target_date,
+                "query": request.query,
             }
         )
 

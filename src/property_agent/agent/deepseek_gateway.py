@@ -15,6 +15,8 @@ from property_agent.agent.memory_extraction import MEMORY_WRITER_PROMPT, parse_m
 from property_agent.agent.model_contracts import ModelAnalysis, ModelGatewayError
 from property_agent.agent.model_release_approval import DEEPSEEK_MAX_ATTEMPTS
 from property_agent.agent.planning_contracts import PlanProposal, RelevanceJudgment
+from property_agent.agent.react_contracts import ReactDecision
+from property_agent.agent.react_prompts import REACT_DECISION_PROMPT
 from property_agent.agent.semantic_planning_provider import SemanticPlanningClient
 from property_agent.agent.telemetry_contracts import (
     model_failure_category,
@@ -221,6 +223,15 @@ class DeepSeekModelGateway:
             operation="judge_relevance",
         )
         return RelevanceJudgment.from_dict(value)
+
+    def react_decide(self, context: dict[str, Any]) -> ReactDecision:
+        value = self._semantic_planning.request_json(
+            REACT_DECISION_PROMPT,
+            context,
+            max_tokens=700,
+            operation="react_decide",
+        )
+        return ReactDecision.from_dict(value)
 
     def classify_intent(self, text: str) -> tuple[str, float]:
         result = self.analyze(text)

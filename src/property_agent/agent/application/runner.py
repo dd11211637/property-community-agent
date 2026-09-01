@@ -86,7 +86,7 @@ class _TurnPlan:
     state: GraphState
     conversation: Any
     expected_version: int | None
-    repair_followup_message: str | None
+    immediate_message: str | None
     engine: GraphEngine
     represent_pending: bool = False
     heartbeat: "LeaseHeartbeat | None" = None
@@ -152,7 +152,7 @@ class AgentSessionRunner:
             )
             if plan.represent_pending:
                 return self._pending_turn(plan)
-            if plan.repair_followup_message:
+            if plan.immediate_message:
                 return self._return_done(plan.ctx, plan.state, conversation_id, user_text)
             with observe_plan(self._observability, plan, "start") as span:
                 with self._observability.span(engine_span_name(plan, "invoke")):
@@ -215,7 +215,7 @@ class AgentSessionRunner:
                 yield AgentStreamEvent.started(conversation_id, plan.runtime_version)
                 yield AgentStreamEvent.final(self._pending_turn(plan), plan.runtime_version)
                 return
-            if plan.repair_followup_message:
+            if plan.immediate_message:
                 turn = self._return_done(plan.ctx, plan.state, conversation_id, user_text)
                 yield AgentStreamEvent.started(conversation_id, plan.runtime_version)
                 yield AgentStreamEvent.final(turn, plan.runtime_version)
@@ -308,7 +308,7 @@ class AgentSessionRunner:
             state=previous if represent_pending else prepared.state,
             conversation=conversation,
             expected_version=expected_version,
-            repair_followup_message=prepared.repair_followup_message,
+            immediate_message=prepared.immediate_message,
             engine=self._engine,
             represent_pending=represent_pending,
             heartbeat=heartbeat,
@@ -502,7 +502,7 @@ class AgentSessionRunner:
             state=restored.state,
             conversation=None,
             expected_version=expected_version,
-            repair_followup_message=None,
+            immediate_message=None,
             engine=self._engine,
             heartbeat=heartbeat,
             runtime_version=AgentRuntimeVersion.V2.value,

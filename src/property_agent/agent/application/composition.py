@@ -70,6 +70,7 @@ def build_supervisor(app: FastAPI) -> Supervisor:
         ObservedPlanner(planner, app.state.agent_observability),
         {specialist.name: specialist for specialist in specialists},
         observe=supervisor_observer(app.state.agent_observability),
+        react_gateway=gateway,
     )
 
 

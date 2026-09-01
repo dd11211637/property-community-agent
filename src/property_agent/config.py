@@ -81,6 +81,18 @@ class Settings(BaseSettings):
     agent_run_lease_seconds: int = 30
     agent_stream_max_concurrency: int = 16
     agent_stream_shutdown_grace_seconds: float = 15.0
+    agent_react_domains: str = "repair,inspection"
+    agent_react_fallback_enabled: bool = True
+
+    @property
+    def parsed_agent_react_domains(self) -> frozenset[str]:
+        domains = frozenset(
+            item.strip().lower() for item in self.agent_react_domains.split(",") if item.strip()
+        )
+        unknown = domains - {"repair", "inspection", "billing", "announcement"}
+        if unknown:
+            raise ValueError(f"unsupported AGENT_REACT_DOMAINS: {sorted(unknown)}")
+        return domains
 
     # ── OpenTelemetry 可观测性（PR7-A） ──────────────────────────
     otel_enabled: bool = True
@@ -161,6 +173,10 @@ class Settings(BaseSettings):
             problems.append("AGENT_STREAM_MAX_CONCURRENCY must be positive")
         if self.agent_stream_shutdown_grace_seconds <= 0:
             problems.append("AGENT_STREAM_SHUTDOWN_GRACE_SECONDS must be positive")
+        try:
+            _ = self.parsed_agent_react_domains
+        except ValueError as exc:
+            problems.append(str(exc))
         if problems:
             raise RuntimeError("Unsafe production configuration: " + "; ".join(problems))
 

@@ -12,7 +12,8 @@ from property_agent.agent.capabilities.policy import default_capability_policy
 from property_agent.agent.orchestration import PlanStatus, SpecialistName
 from property_agent.agent.planning import SupervisorPlanner
 from property_agent.agent.planning_contracts import RelevanceDecision, RelevanceJudgment
-from property_agent.agent.runtime import PreparedWrite, RuntimeContext
+from property_agent.agent.react_contracts import GoalStatus, ReactDecision, ReactDecisionType
+from property_agent.agent.runtime import ExecutionPolicy, PreparedWrite, RuntimeContext
 from property_agent.agent.specialists import (
     AnnouncementSpecialist,
     BillingSpecialist,
@@ -25,7 +26,7 @@ from tests.agent.pr5_semantic_fakes import StaticPlanningGateway, proposal, step
 from tests.agent.test_pr5_planning_and_specialists import _runtime
 
 
-def _engine(adapters, semantic, *, relevance=None):
+def _engine(adapters, semantic, *, relevance=None, react_gateway=None):
     executor = CapabilityExecutor(
         default_capability_registry(), default_capability_policy(), adapters
     )
@@ -43,8 +44,134 @@ def _engine(adapters, semantic, *, relevance=None):
             )
         ),
         {specialist.name: specialist for specialist in specialists},
+        react_gateway=react_gateway,
     )
     return LangGraphEngine(build_saver_resource(in_memory=True).saver, supervisor)
+
+
+class _ReactPlanningGateway(StaticPlanningGateway):
+    def __init__(self, semantic, decisions):
+        super().__init__(semantic)
+        self.decisions = list(decisions)
+
+    def react_decide(self, context):
+        assert context["domain"] == "repair"
+        return self.decisions.pop(0)
+
+
+def test_official_graph_runs_react_reason_action_reason_loop():
+    calls = []
+    semantic = proposal(step("repair-goal", "repair", "repair_list", "查询报修"))
+    gateway = _ReactPlanningGateway(
+        semantic,
+        [
+            ReactDecision(
+                ReactDecisionType.ACT,
+                GoalStatus.IN_PROGRESS,
+                capability="repair_list",
+                arguments={},
+                reason_code="LOOKUP",
+            ),
+            ReactDecision(
+                ReactDecisionType.FINISH,
+                GoalStatus.COMPLETED,
+                reason_code="OBSERVED",
+            ),
+        ],
+    )
+    engine = _engine(
+        {
+            "repair_list": lambda _request, _runtime: (
+                calls.append("repair_list")
+                or {"count": 0, "items": (), "query_location": None, "query_category": None}
+            )
+        },
+        semantic,
+        react_gateway=gateway,
+    )
+    runtime = _runtime()
+    runtime = RuntimeContext.from_request_context(
+        runtime.request_context,
+        conversation_id=runtime.conversation_id,
+        execution_policy=ExecutionPolicy(react_domains=frozenset({"repair"})),
+    )
+    result = engine.invoke(_state("查询报修"), thread_id="react-conversation", runtime=runtime)
+    assert result.done
+    assert result.state.plan.status is PlanStatus.COMPLETED
+    assert calls == ["repair_list"]
+
+
+def test_react_hitl_resume_executes_bound_write_exactly_once():
+    calls = []
+    create_arguments = {
+        "description": "厨房漏水",
+        "location": "厨房",
+        "urgency": "NORMAL",
+        "appointment_at": None,
+    }
+    semantic = proposal(step("repair-goal", "repair", "repair_create", "先查询再报修"))
+    gateway = _ReactPlanningGateway(
+        semantic,
+        [
+            ReactDecision(
+                ReactDecisionType.ACT,
+                GoalStatus.IN_PROGRESS,
+                capability="repair_list",
+                arguments={"location": "厨房"},
+            ),
+            ReactDecision(
+                ReactDecisionType.ACT,
+                GoalStatus.IN_PROGRESS,
+                capability="repair_create",
+                arguments=create_arguments,
+            ),
+            ReactDecision(ReactDecisionType.FINISH, GoalStatus.COMPLETED),
+        ],
+    )
+    engine = _engine(
+        {
+            "repair_list": lambda _request, _runtime: {
+                "count": 0,
+                "items": (),
+                "query_location": "厨房",
+                "query_category": None,
+            },
+            "repair_create": lambda _request, _runtime: (
+                calls.append("repair_create")
+                or {
+                    "work_order": {
+                        "id": str(uuid4()),
+                        "status": "PENDING",
+                        "category": "WATER_PLUMBING",
+                        "urgency": "NORMAL",
+                    },
+                    "idempotency_key": "server-key",
+                }
+            ),
+        },
+        semantic,
+        react_gateway=gateway,
+    )
+    runtime = _runtime()
+    runtime = RuntimeContext.from_request_context(
+        runtime.request_context,
+        conversation_id=runtime.conversation_id,
+        execution_policy=ExecutionPolicy(react_domains=frozenset({"repair"})),
+    )
+    first = engine.invoke(_state("先查询再报修"), thread_id="react-hitl", runtime=runtime)
+    assert not first.done
+    assert first.state.pending_action["tool"] == "repair_create"
+    assert calls == []
+    second = engine.resume(
+        "react-hitl",
+        {"confirmed": True},
+        state=first.state,
+        runtime=_bound_runtime(runtime, first.state.pending_action),
+        runtime_cursor=first.runtime_cursor,
+    )
+    assert second.done
+    assert calls == ["repair_create"]
+    assert second.state.plan.status is PlanStatus.COMPLETED
 
 
 def _state(text):

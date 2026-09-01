@@ -75,7 +75,7 @@ class LangGraphState(TypedDict):
 
 
 class LangGraphStateCodec:
-    """Credential-free, primitive-only projection for internal v2 checkpoints."""
+    """Credential-free, primitive-only projection for internal v3 checkpoints."""
 
     _TRUSTED_SLOTS = frozenset(
         {
@@ -133,7 +133,7 @@ class LangGraphStateCodec:
             for key, item in value.items():
                 cls._require_primitives(item, f"{path}.{key}")
             return
-        raise TypeError(f"v2 checkpoint state contains a non-primitive value at {path}")
+        raise TypeError(f"v3 checkpoint state contains a non-primitive value at {path}")
 
     @staticmethod
     def decode(payload: dict[str, Any]) -> GraphState:
@@ -165,6 +165,16 @@ def build_supervisor_graph(supervisor: Supervisor):
         supervisor.run_current(state, runtime.context)
         return _update(state)
 
+    def react_reason(envelope: LangGraphState, runtime: Runtime[RuntimeContext]) -> LangGraphState:
+        state = _state(envelope)
+        supervisor.react.reason(state, runtime.context)
+        return _update(state)
+
+    def react_action(envelope: LangGraphState, runtime: Runtime[RuntimeContext]) -> LangGraphState:
+        state = _state(envelope)
+        supervisor.react.action(state, runtime.context)
+        return _update(state)
+
     def await_confirmation(envelope: LangGraphState) -> LangGraphState:
         state = _state(envelope)
         decision = interrupt(confirmation_envelope(state))
@@ -178,6 +188,10 @@ def build_supervisor_graph(supervisor: Supervisor):
             raise RuntimeError("confirmed action has no matching pending plan step")
         state.plan = state.plan.replace_step(replace(step, status=PlanStepStatus.PENDING))
         state.plan = replace(state.plan, status=PlanStatus.ACTIVE)
+        if state.active_goal is not None:
+            from property_agent.agent.react_contracts import GoalStatus
+
+            state.active_goal.status = GoalStatus.IN_PROGRESS
         return _update(state)
 
     def cancel(envelope: LangGraphState) -> LangGraphState:
@@ -197,11 +211,15 @@ def build_supervisor_graph(supervisor: Supervisor):
     for name in ("repair", "billing", "announcement", "inspection"):
         graph.add_node(f"{name}_specialist", specialist)
     graph.add_node("await_confirmation", await_confirmation)
+    graph.add_node("react_reason", react_reason)
+    graph.add_node("react_action", react_action)
     graph.add_node("accept_confirmation", accept_confirmation)
     graph.add_node("cancel", cancel)
     graph.add_node("synthesize", synthesize)
     graph.add_edge(START, "supervisor")
     graph.add_conditional_edges("supervisor", _supervisor_route)
+    graph.add_conditional_edges("react_reason", _react_reason_route)
+    graph.add_edge("react_action", "supervisor")
     for name in ("repair", "billing", "announcement", "inspection"):
         graph.add_edge(f"{name}_specialist", "supervisor")
     graph.add_conditional_edges("await_confirmation", _confirmation_route)
@@ -229,6 +247,11 @@ def _supervisor_route(envelope: LangGraphState) -> str:
     step = next(
         (item for item in state.plan.steps if item.step_id == state.plan.current_step_id), None
     )
+    if step and step.capability is None:
+        decision = getattr(state.active_goal, "last_decision", None)
+        if decision is not None and decision.decision.value == "ACT":
+            return "react_action"
+        return "react_reason"
     routes = {
         SpecialistName.REPAIR: "repair_specialist",
         SpecialistName.BILLING: "billing_specialist",
@@ -236,6 +259,18 @@ def _supervisor_route(envelope: LangGraphState) -> str:
         SpecialistName.INSPECTION: "inspection_specialist",
     }
     return routes.get(step.specialist, "synthesize") if step else "synthesize"
+
+
+def _react_reason_route(envelope: LangGraphState) -> str:
+    state = _state(envelope)
+    if state.plan is None or state.plan.status != PlanStatus.ACTIVE:
+        return "supervisor"
+    decision = getattr(state.active_goal, "last_decision", None)
+    return (
+        "react_action"
+        if decision is not None and decision.decision.value == "ACT"
+        else "supervisor"
+    )
 
 
 def _confirmation_route(envelope: LangGraphState) -> str:

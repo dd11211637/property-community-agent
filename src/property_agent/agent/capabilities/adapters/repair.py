@@ -39,6 +39,9 @@ class WorkOrderBrief(CapabilityOutput):
     urgency: str
     assignee_id: str | None = None
     version: int | None = None
+    description: str | None = None
+    appointment_at: str | None = None
+    appointment_status: str
 
 
 class WorkOrderTimelineItem(CapabilityOutput):
@@ -53,11 +56,16 @@ class WorkOrderTimelineItem(CapabilityOutput):
 class RepairListInput(CapabilityInput):
     statuses: tuple[str, ...] = ()
     limit: int = Field(default=20, ge=1, le=100)
+    location: str | None = Field(default=None, max_length=255)
+    category: str | None = Field(default=None, max_length=64)
+    assigned_to_me: bool = False
 
 
 class RepairListOutput(CapabilityOutput):
     count: int = Field(ge=0)
     items: tuple[WorkOrderBrief, ...]
+    query_location: str | None = None
+    query_category: str | None = None
 
 
 class RepairGetInput(CapabilityInput):
@@ -84,6 +92,7 @@ class RepairCreateOutput(CapabilityOutput):
 
 
 def _brief(work_order: Any) -> WorkOrderBrief:
+    appointment = getattr(work_order, "appointment_at", None)
     return WorkOrderBrief(
         id=str(work_order.id),
         business_no=getattr(work_order, "business_no", None),
@@ -93,6 +102,9 @@ def _brief(work_order: Any) -> WorkOrderBrief:
         urgency=str(getattr(work_order, "urgency", "")),
         assignee_id=str(work_order.assignee_id) if work_order.assignee_id else None,
         version=getattr(work_order, "version", None),
+        description=getattr(work_order, "description", None),
+        appointment_at=appointment.isoformat() if appointment else None,
+        appointment_status="SCHEDULED" if appointment else "NOT_SCHEDULED",
     )
 
 
@@ -115,11 +127,19 @@ class RepairListAdapter:
         search = WorkOrderSearch(
             house_id=runtime.current_house_id,
             statuses=request.statuses,
+            location=request.location,
+            category=request.category,
+            assigned_to_me=request.assigned_to_me,
             limit=request.limit,
         )
         with _translate_public_repair_errors():
             items = self._service.search(search, runtime.request_context)
-        return RepairListOutput(count=len(items), items=tuple(_brief(item) for item in items))
+        return RepairListOutput(
+            count=len(items),
+            items=tuple(_brief(item) for item in items),
+            query_location=request.location,
+            query_category=request.category,
+        )
 
 
 class RepairGetAdapter:

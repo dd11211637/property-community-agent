@@ -94,10 +94,17 @@ def runtime_for(
             raise ValueError("Agent current house is not bound to the authenticated user")
         if request_context.current_house_id != current_house_id:
             request_context = replace(request_context, current_house_id=current_house_id)
+    from property_agent.agent.runtime import ExecutionPolicy
+    from property_agent.config import settings
+
     return RuntimeContext.from_request_context(
         request_context,
         conversation_id=plan.state.conversation_id,
         current_house_id=current_house_id,
+        execution_policy=ExecutionPolicy(
+            react_domains=settings.parsed_agent_react_domains,
+            react_fallback_enabled=settings.agent_react_fallback_enabled,
+        ),
         observation=observation,
         prepared_write=prepared,
     )

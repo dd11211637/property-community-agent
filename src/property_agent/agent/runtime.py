@@ -28,6 +28,12 @@ class ExecutionPolicy:
     plan_duration_seconds: int = 120
     deadline_monotonic: float | None = None
     allowlist: frozenset[str] | None = None
+    react_domains: frozenset[str] = frozenset()
+    react_fallback_enabled: bool = True
+    max_react_actions: int = 6
+    max_react_repeats: int = 2
+    max_react_clarifications: int = 3
+    max_react_domain_transitions: int = 2
 
 
 @dataclass(frozen=True, slots=True)

@@ -14,6 +14,7 @@ from property_agent.agent.orchestration import (
     Plan,
     SpecialistResult,
 )
+from property_agent.agent.react_contracts import ActiveGoalState
 from property_agent.agent.working_state import DomainWorkingState, EmptyWorkingState
 
 
@@ -54,7 +55,7 @@ class AgentState:
     """
 
     conversation_id: str
-    schema_version: int = 2
+    schema_version: int = 3
     domain: DomainWorkingState = field(default_factory=EmptyWorkingState)
     capability_invocation: CapabilityInvocationState = field(
         default_factory=CapabilityInvocationState
@@ -63,6 +64,7 @@ class AgentState:
     proposed_action: ProposedAction | None = None
     orchestration: OrchestrationState = field(default_factory=OrchestrationState)
     plan: Plan | None = None
+    legacy_plan: Plan | None = None
     orchestration_budget: OrchestrationBudget | None = None
     specialist_results: tuple[SpecialistResult, ...] = ()
     goal_outcomes: dict[str, GoalOutcome] = field(default_factory=dict)
@@ -87,6 +89,7 @@ class AgentState:
     read_facts: dict[str, Any] | None = None
     read_trace: dict[str, Any] | None = None
     error: str | None = None
+    active_goal: ActiveGoalState | None = None
     # Constructor-compatible v1 projection. The codec maps these fields to the
     # typed ``orchestration`` owner on every persistence boundary.
     _resume: Any | None = None

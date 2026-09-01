@@ -27,6 +27,12 @@ _INSPECTION_FIELD_LABELS = {
     "description": "巡检要求",
     "point": "巡检点位",
 }
+_SECURITY_EVENT_FIELD_LABELS = {
+    "location": "发生位置",
+    "description": "现场情况",
+    "event_type": "现场情况",
+    "risk_level": "风险事实",
+}
 
 
 def _option(label: str, value: str) -> dict[str, str]:
@@ -197,6 +203,8 @@ def inspection_slot_prompt(state: GraphState) -> dict[str, Any] | None:
     """Build the progressive form for creating an inspection task."""
 
     field = state.requested_slot
+    if state.intent == "INSPECTION" and state.slots.get("action") == "report_event":
+        return _security_event_slot_prompt(state)
     if (
         state.intent != "INSPECTION"
         or state.slots.get("action") != "create"
@@ -248,4 +256,25 @@ def inspection_slot_prompt(state: GraphState) -> dict[str, Any] | None:
                 "公共设备间",
             )
         ],
+    }
+
+
+def _security_event_slot_prompt(state: GraphState) -> dict[str, Any] | None:
+    field = state.requested_slot
+    if field not in _SECURITY_EVENT_FIELD_LABELS:
+        return None
+    prompt_field = "description" if field in {"event_type", "risk_level"} else field
+    if prompt_field == "location":
+        prompt = "请说明异常发生的具体位置。"
+        help_text = "可以直接说安全出口、消防通道、地下车库出口等实际位置。"
+    else:
+        prompt = "请描述现场具体发生了什么，以及是否影响通行或人员安全。"
+        help_text = "请说看到、闻到或受到影响的事实；系统会自动判断事件分类和风险下限。"
+    return {
+        "field": prompt_field,
+        "label": _SECURITY_EVENT_FIELD_LABELS[field],
+        "prompt": prompt,
+        "help_text": help_text,
+        "allow_custom": True,
+        "options": [],
     }

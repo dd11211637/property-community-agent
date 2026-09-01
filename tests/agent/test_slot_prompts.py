@@ -1,5 +1,6 @@
 from property_agent.agent.slot_prompts import announcement_slot_prompt, inspection_slot_prompt
 from property_agent.agent.state import AgentState
+from property_agent.agent.working_state import InspectionEventWorkingState
 
 
 def test_announcement_prompt_collects_title_before_business_content():
@@ -51,3 +52,20 @@ def test_inspection_prompt_exposes_three_progressive_business_fields():
     assert prompt["step"] == 3
     assert prompt["total_steps"] == 3
     assert prompt["options"][2] == {"label": "消防通道", "value": "消防通道"}
+
+
+def test_security_event_prompt_asks_for_observable_facts_not_event_enum():
+    state = AgentState(
+        conversation_id="security-event-prompt",
+        intent="INSPECTION",
+        domain=InspectionEventWorkingState(action="report_event", location="地下车库"),
+        slots={"action": "report_event", "location": "地下车库"},
+        requested_slot="event_type",
+        missing_slots=["event_type"],
+    )
+
+    prompt = inspection_slot_prompt(state)
+
+    assert prompt["field"] == "description"
+    assert "发生了什么" in prompt["prompt"]
+    assert prompt["options"] == []

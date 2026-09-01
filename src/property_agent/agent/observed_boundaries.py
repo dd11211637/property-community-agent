@@ -21,6 +21,7 @@ _MODEL_METHODS = frozenset(
         "draft_announcement",
         "revise_announcement",
         "plan_read",
+        "react_decide",
     }
 )
 
@@ -339,6 +340,25 @@ def model_provider_observer(observability: Any):
 
 def supervisor_observer(observability: Any):
     def observe(event: str, fields: dict[str, Any]) -> None:
+        if event.startswith("react_"):
+            observability.count(
+                "agent_react_total",
+                attributes={
+                    "operation": event.removeprefix("react_"),
+                    "domain": fields.get("domain"),
+                    "decision": fields.get("decision"),
+                    "capability": fields.get("capability"),
+                    "outcome": fields.get("goal_status"),
+                    "reason": fields.get("reason"),
+                },
+            )
+            if event == "react_decision":
+                observability.value(
+                    "agent_react_action_count",
+                    float(fields.get("actions") or 0),
+                    attributes={"domain": fields.get("domain")},
+                )
+            return
         if event == "supervisor_plan_created":
             observability.count(
                 "agent_plan_shape_total",

@@ -24,6 +24,11 @@ from property_agent.agent.application.runner_signals import (
     looks_contextual,
     resolve_repair_followup,
 )
+from property_agent.agent.application.slot_resolution import resolve_inspection_event_facts
+from property_agent.agent.application.task_continuation import (
+    has_active_inspection_event,
+    inspection_event_control,
+)
 from property_agent.agent.state import GraphState
 from property_agent.agent.working_state import (
     AnnouncementDraftingState,
@@ -63,6 +68,7 @@ _INSPECTION_SLOT_GROUPS = {
 class PreparedStartState:
     state: GraphState
     repair_followup_message: str | None
+    immediate_message: str | None = None
 
 
 def prepare_start_state(
@@ -81,6 +87,22 @@ def prepare_start_state(
     if inspection_override:
         corrections.update(inspection_override)
     inspection_action = explicit_inspection_action(user_text)
+    active_inspection_event = has_active_inspection_event(previous, current_house_id)
+    event_control = (
+        inspection_event_control(user_text, next_action=inspection_action)
+        if active_inspection_event
+        else None
+    )
+    if event_control == "cancel":
+        return _cancel_active_task(
+            conversation_id=conversation_id,
+            context=context,
+            current_house_id=current_house_id,
+            previous=previous,
+            user_text=user_text,
+        )
+    if inspection_override.get("action") == "report_event":
+        corrections.update(resolve_inspection_event_facts({}, user_text))
     active_draft = _active_announcement_draft(previous)
     announcement_followup = resolve_announcement_followup(
         user_text, has_active_draft=active_draft is not None
@@ -94,6 +116,8 @@ def prepare_start_state(
         user_text=user_text,
         explicit_corrections=corrections,
     )
+    if active_inspection_event and event_control != "switch":
+        _continue_inspection_event(continuation, previous, user_text, corrections)
     _apply_inspection_followup(continuation, previous, user_text, inspection_action)
     _apply_announcement_followup(
         continuation, previous, user_text, announcement_action, announcement_followup
@@ -115,7 +139,48 @@ def prepare_start_state(
     state.add_message("user", user_text)
     if repair_message:
         state.add_message("assistant", repair_message)
-    return PreparedStartState(state=state, repair_followup_message=repair_message)
+    return PreparedStartState(
+        state=state,
+        repair_followup_message=repair_message,
+        immediate_message=repair_message,
+    )
+
+
+def _cancel_active_task(
+    *,
+    conversation_id: str,
+    context: AgentContext,
+    current_house_id: UUID | None,
+    previous: GraphState | None,
+    user_text: str,
+) -> PreparedStartState:
+    continuation = ContinuationState(
+        previous_domain=EmptyWorkingState(),
+        legacy_projection={},
+        previous_messages=list(previous.messages[-12:]) if previous else [],
+        previous_intent=None,
+        single_slot_reply={},
+        slot_continuation=False,
+        contextual_followup=False,
+        continuing=True,
+    )
+    state = build_initial_state(
+        conversation_id=conversation_id,
+        context=context,
+        current_house_id=current_house_id,
+        user_text=user_text,
+        slots=None,
+        inspection_override={},
+        explicit_corrections={},
+        continuation=continuation,
+        active_draft=None,
+        announcement_followup=resolve_announcement_followup("", has_active_draft=False),
+        repair_followup={},
+    )
+    message = "已取消本次安防事件上报，不会创建事件。"
+    state.add_message("user", user_text)
+    state.add_message("assistant", message)
+    return PreparedStartState(state, None, message)
 
 
 def _collect_explicit_corrections(user_text: str, previous: GraphState | None) -> dict[str, str]:
@@ -192,6 +257,33 @@ def _single_slot_value(requested_slot: str, user_text: str) -> Any:
         return json.loads(value)
     except json.JSONDecodeError:
         return {} if value == "全社区" else value
+
+
+def _continue_inspection_event(
+    continuation: ContinuationState,
+    previous: GraphState | None,
+    user_text: str,
+    corrections: dict[str, str],
+) -> None:
+    if previous is None:
+        return
+    projection = project_domain_to_legacy_slots(previous.domain)
+    updates = resolve_inspection_event_facts(
+        projection,
+        user_text,
+        correction=bool(corrections),
+    )
+    projection.update(updates)
+    projection.update(corrections)
+    projection["action"] = "report_event"
+    projection["target"] = "event"
+    continuation.legacy_projection = projection
+    continuation.previous_domain = domain_from_legacy("INSPECTION", projection)
+    continuation.previous_intent = "INSPECTION"
+    continuation.single_slot_reply = {}
+    continuation.slot_continuation = True
+    continuation.contextual_followup = True
+    continuation.continuing = True
 
 
 def _apply_inspection_followup(

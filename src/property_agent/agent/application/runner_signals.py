@@ -74,8 +74,30 @@ _INSPECTION_SLOT_GROUPS = {
     },
 }
 
-_FIRST_TURN_INSPECTION_MARKERS = ("巡检", "消防通道", "安防", "巡检发现", "检查发现")
-_INSPECTION_WRITE_MARKERS = ("上报异常", "上报事件", "上报", "报告异常", "异常上报")
+_FIRST_TURN_INSPECTION_MARKERS = (
+    "巡检",
+    "消防通道",
+    "安全出口",
+    "疏散通道",
+    "安防",
+    "巡检发现",
+    "检查发现",
+)
+_INSPECTION_WRITE_MARKERS = (
+    "上报异常",
+    "上报事件",
+    "上报",
+    "报告异常",
+    "异常上报",
+    "堵塞",
+    "堵着",
+    "堆放",
+    "杂物",
+    "电动车",
+    "自行车",
+    "燃气味",
+    "煤气味",
+)
 
 # 续接判定：短改口、修正、回归等
 _CONTEXTUAL_MARKERS = (
@@ -202,6 +224,10 @@ def explicit_inspection_corrections(text: str, previous: GraphState | None) -> d
         "楼栋大厅",
         "大厅",
         "消防通道",
+        "安全出口",
+        "疏散通道",
+        "地下车库出口",
+        "车库出口",
         "地下车库",
         "车库",
         "公共设备间",

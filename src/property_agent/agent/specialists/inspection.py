@@ -81,7 +81,7 @@ class InspectionSpecialist(StatelessSpecialist):
             "security_event_submit_disposal": ("event_id", "expected_version", "note"),
             "close_high_risk_event": ("event_id",),
         }[capability]
-        projected = {key: values.get(key) for key in fields}
+        projected = {key: values[key] for key in fields if values.get(key) is not None}
         if capability == "inspection_create":
             projected["route_points"] = tuple(projected.get("route_points") or ())
         if capability == "inspection_list":

@@ -7,6 +7,9 @@ from inspect import signature
 from typing import Any
 from uuid import uuid4
 
+from property_agent.agent.application.task_continuation import (
+    deterministic_inspection_continuation as continue_inspection_task,
+)
 from property_agent.agent.deterministic_gateway import (
     deterministic_inspection_slots,
     deterministic_repair_slots,
@@ -65,7 +68,7 @@ class SupervisorPlanner:
                 state.retrieved_memories = MemoryContext(
                     degraded=True, degradation_reason="MEMORY_RETRIEVAL_UNAVAILABLE"
                 )
-        guided = self._guided_announcement_proposal(text, state)
+        guided = self._guided_announcement_proposal(text, state) or continue_inspection_task(state)
         if guided is None:
             guided = self._deterministic_inspection_proposal(text, state)
         if guided is None:
@@ -84,7 +87,6 @@ class SupervisorPlanner:
     @staticmethod
     def _guided_announcement_proposal(text: str, state: AgentState) -> PlanProposal | None:
         """Start or continue a new announcement without asking for internal IDs."""
-
         if state.slots.get("announcement_id"):
             return None
         compact_text = "".join(text.split())

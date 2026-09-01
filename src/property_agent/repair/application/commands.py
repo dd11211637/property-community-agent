@@ -48,6 +48,8 @@ class WorkOrderSearch:
     house_id: UUID | None = None
     statuses: tuple[str, ...] = ()
     assigned_to_me: bool = False
+    location: str | None = None
+    category: str | None = None
     limit: int = 50
     offset: int = 0
 
